@@ -25,6 +25,7 @@
 
   // If your path contains back slashes, you must escape them with another back slash. See example below ...
   // Example: path_to_qe_table_file : "c:\\Users\\boban\\Dropbox\\GolandProjects\\OccultDiffraction\\qhy174QEevery20nm",
+  path_to_qe_table_file : "c:\\Users\\boban\\Dropbox\\GolandProjects\\OccultDiffraction\\qhy174QEevery20nm",
 
   // If no QE table is provided, the ground image will be generated for the wavelength
   // specified below. This parameter is ignored if a QE table is provided.
@@ -82,6 +83,6 @@
   // is a polygon shape. The file format is 8 bit grayscale png with object pixels set to 0
   // and all background pixels set to 255 (actually, any non-zero value will work).
 
-  // path_to_external_image : "input.png",
+  path_to_external_image : "input.png",
 
 }

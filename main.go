@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"image/color"
 	"image/png"
+	"io"
 	"math"
 	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/KevinWang15/go-json5"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/vg"
@@ -63,6 +66,296 @@ func getWindowRect(hwnd uintptr) (x, y, w, h int32, ok bool) {
 func setWindowPos(hwnd uintptr, x, y, w, h int32) bool {
 	ret, _, _ := procSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), uintptr(w), uintptr(h), swpNoZOrder)
 	return ret != 0
+}
+
+// EllipseParams represents ellipse parameters for the main body or satellite
+type EllipseParams struct {
+	XCenterKm          float64 `json:"x_center_km"`
+	YCenterKm          float64 `json:"y_center_km"`
+	MajorAxisKm        float64 `json:"major_axis_km"`
+	MinorAxisKm        float64 `json:"minor_axis_km"`
+	MajorAxisPaDegrees float64 `json:"major_axis_pa_degrees"`
+}
+
+// OccultationParameters holds all parameters for occultation calculations
+type OccultationParameters struct {
+	WindowSizePixels               int           `json:"window_size_pixels"`
+	Title                          string        `json:"title"`
+	FundamentalPlaneWidthKm        float64       `json:"fundamental_plane_width_km"`
+	FundamentalPlaneWidthNumPoints int           `json:"fundamental_plane_width_num_points"`
+	ParallaxArcsec                 float64       `json:"parallax_arcsec"`
+	DistanceAu                     float64       `json:"distance_au"`
+	PathToQeTableFile              string        `json:"path_to_qe_table_file"`
+	ObservationWavelengthNm        int           `json:"observation_wavelength_nm"`
+	DXKmPerSec                     float64       `json:"dX_km_per_sec"`
+	DYKmPerSec                     float64       `json:"dY_km_per_sec"`
+	PathPerpendicularOffsetKm      float64       `json:"path_perpendicular_offset_from_center_km"`
+	PercentMagDrop                 int           `json:"percent_mag_drop"`
+	StarDiamOnPlaneMas             float64       `json:"star_diam_on_plane_mas"`
+	LimbDarkeningCoeff             float64       `json:"limb_darkening_coeff"`
+	StarClass                      string        `json:"star_class"`
+	MainBody                       EllipseParams `json:"main_body"`
+	Satellite                      EllipseParams `json:"satellite"`
+	PathToExternalImage            string        `json:"path_to_external_image"`
+}
+
+// parseOccultationParameters parses a JSON5 parameters file
+func parseOccultationParameters(reader io.Reader) (*OccultationParameters, error) {
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	var params OccultationParameters
+	if err := json5.Unmarshal(content, &params); err != nil {
+		return nil, fmt.Errorf("failed to parse parameters: %w", err)
+	}
+
+	return &params, nil
+}
+
+// showOccultationParametersDialog displays a form dialog for editing occultation parameters
+func showOccultationParametersDialog(w fyne.Window) {
+	// Create entry fields for all parameters
+	windowSizeEntry := widget.NewEntry()
+	titleEntry := widget.NewEntry()
+	fundamentalPlaneWidthKmEntry := widget.NewEntry()
+	fundamentalPlaneWidthNumPointsEntry := widget.NewEntry()
+	parallaxArcsecEntry := widget.NewEntry()
+	distanceAuEntry := widget.NewEntry()
+	pathToQeTableFileEntry := widget.NewEntry()
+	observationWavelengthNmEntry := widget.NewEntry()
+	dXKmPerSecEntry := widget.NewEntry()
+	dYKmPerSecEntry := widget.NewEntry()
+	pathPerpendicularOffsetKmEntry := widget.NewEntry()
+	percentMagDropEntry := widget.NewEntry()
+	starDiamOnPlaneMasEntry := widget.NewEntry()
+	limbDarkeningCoeffEntry := widget.NewEntry()
+	starClassEntry := widget.NewEntry()
+
+	// Main body ellipse parameters
+	mainBodyXCenterEntry := widget.NewEntry()
+	mainBodyYCenterEntry := widget.NewEntry()
+	mainBodyMajorAxisEntry := widget.NewEntry()
+	mainBodyMinorAxisEntry := widget.NewEntry()
+	mainBodyPaDegreesEntry := widget.NewEntry()
+
+	// Satellite ellipse parameters
+	satelliteXCenterEntry := widget.NewEntry()
+	satelliteYCenterEntry := widget.NewEntry()
+	satelliteMajorAxisEntry := widget.NewEntry()
+	satelliteMinorAxisEntry := widget.NewEntry()
+	satellitePaDegreesEntry := widget.NewEntry()
+
+	pathToExternalImageEntry := widget.NewEntry()
+
+	// Helper to wrap entry in a fixed-width container
+	entryWidth := float32(280)
+	wrapEntry := func(e *widget.Entry) *fyne.Container {
+		return container.New(layout.NewGridWrapLayout(fyne.NewSize(entryWidth, 36)), e)
+	}
+
+	// Create a left column form
+	leftForm := widget.NewForm(
+		&widget.FormItem{Text: "Window Size (pixels)", Widget: wrapEntry(windowSizeEntry)},
+		&widget.FormItem{Text: "Title", Widget: wrapEntry(titleEntry)},
+		&widget.FormItem{Text: "Fund. Plane Width (km)", Widget: wrapEntry(fundamentalPlaneWidthKmEntry)},
+		&widget.FormItem{Text: "Fund. Plane Width (pts)", Widget: wrapEntry(fundamentalPlaneWidthNumPointsEntry)},
+		&widget.FormItem{Text: "Parallax (arcsec)", Widget: wrapEntry(parallaxArcsecEntry)},
+		&widget.FormItem{Text: "Distance (AU)", Widget: wrapEntry(distanceAuEntry)},
+		&widget.FormItem{Text: "Path to QE Table File", Widget: wrapEntry(pathToQeTableFileEntry)},
+		&widget.FormItem{Text: "Obs. Wavelength (nm)", Widget: wrapEntry(observationWavelengthNmEntry)},
+		&widget.FormItem{Text: "dX (km/sec)", Widget: wrapEntry(dXKmPerSecEntry)},
+		&widget.FormItem{Text: "dY (km/sec)", Widget: wrapEntry(dYKmPerSecEntry)},
+		&widget.FormItem{Text: "Path Perp. Offset (km)", Widget: wrapEntry(pathPerpendicularOffsetKmEntry)},
+		&widget.FormItem{Text: "Percent Mag Drop", Widget: wrapEntry(percentMagDropEntry)},
+		&widget.FormItem{Text: "Star Diam. (mas)", Widget: wrapEntry(starDiamOnPlaneMasEntry)},
+	)
+
+	// Create a right column form
+	rightForm := widget.NewForm(
+		&widget.FormItem{Text: "Limb Darkening Coeff", Widget: wrapEntry(limbDarkeningCoeffEntry)},
+		&widget.FormItem{Text: "Star Class", Widget: wrapEntry(starClassEntry)},
+		&widget.FormItem{Text: "Main Body X (km)", Widget: wrapEntry(mainBodyXCenterEntry)},
+		&widget.FormItem{Text: "Main Body Y (km)", Widget: wrapEntry(mainBodyYCenterEntry)},
+		&widget.FormItem{Text: "Main Body Major (km)", Widget: wrapEntry(mainBodyMajorAxisEntry)},
+		&widget.FormItem{Text: "Main Body Minor (km)", Widget: wrapEntry(mainBodyMinorAxisEntry)},
+		&widget.FormItem{Text: "Main Body PA (deg)", Widget: wrapEntry(mainBodyPaDegreesEntry)},
+		&widget.FormItem{Text: "Satellite X (km)", Widget: wrapEntry(satelliteXCenterEntry)},
+		&widget.FormItem{Text: "Satellite Y (km)", Widget: wrapEntry(satelliteYCenterEntry)},
+		&widget.FormItem{Text: "Satellite Major (km)", Widget: wrapEntry(satelliteMajorAxisEntry)},
+		&widget.FormItem{Text: "Satellite Minor (km)", Widget: wrapEntry(satelliteMinorAxisEntry)},
+		&widget.FormItem{Text: "Satellite PA (deg)", Widget: wrapEntry(satellitePaDegreesEntry)},
+		&widget.FormItem{Text: "External Image Path", Widget: wrapEntry(pathToExternalImageEntry)},
+	)
+
+	// Create a two-column layout
+	twoColumns := container.NewHBox(
+		container.NewPadded(leftForm),
+		container.NewPadded(rightForm),
+	)
+
+	scrollContent := container.NewVScroll(twoColumns)
+	scrollContent.SetMinSize(fyne.NewSize(770, 650))
+
+	// Create a custom dialog with OK/Cancel buttons
+	var customDialog *dialog.CustomDialog
+	okBtn := widget.NewButton("OK", func() {
+		// TODO: Process the form data
+		customDialog.Hide()
+	})
+	okBtn.Importance = widget.HighImportance
+	cancelBtn := widget.NewButton("Cancel", func() {
+		customDialog.Hide()
+	})
+
+	// File open button
+	loadBtn := widget.NewButton("Load...", func() {
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if reader == nil {
+				return // User cancelled
+			}
+			defer func() {
+				if cerr := reader.Close(); cerr != nil {
+					dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+				}
+			}()
+
+			params, err := parseOccultationParameters(reader)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load parameters: %w", err), w)
+				return
+			}
+
+			// Populate entry fields with loaded values
+			windowSizeEntry.SetText(strconv.Itoa(params.WindowSizePixels))
+			titleEntry.SetText(params.Title)
+			fundamentalPlaneWidthKmEntry.SetText(strconv.FormatFloat(params.FundamentalPlaneWidthKm, 'f', -1, 64))
+			fundamentalPlaneWidthNumPointsEntry.SetText(strconv.Itoa(params.FundamentalPlaneWidthNumPoints))
+			parallaxArcsecEntry.SetText(strconv.FormatFloat(params.ParallaxArcsec, 'f', -1, 64))
+			distanceAuEntry.SetText(strconv.FormatFloat(params.DistanceAu, 'f', -1, 64))
+			pathToQeTableFileEntry.SetText(params.PathToQeTableFile)
+			observationWavelengthNmEntry.SetText(strconv.Itoa(params.ObservationWavelengthNm))
+			dXKmPerSecEntry.SetText(strconv.FormatFloat(params.DXKmPerSec, 'f', -1, 64))
+			dYKmPerSecEntry.SetText(strconv.FormatFloat(params.DYKmPerSec, 'f', -1, 64))
+			pathPerpendicularOffsetKmEntry.SetText(strconv.FormatFloat(params.PathPerpendicularOffsetKm, 'f', -1, 64))
+			percentMagDropEntry.SetText(strconv.Itoa(params.PercentMagDrop))
+			starDiamOnPlaneMasEntry.SetText(strconv.FormatFloat(params.StarDiamOnPlaneMas, 'f', -1, 64))
+			limbDarkeningCoeffEntry.SetText(strconv.FormatFloat(params.LimbDarkeningCoeff, 'f', -1, 64))
+			starClassEntry.SetText(params.StarClass)
+			mainBodyXCenterEntry.SetText(strconv.FormatFloat(params.MainBody.XCenterKm, 'f', -1, 64))
+			mainBodyYCenterEntry.SetText(strconv.FormatFloat(params.MainBody.YCenterKm, 'f', -1, 64))
+			mainBodyMajorAxisEntry.SetText(strconv.FormatFloat(params.MainBody.MajorAxisKm, 'f', -1, 64))
+			mainBodyMinorAxisEntry.SetText(strconv.FormatFloat(params.MainBody.MinorAxisKm, 'f', -1, 64))
+			mainBodyPaDegreesEntry.SetText(strconv.FormatFloat(params.MainBody.MajorAxisPaDegrees, 'f', -1, 64))
+			satelliteXCenterEntry.SetText(strconv.FormatFloat(params.Satellite.XCenterKm, 'f', -1, 64))
+			satelliteYCenterEntry.SetText(strconv.FormatFloat(params.Satellite.YCenterKm, 'f', -1, 64))
+			satelliteMajorAxisEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisKm, 'f', -1, 64))
+			satelliteMinorAxisEntry.SetText(strconv.FormatFloat(params.Satellite.MinorAxisKm, 'f', -1, 64))
+			satellitePaDegreesEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisPaDegrees, 'f', -1, 64))
+			pathToExternalImageEntry.SetText(params.PathToExternalImage)
+		}, w)
+		fileDialog.SetFilter(nil) // Allow all files or set a specific filter
+		fileDialog.Resize(fyne.NewSize(1200, 800))
+		fileDialog.Show()
+	})
+
+	// Helper functions to parse entry values
+	parseFloat := func(s string) float64 {
+		v, _ := strconv.ParseFloat(s, 64)
+		return v
+	}
+	parseInt := func(s string) int {
+		v, _ := strconv.Atoi(s)
+		return v
+	}
+
+	// File save button
+	saveBtn := widget.NewButton("Save...", func() {
+		fileDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if writer == nil {
+				return // User cancelled
+			}
+			defer func() {
+				if cerr := writer.Close(); cerr != nil {
+					dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+				}
+			}()
+
+			// Build parameters struct from entry fields
+			params := OccultationParameters{
+				WindowSizePixels:               parseInt(windowSizeEntry.Text),
+				Title:                          titleEntry.Text,
+				FundamentalPlaneWidthKm:        parseFloat(fundamentalPlaneWidthKmEntry.Text),
+				FundamentalPlaneWidthNumPoints: parseInt(fundamentalPlaneWidthNumPointsEntry.Text),
+				ParallaxArcsec:                 parseFloat(parallaxArcsecEntry.Text),
+				DistanceAu:                     parseFloat(distanceAuEntry.Text),
+				PathToQeTableFile:              pathToQeTableFileEntry.Text,
+				ObservationWavelengthNm:        parseInt(observationWavelengthNmEntry.Text),
+				DXKmPerSec:                     parseFloat(dXKmPerSecEntry.Text),
+				DYKmPerSec:                     parseFloat(dYKmPerSecEntry.Text),
+				PathPerpendicularOffsetKm:      parseFloat(pathPerpendicularOffsetKmEntry.Text),
+				PercentMagDrop:                 parseInt(percentMagDropEntry.Text),
+				StarDiamOnPlaneMas:             parseFloat(starDiamOnPlaneMasEntry.Text),
+				LimbDarkeningCoeff:             parseFloat(limbDarkeningCoeffEntry.Text),
+				StarClass:                      starClassEntry.Text,
+				MainBody: EllipseParams{
+					XCenterKm:          parseFloat(mainBodyXCenterEntry.Text),
+					YCenterKm:          parseFloat(mainBodyYCenterEntry.Text),
+					MajorAxisKm:        parseFloat(mainBodyMajorAxisEntry.Text),
+					MinorAxisKm:        parseFloat(mainBodyMinorAxisEntry.Text),
+					MajorAxisPaDegrees: parseFloat(mainBodyPaDegreesEntry.Text),
+				},
+				Satellite: EllipseParams{
+					XCenterKm:          parseFloat(satelliteXCenterEntry.Text),
+					YCenterKm:          parseFloat(satelliteYCenterEntry.Text),
+					MajorAxisKm:        parseFloat(satelliteMajorAxisEntry.Text),
+					MinorAxisKm:        parseFloat(satelliteMinorAxisEntry.Text),
+					MajorAxisPaDegrees: parseFloat(satellitePaDegreesEntry.Text),
+				},
+				PathToExternalImage: pathToExternalImageEntry.Text,
+			}
+
+			// Marshal to JSON5
+			data, err := json5.Marshal(params)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to encode parameters: %w", err), w)
+				return
+			}
+
+			// Indent the JSON5 output
+			var indented []byte
+			if err := json5.Indent(&indented, data, "", "  "); err != nil {
+				dialog.ShowError(fmt.Errorf("failed to format parameters: %w", err), w)
+				return
+			}
+			data = indented
+
+			// Write to the file
+			if _, err := writer.Write(data); err != nil {
+				dialog.ShowError(fmt.Errorf("failed to write file: %w", err), w)
+				return
+			}
+		}, w)
+		fileDialog.SetFilter(nil) // Allow all files or set a specific filter
+		fileDialog.Resize(fyne.NewSize(1200, 800))
+		fileDialog.Show()
+	})
+
+	buttons := container.NewHBox(loadBtn, saveBtn, layout.NewSpacer(), cancelBtn, okBtn)
+	content := container.NewBorder(nil, buttons, nil, nil, scrollContent)
+
+	customDialog = dialog.NewCustomWithoutButtons("Occultation Parameters", content, w)
+	customDialog.Resize(fyne.NewSize(840, 750))
+	customDialog.Show()
 }
 
 // PlotPoint represents a data point in the light curve
@@ -357,18 +650,6 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	r.image.Resize(size)
 }
 
-// renderPlotToImage renders the gonum plot to an image.Image
-//func renderPlotToImage(plt *plot.Plot, width, height int) image.Image {
-//	w := vg.Length(width) * vg.Inch / 96
-//	h := vg.Length(height) * vg.Inch / 96
-//
-//	img := vgimg.New(w, h)
-//	dc := draw.New(img)
-//	plt.Draw(dc)
-//
-//	return img.Image()
-//}
-
 // generateRandomLightCurve creates sample light curve data
 func generateRandomLightCurve(numPoints int, seriesIndex int, baseY float64, dipCenter float64) []PlotPoint {
 	points := make([]PlotPoint, numPoints)
@@ -636,7 +917,10 @@ func main() {
 			}
 		}()
 	})
-	buttons := container.NewHBox(btn1, btn2, btn3, btn4, btnIOTA)
+	btnOccultParams := widget.NewButton("Occultation Parameters", func() {
+		showOccultationParametersDialog(w)
+	})
+	buttons := container.NewHBox(btn1, btn2, btn3, btn4, btnIOTA, btnOccultParams)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)

@@ -1,6 +1,8 @@
 module GoPyOTE
 
-go 1.24
+go 1.24.1
+
+toolchain go1.24.11
 
 require (
 	fyne.io/fyne/v2 v2.7.2
@@ -14,6 +16,7 @@ require (
 	fyne.io/systray v1.12.0 // indirect
 	git.sr.ht/~sbinet/gg v0.6.0 // indirect
 	github.com/BurntSushi/toml v1.5.0 // indirect
+	github.com/KevinWang15/go-json5 v0.0.0-20250617120459-0bb7d90bf15f // indirect
 	github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b // indirect
 	github.com/campoy/embedmd v1.0.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
