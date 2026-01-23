@@ -36,7 +36,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.1"
+const Version = "1.0.2"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -158,6 +158,46 @@ func showOccultationParametersDialog(w fyne.Window) {
 	// Track the currently loaded file name for save dialog default
 	var loadedFileName string
 
+	// Auto-load previously opened parameters file if available
+	if lastLoadedParamsPath != "" {
+		file, err := os.Open(lastLoadedParamsPath)
+		if err == nil {
+			params, parseErr := parseOccultationParameters(file)
+			if closeErr := file.Close(); closeErr != nil {
+				dialog.ShowError(fmt.Errorf("failed to close file: %w", closeErr), w)
+			}
+			if parseErr == nil {
+				windowSizeEntry.SetText(strconv.Itoa(params.WindowSizePixels))
+				titleEntry.SetText(params.Title)
+				fundamentalPlaneWidthKmEntry.SetText(strconv.FormatFloat(params.FundamentalPlaneWidthKm, 'f', -1, 64))
+				fundamentalPlaneWidthNumPointsEntry.SetText(strconv.Itoa(params.FundamentalPlaneWidthNumPoints))
+				parallaxArcsecEntry.SetText(strconv.FormatFloat(params.ParallaxArcsec, 'f', -1, 64))
+				distanceAuEntry.SetText(strconv.FormatFloat(params.DistanceAu, 'f', -1, 64))
+				pathToQeTableFileEntry.SetText(params.PathToQeTableFile)
+				observationWavelengthNmEntry.SetText(strconv.Itoa(params.ObservationWavelengthNm))
+				dXKmPerSecEntry.SetText(strconv.FormatFloat(params.DXKmPerSec, 'f', -1, 64))
+				dYKmPerSecEntry.SetText(strconv.FormatFloat(params.DYKmPerSec, 'f', -1, 64))
+				pathPerpendicularOffsetKmEntry.SetText(strconv.FormatFloat(params.PathPerpendicularOffsetKm, 'f', -1, 64))
+				percentMagDropEntry.SetText(strconv.Itoa(params.PercentMagDrop))
+				starDiamOnPlaneMasEntry.SetText(strconv.FormatFloat(params.StarDiamOnPlaneMas, 'f', -1, 64))
+				limbDarkeningCoeffEntry.SetText(strconv.FormatFloat(params.LimbDarkeningCoeff, 'f', -1, 64))
+				starClassEntry.SetText(params.StarClass)
+				mainBodyXCenterEntry.SetText(strconv.FormatFloat(params.MainBody.XCenterKm, 'f', -1, 64))
+				mainBodyYCenterEntry.SetText(strconv.FormatFloat(params.MainBody.YCenterKm, 'f', -1, 64))
+				mainBodyMajorAxisEntry.SetText(strconv.FormatFloat(params.MainBody.MajorAxisKm, 'f', -1, 64))
+				mainBodyMinorAxisEntry.SetText(strconv.FormatFloat(params.MainBody.MinorAxisKm, 'f', -1, 64))
+				mainBodyPaDegreesEntry.SetText(strconv.FormatFloat(params.MainBody.MajorAxisPaDegrees, 'f', -1, 64))
+				satelliteXCenterEntry.SetText(strconv.FormatFloat(params.Satellite.XCenterKm, 'f', -1, 64))
+				satelliteYCenterEntry.SetText(strconv.FormatFloat(params.Satellite.YCenterKm, 'f', -1, 64))
+				satelliteMajorAxisEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisKm, 'f', -1, 64))
+				satelliteMinorAxisEntry.SetText(strconv.FormatFloat(params.Satellite.MinorAxisKm, 'f', -1, 64))
+				satellitePaDegreesEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisPaDegrees, 'f', -1, 64))
+				pathToExternalImageEntry.SetText(params.PathToExternalImage)
+				loadedFileName = filepath.Base(lastLoadedParamsPath)
+			}
+		}
+	}
+
 	// Helper to wrap entry in a fixed-width container
 	entryWidth := float32(280)
 	wrapEntry := func(e *widget.Entry) *fyne.Container {
@@ -268,7 +308,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 			satellitePaDegreesEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisPaDegrees, 'f', -1, 64))
 			pathToExternalImageEntry.SetText(params.PathToExternalImage)
 
-			// Store the loaded file name for use as default in save dialog
+			// Store the loaded file name for use as default in the save dialog
 			loadedFileName = reader.URI().Name()
 			// Store the full path for use by Run IOTAdiffraction
 			lastLoadedParamsPath = reader.URI().Path()
@@ -359,7 +399,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 				return
 			}
 
-			// Close the parameters dialog after successful save
+			// Close the parameters dialog after a successful save
 			customDialog.Hide()
 		}, w)
 		fileDialog.SetFilter(nil) // Allow all files or set a specific filter
@@ -873,7 +913,7 @@ func main() {
 		// Create a custom dialog with the output
 		outputDialog := dialog.NewCustom("IOTAdiffraction Output", "Close", scrollContainer, w)
 
-		// Set up the command with pipes using the selected file as parameter
+		// Set up the command with pipes using the selected file as a parameter
 		cmd := exec.Command(exePath, paramFilePath)
 		cmd.Dir = cwd
 
@@ -946,7 +986,7 @@ func main() {
 			return
 		}
 
-		// Otherwise, open file selection dialog to choose parameter file
+		// Otherwise, open the file selection dialog to choose a parameter file
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
