@@ -35,6 +35,12 @@ import (
 	"gonum.org/v1/plot/vg/vgimg"
 )
 
+// Version information
+const Version = "1.0.1"
+
+// Track the last loaded parameters file path for use by Run IOTAdiffraction
+var lastLoadedParamsPath string
+
 // Windows API
 var (
 	user32                  = syscall.NewLazyDLL("user32.dll")
@@ -149,6 +155,9 @@ func showOccultationParametersDialog(w fyne.Window) {
 
 	pathToExternalImageEntry := widget.NewEntry()
 
+	// Track the currently loaded file name for save dialog default
+	var loadedFileName string
+
 	// Helper to wrap entry in a fixed-width container
 	entryWidth := float32(280)
 	wrapEntry := func(e *widget.Entry) *fyne.Container {
@@ -258,6 +267,11 @@ func showOccultationParametersDialog(w fyne.Window) {
 			satelliteMinorAxisEntry.SetText(strconv.FormatFloat(params.Satellite.MinorAxisKm, 'f', -1, 64))
 			satellitePaDegreesEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisPaDegrees, 'f', -1, 64))
 			pathToExternalImageEntry.SetText(params.PathToExternalImage)
+
+			// Store the loaded file name for use as default in save dialog
+			loadedFileName = reader.URI().Name()
+			// Store the full path for use by Run IOTAdiffraction
+			lastLoadedParamsPath = reader.URI().Path()
 		}, w)
 		fileDialog.SetFilter(nil) // Allow all files or set a specific filter
 		fileDialog.Resize(fyne.NewSize(1200, 800))
@@ -344,8 +358,14 @@ func showOccultationParametersDialog(w fyne.Window) {
 				dialog.ShowError(fmt.Errorf("failed to write file: %w", err), w)
 				return
 			}
+
+			// Close the parameters dialog after successful save
+			customDialog.Hide()
 		}, w)
 		fileDialog.SetFilter(nil) // Allow all files or set a specific filter
+		if loadedFileName != "" {
+			fileDialog.SetFileName(loadedFileName)
+		}
 		fileDialog.Resize(fyne.NewSize(1200, 800))
 		fileDialog.Show()
 	})
@@ -669,7 +689,7 @@ func generateRandomLightCurve(numPoints int, seriesIndex int, baseY float64, dip
 
 func main() {
 	a := app.NewWithID("com.gopyote.app")
-	w := a.NewWindow("My Application")
+	w := a.NewWindow("GoPyOTE Version: " + Version)
 
 	// Load saved window geometry
 	prefs := a.Preferences()
@@ -823,7 +843,8 @@ func main() {
 		lightCurvePlot.SetSeries(newSeries)
 		plotStatusLabel.SetText("Plot regenerated - click a point")
 	})
-	btnIOTA := widget.NewButton("Run IOTAdiffraction", func() {
+	// Helper function to run IOTAdiffraction with a given parameter file
+	runIOTAdiffraction := func(paramFilePath string) {
 		// Get the current working directory
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -852,8 +873,8 @@ func main() {
 		// Create a custom dialog with the output
 		outputDialog := dialog.NewCustom("IOTAdiffraction Output", "Close", scrollContainer, w)
 
-		// Set up the command with pipes
-		cmd := exec.Command(exePath, "parameters")
+		// Set up the command with pipes using the selected file as parameter
+		cmd := exec.Command(exePath, paramFilePath)
 		cmd.Dir = cwd
 
 		stdout, err := cmd.StdoutPipe()
@@ -916,6 +937,34 @@ func main() {
 				appendOutput("\n[Process completed successfully]")
 			}
 		}()
+	}
+
+	btnIOTA := widget.NewButton("Run IOTAdiffraction", func() {
+		// If a parameters file was previously loaded, use it directly
+		if lastLoadedParamsPath != "" {
+			runIOTAdiffraction(lastLoadedParamsPath)
+			return
+		}
+
+		// Otherwise, open file selection dialog to choose parameter file
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if reader == nil {
+				return // User cancelled
+			}
+			// Get the file path and close the reader (we don't need to read the content)
+			paramFilePath := reader.URI().Path()
+			if cerr := reader.Close(); cerr != nil {
+				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+			}
+
+			runIOTAdiffraction(paramFilePath)
+		}, w)
+		fileDialog.Resize(fyne.NewSize(1200, 800))
+		fileDialog.Show()
 	})
 	btnOccultParams := widget.NewButton("Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
