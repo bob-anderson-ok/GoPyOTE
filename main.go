@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.6"
+const Version = "1.0.7"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1096,6 +1096,9 @@ func main() {
 	yMinEntry.SetPlaceHolder("Y Min")
 	yMaxEntry.SetPlaceHolder("Y Max")
 
+	// Track if user has manually set any bounds (don't reset on curve toggle)
+	userSetBounds := false
+
 	// Update entries when plot bounds change
 	updateRangeEntries := func() {
 		minX, maxX := lightCurvePlot.GetXBounds()
@@ -1113,6 +1116,7 @@ func main() {
 		if err == nil {
 			_, maxX := lightCurvePlot.GetXBounds()
 			lightCurvePlot.SetXBounds(val, maxX)
+			userSetBounds = true
 		}
 		updateRangeEntries()
 	}
@@ -1123,6 +1127,7 @@ func main() {
 		if err == nil {
 			minX, _ := lightCurvePlot.GetXBounds()
 			lightCurvePlot.SetXBounds(minX, val)
+			userSetBounds = true
 		}
 		updateRangeEntries()
 	}
@@ -1133,6 +1138,7 @@ func main() {
 		if err == nil {
 			_, maxY := lightCurvePlot.GetYBounds()
 			lightCurvePlot.SetYBounds(val, maxY)
+			userSetBounds = true
 		}
 		updateRangeEntries()
 	}
@@ -1143,6 +1149,7 @@ func main() {
 		if err == nil {
 			minY, _ := lightCurvePlot.GetYBounds()
 			lightCurvePlot.SetYBounds(minY, val)
+			userSetBounds = true
 		}
 		updateRangeEntries()
 	}
@@ -1164,9 +1171,18 @@ func main() {
 		widget.NewLabel("Y Max:"),
 		yMaxContainer,
 		widget.NewButton("Reset", func() {
+			userSetBounds = false
 			lightCurvePlot.calculateBounds()
 			lightCurvePlot.Refresh()
-			updateRangeEntries()
+			// Clear entries if no curves selected, otherwise update with calculated bounds
+			if len(lightCurvePlot.series) == 0 {
+				xMinEntry.SetText("")
+				xMaxEntry.SetText("")
+				yMinEntry.SetText("")
+				yMaxEntry.SetText("")
+			} else {
+				updateRangeEntries()
+			}
 		}),
 	)
 
@@ -1277,8 +1293,22 @@ func main() {
 			displayedCurves[columnIndex] = true
 		}
 
+		// Save bounds if user has set them manually
+		var savedMinX, savedMaxX, savedMinY, savedMaxY float64
+		if userSetBounds {
+			savedMinX, savedMaxX = lightCurvePlot.GetXBounds()
+			savedMinY, savedMaxY = lightCurvePlot.GetYBounds()
+		}
+
 		rebuildPlot()
-		updateRangeEntries()     // Update axis range entries when curves change
+
+		// Restore bounds if user had set them, otherwise update entries
+		if userSetBounds {
+			lightCurvePlot.SetXBounds(savedMinX, savedMaxX)
+			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		} else {
+			updateRangeEntries()
+		}
 		lightCurveList.Refresh() // Refresh to update visual indicators
 	}
 
@@ -1345,6 +1375,13 @@ func main() {
 				delete(displayedCurves, k)
 			}
 			lightCurvePlot.SetSeries(nil)
+
+			// Clear range entries and reset user bounds flag
+			userSetBounds = false
+			xMinEntry.SetText("")
+			xMaxEntry.SetText("")
+			yMinEntry.SetText("")
+			yMaxEntry.SetText("")
 
 			// Update the list with column names
 			lightCurveListData = make([]string, len(data.Columns))
