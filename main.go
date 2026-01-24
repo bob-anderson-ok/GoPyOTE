@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/csv"
 	"fmt"
 	"image/color"
 	"image/png"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.2"
+const Version = "1.0.3"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -119,6 +121,151 @@ func parseOccultationParameters(reader io.Reader) (*OccultationParameters, error
 
 	return &params, nil
 }
+
+// LightCurveColumn represents a single light curve column from a CSV file
+type LightCurveColumn struct {
+	Name   string
+	Values []float64
+}
+
+// LightCurveData holds all parsed data from a light curve CSV file
+type LightCurveData struct {
+	TimeValues []float64          // Decoded timestamps as float64 seconds
+	Columns    []LightCurveColumn // All data columns (excluding index and time)
+}
+
+// decodeTimestamp converts a timestamp string like "[03:58:34.6796]" to float64 seconds
+// It handles passage through midnight by detecting large backward jumps
+func decodeTimestamp(timeStr string, prevTime float64) float64 {
+	// Remove brackets if present
+	timeStr = strings.Trim(timeStr, "[]")
+
+	// Parse HH:MM:SS.mmmm format
+	parts := strings.Split(timeStr, ":")
+	if len(parts) != 3 {
+		return prevTime
+	}
+
+	hours, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return prevTime
+	}
+
+	minutes, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil {
+		return prevTime
+	}
+
+	seconds, err := strconv.ParseFloat(parts[2], 64)
+	if err != nil {
+		return prevTime
+	}
+
+	// Convert to total seconds
+	totalSeconds := hours*3600 + minutes*60 + seconds
+
+	// Handle midnight passage: if time suddenly drops significantly, add 24 hours
+	if prevTime > 0 && totalSeconds < prevTime-43200 { // 43200 = 12 hours
+		totalSeconds += 86400 // Add 24 hours
+	}
+
+	return totalSeconds
+}
+
+// parseLightCurveCSV reads a CSV file, skipping comments and blank lines,
+// and extracts light curve data
+func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer func() {
+		if cerr := file.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close file: %v\n", cerr)
+		}
+	}()
+
+	scanner := bufio.NewScanner(file)
+	var dataLines []string
+	var headerLine string
+
+	// Read lines, skipping comments and blank lines
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if headerLine == "" {
+			headerLine = line
+		} else {
+			dataLines = append(dataLines, line)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading file: %w", err)
+	}
+
+	if headerLine == "" {
+		return nil, fmt.Errorf("no valid header line found")
+	}
+
+	// Parse header to get column names
+	headerReader := csv.NewReader(strings.NewReader(headerLine))
+	headers, err := headerReader.Read()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse header: %w", err)
+	}
+
+	if len(headers) < 3 {
+		return nil, fmt.Errorf("CSV must have at least 3 columns (index, time, and data)")
+	}
+
+	// Initialize data structure
+	data := &LightCurveData{
+		TimeValues: make([]float64, 0, len(dataLines)),
+		Columns:    make([]LightCurveColumn, len(headers)-2), // Exclude index and time columns
+	}
+
+	// Set column names (skip the first two: index and time)
+	for i := 2; i < len(headers); i++ {
+		data.Columns[i-2].Name = headers[i]
+		data.Columns[i-2].Values = make([]float64, 0, len(dataLines))
+	}
+
+	// Parse data lines
+	var prevTime float64
+	for _, line := range dataLines {
+		lineReader := csv.NewReader(strings.NewReader(line))
+		record, err := lineReader.Read()
+		if err != nil {
+			continue // Skip malformed lines
+		}
+
+		if len(record) < len(headers) {
+			continue // Skip incomplete lines
+		}
+
+		// Decode timestamp (second column)
+		timeVal := decodeTimestamp(record[1], prevTime)
+		data.TimeValues = append(data.TimeValues, timeVal)
+		prevTime = timeVal
+
+		// Parse data columns (skip the first two)
+		for i := 2; i < len(headers); i++ {
+			val, err := strconv.ParseFloat(record[i], 64)
+			if err != nil {
+				val = 0
+			}
+			data.Columns[i-2].Values = append(data.Columns[i-2].Values, val)
+		}
+	}
+
+	return data, nil
+}
+
+// Global variable to hold loaded light curve data
+var loadedLightCurveData *LightCurveData
 
 // showOccultationParametersDialog displays a form dialog for editing occultation parameters
 func showOccultationParametersDialog(w fyne.Window) {
@@ -614,12 +761,44 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	p := r.plot
 	size := p.Size()
 
-	if size.Width < 10 || size.Height < 10 || len(p.series) == 0 {
+	if size.Width < 10 || size.Height < 10 {
 		return
 	}
 
 	// Create gonum plot
 	plt := plot.New()
+
+	// If no series, show an empty plot
+	if len(p.series) == 0 {
+		plt.Title.Text = "Light Curve"
+		plt.X.Label.Text = "Time"
+		plt.Y.Label.Text = "Brightness"
+
+		// Render empty plot
+		width := vg.Length(size.Width) * vg.Inch / 96
+		height := vg.Length(size.Height) * vg.Inch / 96
+		img := vgimg.New(width, height)
+		dc := draw.New(img)
+		plt.Draw(dc)
+
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img.Image()); err != nil {
+			fmt.Printf("Error encoding plot image: %v", err)
+			return
+		}
+		goImg, _ := png.Decode(bytes.NewReader(buf.Bytes()))
+
+		if r.image == nil {
+			r.image = canvas.NewImageFromImage(goImg)
+			r.image.FillMode = canvas.ImageFillStretch
+			r.objects = []fyne.CanvasObject{r.image}
+		} else {
+			r.image.Image = goImg
+			r.image.Refresh()
+		}
+		r.image.Resize(size)
+		return
+	}
 	plt.Title.Text = "Light Curve"
 	plt.Title.TextStyle.Font.Weight = 2 // Bold
 	plt.X.Label.Text = "Time"
@@ -802,32 +981,7 @@ func main() {
 	tab2 := container.NewTabItem("Settings",
 		makeTabContent("Settings page content", color.RGBA{R: 200, G: 200, B: 230, A: 255}))
 
-	// Tab 3: Data
-	tab3Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 220, B: 200, A: 255})
-	imagePlaceholder := canvas.NewRectangle(color.RGBA{R: 200, G: 200, B: 200, A: 255})
-	imagePlaceholder.SetMinSize(fyne.NewSize(300, 200))
-	imageLabel := widget.NewLabel("Image Placeholder")
-	imageHolder := container.NewStack(imagePlaceholder, container.NewCenter(imageLabel))
-	tab3Content := container.NewStack(tab3Bg, container.NewPadded(container.NewVBox(
-		widget.NewLabel("Data page content"),
-		imageHolder,
-	)))
-	tab3 := container.NewTabItem("Data", tab3Content)
-
-	// Tab 4: Reports
-	tab4Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 200, B: 220, A: 255})
-	radioGroup := widget.NewRadioGroup([]string{
-		"Option 1", "Option 2", "Option 3", "Option 4", "Option 5", "Option 6",
-	}, func(selected string) {})
-	radioGroup.SetSelected("Option 1")
-	tab4Content := container.NewStack(tab4Bg, container.NewPadded(container.NewVBox(
-		widget.NewLabel("Reports page content"),
-		radioGroup,
-	)))
-	tab4 := container.NewTabItem("Reports", tab4Content)
-	tabs := container.NewAppTabs(tab1, tab2, tab3, tab4)
-
-	// Create the plot area with an interactive light curve
+	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
 	plotStatusLabel := widget.NewLabel("Click on a point to see details")
 	plotStatusLabel.Wrapping = fyne.TextWrapWord
 
@@ -863,11 +1017,180 @@ func main() {
 		lightCurvePlot,  // center
 	)
 
+	// Tab 3: Data - Light curve list with click to toggle on/off plot
+	tab3Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 220, B: 200, A: 255})
+
+	// Create a list to display light curve column names
+	lightCurveListData := []string{}      // Will be populated when CSV is loaded
+	displayedCurves := make(map[int]bool) // Track which curves are currently displayed
+	var lightCurveList *widget.List
+
+	// Color palette for multiple light curves
+	curveColors := []color.RGBA{
+		{R: 70, G: 130, B: 180, A: 255},  // Steel blue
+		{R: 220, G: 120, B: 50, A: 255},  // Orange
+		{R: 50, G: 180, B: 80, A: 255},   // Green
+		{R: 180, G: 50, B: 180, A: 255},  // Purple
+		{R: 200, G: 50, B: 50, A: 255},   // Red
+		{R: 50, G: 180, B: 180, A: 255},  // Cyan
+		{R: 180, G: 180, B: 50, A: 255},  // Yellow
+		{R: 100, G: 100, B: 100, A: 255}, // Gray
+	}
+
+	// Function to rebuild the plot with all currently displayed curves
+	rebuildPlot := func() {
+		if loadedLightCurveData == nil {
+			return
+		}
+
+		var allSeries []PlotSeries
+		colorIdx := 0
+		var displayedNames []string
+
+		for colIdx := range loadedLightCurveData.Columns {
+			if !displayedCurves[colIdx] {
+				continue
+			}
+
+			col := loadedLightCurveData.Columns[colIdx]
+			points := make([]PlotPoint, len(col.Values))
+			for i, val := range col.Values {
+				points[i] = PlotPoint{
+					X:      loadedLightCurveData.TimeValues[i],
+					Y:      val,
+					Index:  i,
+					Series: len(allSeries),
+				}
+			}
+
+			allSeries = append(allSeries, PlotSeries{
+				Points: points,
+				Color:  curveColors[colorIdx%len(curveColors)],
+				Name:   col.Name,
+			})
+			displayedNames = append(displayedNames, col.Name)
+			colorIdx++
+		}
+
+		if len(allSeries) == 0 {
+			// Clear the plot if no curves are selected
+			lightCurvePlot.SetSeries([]PlotSeries{})
+			plotStatusLabel.SetText("No light curves selected")
+		} else {
+			lightCurvePlot.SetSeries(allSeries)
+			plotStatusLabel.SetText(fmt.Sprintf("Displaying: %s", strings.Join(displayedNames, ", ")))
+		}
+	}
+
+	// Function to toggle a light curve on/off
+	toggleLightCurve := func(columnIndex int) {
+		if loadedLightCurveData == nil || columnIndex < 0 || columnIndex >= len(loadedLightCurveData.Columns) {
+			return
+		}
+
+		if displayedCurves[columnIndex] {
+			delete(displayedCurves, columnIndex)
+		} else {
+			displayedCurves[columnIndex] = true
+		}
+
+		rebuildPlot()
+		lightCurveList.Refresh() // Refresh to update visual indicators
+	}
+
+	lightCurveList = widget.NewList(
+		func() int { return len(lightCurveListData) },
+		func() fyne.CanvasObject {
+			return widget.NewLabel("Light Curve Name")
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			label := obj.(*widget.Label)
+			name := lightCurveListData[id]
+			if displayedCurves[id] {
+				label.SetText("✓ " + name)
+			} else {
+				label.SetText("  " + name)
+			}
+		},
+	)
+
+	// Handle click on list items to toggle
+	lightCurveList.OnSelected = func(id widget.ListItemID) {
+		toggleLightCurve(id)
+		lightCurveList.UnselectAll() // Unselect so clicking again works
+	}
+
+	// Button to load a CSV file
+	loadCSVBtn := widget.NewButton("Load Light Curve CSV...", func() {
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if reader == nil {
+				return // User cancelled
+			}
+			filePath := reader.URI().Path()
+			if cerr := reader.Close(); cerr != nil {
+				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+			}
+
+			// Parse the CSV file
+			data, err := parseLightCurveCSV(filePath)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to parse CSV: %w", err), w)
+				return
+			}
+
+			loadedLightCurveData = data
+
+			// Clear displayed curves and reset the plot
+			for k := range displayedCurves {
+				delete(displayedCurves, k)
+			}
+			lightCurvePlot.SetSeries([]PlotSeries{})
+
+			// Update the list with column names
+			lightCurveListData = make([]string, len(data.Columns))
+			for i, col := range data.Columns {
+				lightCurveListData[i] = col.Name
+			}
+			lightCurveList.Refresh()
+
+			plotStatusLabel.SetText(fmt.Sprintf("Loaded %d light curves with %d data points. Click to toggle display.",
+				len(data.Columns), len(data.TimeValues)))
+		}, w)
+		fileDialog.Resize(fyne.NewSize(1200, 800))
+		fileDialog.Show()
+	})
+
+	lightCurveListScroll := container.NewVScroll(lightCurveList)
+	lightCurveListScroll.SetMinSize(fyne.NewSize(200, 300))
+
+	tab3Content := container.NewStack(tab3Bg, container.NewPadded(container.NewBorder(
+		loadCSVBtn,           // top
+		nil,                  // bottom
+		nil,                  // left
+		nil,                  // right
+		lightCurveListScroll, // center
+	)))
+	tab3 := container.NewTabItem("Data", tab3Content)
+
+	// Tab 4: Reports
+	tab4Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 200, B: 220, A: 255})
+	radioGroup := widget.NewRadioGroup([]string{
+		"Option 1", "Option 2", "Option 3", "Option 4", "Option 5", "Option 6",
+	}, func(selected string) {})
+	radioGroup.SetSelected("Option 1")
+	tab4Content := container.NewStack(tab4Bg, container.NewPadded(container.NewVBox(
+		widget.NewLabel("Reports page content"),
+		radioGroup,
+	)))
+	tab4 := container.NewTabItem("Reports", tab4Content)
+	tabs := container.NewAppTabs(tab1, tab2, tab3, tab4)
+
 	// Create buttons
-	btn1 := widget.NewButton("Action 1", func() {})
-	btn2 := widget.NewButton("Action 2", func() {})
-	btn3 := widget.NewButton("Action 3", func() {})
-	btn4 := widget.NewButton("Regenerate Plot", func() {
+	btnRegenerate := widget.NewButton("Regenerate Plot", func() {
 		newSeries := []PlotSeries{
 			{
 				Points: generateRandomLightCurve(50, 0, 1.0, 0.3+rand.Float64()*0.4),
@@ -1009,7 +1332,7 @@ func main() {
 	btnOccultParams := widget.NewButton("Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
 	})
-	buttons := container.NewHBox(btn1, btn2, btn3, btn4, btnIOTA, btnOccultParams)
+	buttons := container.NewHBox(btnRegenerate, btnIOTA, btnOccultParams)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
