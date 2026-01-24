@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.7"
+const Version = "1.0.8"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -172,6 +172,57 @@ func decodeTimestamp(timeStr string, prevTime float64) float64 {
 	}
 
 	return totalSeconds
+}
+
+// formatSecondsAsTimestamp converts float64 seconds to timestamp format [hh:mm:ss.sss]
+func formatSecondsAsTimestamp(totalSeconds float64) string {
+	// Handle negative values (should not happen but be safe)
+	if totalSeconds < 0 {
+		totalSeconds = 0
+	}
+
+	// Handle values that have wrapped past midnight (> 24 hours)
+	totalSeconds = math.Mod(totalSeconds, 86400)
+
+	hours := int(totalSeconds / 3600)
+	totalSeconds -= float64(hours) * 3600
+	minutes := int(totalSeconds / 60)
+	totalSeconds -= float64(minutes) * 60
+	seconds := totalSeconds
+
+	return fmt.Sprintf("%02d:%02d:%06.3f", hours, minutes, seconds)
+}
+
+// parseTimestampInput parses a timestamp string (hh:mm:ss.sss or hh:mm:ss) to float64 seconds
+// Returns the value and true if successful, or 0 and false if parsing fails
+func parseTimestampInput(input string) (float64, bool) {
+	// Remove any surrounding whitespace and brackets
+	input = strings.TrimSpace(input)
+	input = strings.Trim(input, "[]")
+
+	// Try to parse as hh:mm:ss.sss format
+	parts := strings.Split(input, ":")
+	if len(parts) != 3 {
+		return 0, false
+	}
+
+	hours, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0, false
+	}
+
+	minutes, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil {
+		return 0, false
+	}
+
+	seconds, err := strconv.ParseFloat(parts[2], 64)
+	if err != nil {
+		return 0, false
+	}
+
+	totalSeconds := hours*3600 + minutes*60 + seconds
+	return totalSeconds, true
 }
 
 // parseLightCurveCSV reads a CSV file, skipping comments and blank lines,
@@ -597,12 +648,13 @@ type PlotSeries struct {
 // LightCurvePlot is a custom widget for displaying interactive light curve plots using gonum/plot
 type LightCurvePlot struct {
 	widget.BaseWidget
-	series         []PlotSeries
-	pointRadius    float32
-	onPointClicked func(point PlotPoint)
-	selectedSeries int
-	selectedIndex  int
-	xAxisLabel     string
+	series            []PlotSeries
+	pointRadius       float32
+	onPointClicked    func(point PlotPoint)
+	selectedSeries    int
+	selectedIndex     int
+	xAxisLabel        string
+	useTimestampTicks bool // When true, format X axis ticks as timestamps
 
 	// Plot bounds for coordinate conversion
 	minX, maxX, minY, maxY float64
@@ -661,6 +713,35 @@ func (p *LightCurvePlot) SetYBounds(minY, maxY float64) {
 // GetYBounds returns the current Y axis min and max values
 func (p *LightCurvePlot) GetYBounds() (float64, float64) {
 	return p.minY, p.maxY
+}
+
+// SetUseTimestampTicks sets whether X axis ticks should be formatted as timestamps
+func (p *LightCurvePlot) SetUseTimestampTicks(use bool) {
+	p.useTimestampTicks = use
+	p.Refresh()
+}
+
+// GetUseTimestampTicks returns whether X axis ticks are formatted as timestamps
+func (p *LightCurvePlot) GetUseTimestampTicks() bool {
+	return p.useTimestampTicks
+}
+
+// timestampTicker is a custom tick marker that formats values as timestamps
+type timestampTicker struct{}
+
+// Ticks returns tick marks for the given axis range, formatted as timestamps
+func (t timestampTicker) Ticks(min, max float64) []plot.Tick {
+	// Use the default ticker to get reasonable tick positions
+	defaultTicker := plot.DefaultTicks{}
+	ticks := defaultTicker.Ticks(min, max)
+
+	// Replace labels with the timestamp format
+	for i := range ticks {
+		if ticks[i].Label != "" {
+			ticks[i].Label = formatSecondsAsTimestamp(ticks[i].Value)
+		}
+	}
+	return ticks
 }
 
 // calculateBounds computes the data bounds across all series
@@ -928,6 +1009,11 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	plt.Y.Min = p.minY
 	plt.Y.Max = p.maxY
 
+	// Use timestamp tick labels if enabled
+	if p.useTimestampTicks {
+		plt.X.Tick.Marker = timestampTicker{}
+	}
+
 	plt.Legend.Top = true
 	plt.Legend.Left = true
 
@@ -1096,15 +1182,21 @@ func main() {
 	yMinEntry.SetPlaceHolder("Y Min")
 	yMaxEntry.SetPlaceHolder("Y Max")
 
-	// Track if user has manually set any bounds (don't reset on curve toggle)
+	// Track if the user has manually set any bounds (don't reset on curve toggle)
 	userSetBounds := false
 
 	// Update entries when plot bounds change
 	updateRangeEntries := func() {
 		minX, maxX := lightCurvePlot.GetXBounds()
 		minY, maxY := lightCurvePlot.GetYBounds()
-		xMinEntry.SetText(fmt.Sprintf("%.4f", minX))
-		xMaxEntry.SetText(fmt.Sprintf("%.4f", maxX))
+		// Format X entries as timestamps if timestamp ticks are enabled
+		if lightCurvePlot.GetUseTimestampTicks() {
+			xMinEntry.SetText(formatSecondsAsTimestamp(minX))
+			xMaxEntry.SetText(formatSecondsAsTimestamp(maxX))
+		} else {
+			xMinEntry.SetText(fmt.Sprintf("%.4f", minX))
+			xMaxEntry.SetText(fmt.Sprintf("%.4f", maxX))
+		}
 		yMinEntry.SetText(fmt.Sprintf("%.4f", minY))
 		yMaxEntry.SetText(fmt.Sprintf("%.4f", maxY))
 	}
@@ -1112,8 +1204,19 @@ func main() {
 
 	// Handle X Min entry changes
 	xMinEntry.OnSubmitted = func(text string) {
-		val, err := strconv.ParseFloat(text, 64)
-		if err == nil {
+		var val float64
+		var ok bool
+		// Try the timestamp format first if timestamp ticks are enabled
+		if lightCurvePlot.GetUseTimestampTicks() {
+			val, ok = parseTimestampInput(text)
+		}
+		// Fall back to float parsing
+		if !ok {
+			var err error
+			val, err = strconv.ParseFloat(text, 64)
+			ok = err == nil
+		}
+		if ok {
 			_, maxX := lightCurvePlot.GetXBounds()
 			lightCurvePlot.SetXBounds(val, maxX)
 			userSetBounds = true
@@ -1123,8 +1226,19 @@ func main() {
 
 	// Handle X Max entry changes
 	xMaxEntry.OnSubmitted = func(text string) {
-		val, err := strconv.ParseFloat(text, 64)
-		if err == nil {
+		var val float64
+		var ok bool
+		// Try the timestamp format first if timestamp ticks are enabled
+		if lightCurvePlot.GetUseTimestampTicks() {
+			val, ok = parseTimestampInput(text)
+		}
+		// Fall back to float parsing
+		if !ok {
+			var err error
+			val, err = strconv.ParseFloat(text, 64)
+			ok = err == nil
+		}
+		if ok {
 			minX, _ := lightCurvePlot.GetXBounds()
 			lightCurvePlot.SetXBounds(minX, val)
 			userSetBounds = true
@@ -1160,6 +1274,15 @@ func main() {
 	yMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMinEntry)
 	yMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMaxEntry)
 
+	// Checkbox for timestamp tick format
+	timestampTicksCheck := widget.NewCheck("Timestamp ticks", func(checked bool) {
+		lightCurvePlot.SetUseTimestampTicks(checked)
+		// Update the entry box format to match the new mode
+		if len(lightCurvePlot.series) > 0 {
+			updateRangeEntries()
+		}
+	})
+
 	// Create a toolbar with X and Y range controls
 	rangeControls := container.NewHBox(
 		widget.NewLabel("X Min:"),
@@ -1184,6 +1307,7 @@ func main() {
 				updateRangeEntries()
 			}
 		}),
+		timestampTicksCheck,
 	)
 
 	plotArea := container.NewBorder(
@@ -1293,7 +1417,7 @@ func main() {
 			displayedCurves[columnIndex] = true
 		}
 
-		// Save bounds if user has set them manually
+		// Save bounds if the user has set them manually
 		var savedMinX, savedMaxX, savedMinY, savedMaxY float64
 		if userSetBounds {
 			savedMinX, savedMaxX = lightCurvePlot.GetXBounds()
@@ -1302,7 +1426,7 @@ func main() {
 
 		rebuildPlot()
 
-		// Restore bounds if user had set them, otherwise update entries
+		// Restore bounds if the user had set them, otherwise update entries
 		if userSetBounds {
 			lightCurvePlot.SetXBounds(savedMinX, savedMaxX)
 			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
@@ -1376,7 +1500,7 @@ func main() {
 			}
 			lightCurvePlot.SetSeries(nil)
 
-			// Clear range entries and reset user bounds flag
+			// Clear range entries and reset the user bounds flag
 			userSetBounds = false
 			xMinEntry.SetText("")
 			xMaxEntry.SetText("")
