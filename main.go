@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.4"
+const Version = "1.0.5"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -635,6 +635,20 @@ func (p *LightCurvePlot) SetXAxisLabel(label string) {
 	p.Refresh()
 }
 
+// SetXBounds sets the X axis min and max values
+func (p *LightCurvePlot) SetXBounds(minX, maxX float64) {
+	if maxX > minX {
+		p.minX = minX
+		p.maxX = maxX
+		p.Refresh()
+	}
+}
+
+// GetXBounds returns the current X axis min and max values
+func (p *LightCurvePlot) GetXBounds() (float64, float64) {
+	return p.minX, p.maxX
+}
+
 // calculateBounds computes the data bounds across all series
 func (p *LightCurvePlot) calculateBounds() {
 	if len(p.series) == 0 {
@@ -789,6 +803,26 @@ func (r *lightCurvePlotRenderer) Refresh() {
 
 	// Create gonum plot
 	plt := plot.New()
+	// Modify the font fields directly on existing styles
+	plt.Title.TextStyle.Font.Typeface = "Liberation"
+	plt.Title.TextStyle.Font.Variant = "Sans"
+	plt.Title.TextStyle.Font.Size = vg.Points(12)
+
+	plt.X.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.X.Label.TextStyle.Font.Variant = "Sans"
+	plt.X.Label.TextStyle.Font.Size = vg.Points(12)
+
+	plt.Y.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.Y.Label.TextStyle.Font.Variant = "Sans"
+	plt.Y.Label.TextStyle.Font.Size = vg.Points(12)
+
+	plt.X.Tick.Label.Font.Typeface = "Liberation"
+	plt.X.Tick.Label.Font.Variant = "Sans"
+	plt.X.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Y.Tick.Label.Font.Typeface = "Liberation"
+	plt.Y.Tick.Label.Font.Variant = "Sans"
+	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
 	// If no series, show an empty plot
 	if len(p.series) == 0 {
@@ -827,12 +861,6 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	plt.X.Label.TextStyle.Font.Weight = 2
 	plt.Y.Label.Text = "Brightness"
 	plt.Y.Label.TextStyle.Font.Weight = 2
-
-	// Set axis ranges
-	plt.X.Min = p.minX
-	plt.X.Max = p.maxX
-	plt.Y.Min = p.minY
-	plt.Y.Max = p.maxY
 
 	// Add grid
 	plt.Add(plotter.NewGrid())
@@ -879,6 +907,12 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		// Add to legend
 		plt.Legend.Add(series.Name, line, scatter)
 	}
+
+	// Set axis ranges
+	plt.X.Min = p.minX
+	plt.X.Max = p.maxX
+	plt.Y.Min = p.minY
+	plt.Y.Max = p.maxY
 
 	plt.Legend.Top = true
 	plt.Legend.Left = true
@@ -1038,8 +1072,59 @@ func main() {
 			seriesName, point.Index, currentXAxisLabel, point.X, point.Y))
 	})
 
+	// Create X axis range spinners
+	xMinEntry := widget.NewEntry()
+	xMaxEntry := widget.NewEntry()
+	xMinEntry.SetPlaceHolder("X Min")
+	xMaxEntry.SetPlaceHolder("X Max")
+
+	// Update entries when plot bounds change
+	updateXEntries := func() {
+		minX, maxX := lightCurvePlot.GetXBounds()
+		xMinEntry.SetText(fmt.Sprintf("%.4f", minX))
+		xMaxEntry.SetText(fmt.Sprintf("%.4f", maxX))
+	}
+	updateXEntries()
+
+	// Handle X Min entry changes
+	xMinEntry.OnSubmitted = func(text string) {
+		val, err := strconv.ParseFloat(text, 64)
+		if err == nil {
+			_, maxX := lightCurvePlot.GetXBounds()
+			lightCurvePlot.SetXBounds(val, maxX)
+		}
+		updateXEntries()
+	}
+
+	// Handle X Max entry changes
+	xMaxEntry.OnSubmitted = func(text string) {
+		val, err := strconv.ParseFloat(text, 64)
+		if err == nil {
+			minX, _ := lightCurvePlot.GetXBounds()
+			lightCurvePlot.SetXBounds(minX, val)
+		}
+		updateXEntries()
+	}
+
+	// Wrap entries in containers for wider size (300px = 3x default)
+	xMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(300, 36)), xMinEntry)
+	xMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(300, 36)), xMaxEntry)
+
+	// Create toolbar with X range controls
+	xRangeControls := container.NewHBox(
+		widget.NewLabel("X Min:"),
+		xMinContainer,
+		widget.NewLabel("X Max:"),
+		xMaxContainer,
+		widget.NewButton("Reset", func() {
+			lightCurvePlot.calculateBounds()
+			lightCurvePlot.Refresh()
+			updateXEntries()
+		}),
+	)
+
 	plotArea := container.NewBorder(
-		nil,             // top
+		xRangeControls,  // top
 		plotStatusLabel, // bottom
 		nil,             // left
 		nil,             // right
