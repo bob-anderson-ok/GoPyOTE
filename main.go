@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.5"
+const Version = "1.0.6"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -649,6 +649,20 @@ func (p *LightCurvePlot) GetXBounds() (float64, float64) {
 	return p.minX, p.maxX
 }
 
+// SetYBounds sets the Y axis min and max values
+func (p *LightCurvePlot) SetYBounds(minY, maxY float64) {
+	if maxY > minY {
+		p.minY = minY
+		p.maxY = maxY
+		p.Refresh()
+	}
+}
+
+// GetYBounds returns the current Y axis min and max values
+func (p *LightCurvePlot) GetYBounds() (float64, float64) {
+	return p.minY, p.maxY
+}
+
 // calculateBounds computes the data bounds across all series
 func (p *LightCurvePlot) calculateBounds() {
 	if len(p.series) == 0 {
@@ -1072,19 +1086,26 @@ func main() {
 			seriesName, point.Index, currentXAxisLabel, point.X, point.Y))
 	})
 
-	// Create X axis range spinners
+	// Create X and Y axis range spinners (start empty, filled when the first curve selected)
 	xMinEntry := widget.NewEntry()
 	xMaxEntry := widget.NewEntry()
+	yMinEntry := widget.NewEntry()
+	yMaxEntry := widget.NewEntry()
 	xMinEntry.SetPlaceHolder("X Min")
 	xMaxEntry.SetPlaceHolder("X Max")
+	yMinEntry.SetPlaceHolder("Y Min")
+	yMaxEntry.SetPlaceHolder("Y Max")
 
 	// Update entries when plot bounds change
-	updateXEntries := func() {
+	updateRangeEntries := func() {
 		minX, maxX := lightCurvePlot.GetXBounds()
+		minY, maxY := lightCurvePlot.GetYBounds()
 		xMinEntry.SetText(fmt.Sprintf("%.4f", minX))
 		xMaxEntry.SetText(fmt.Sprintf("%.4f", maxX))
+		yMinEntry.SetText(fmt.Sprintf("%.4f", minY))
+		yMaxEntry.SetText(fmt.Sprintf("%.4f", maxY))
 	}
-	updateXEntries()
+	// Don't call updateRangeEntries() here - wait until the first curve is selected
 
 	// Handle X Min entry changes
 	xMinEntry.OnSubmitted = func(text string) {
@@ -1093,7 +1114,7 @@ func main() {
 			_, maxX := lightCurvePlot.GetXBounds()
 			lightCurvePlot.SetXBounds(val, maxX)
 		}
-		updateXEntries()
+		updateRangeEntries()
 	}
 
 	// Handle X Max entry changes
@@ -1103,28 +1124,54 @@ func main() {
 			minX, _ := lightCurvePlot.GetXBounds()
 			lightCurvePlot.SetXBounds(minX, val)
 		}
-		updateXEntries()
+		updateRangeEntries()
 	}
 
-	// Wrap entries in containers for wider size (300px = 3x default)
-	xMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(300, 36)), xMinEntry)
-	xMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(300, 36)), xMaxEntry)
+	// Handle Y Min entry changes
+	yMinEntry.OnSubmitted = func(text string) {
+		val, err := strconv.ParseFloat(text, 64)
+		if err == nil {
+			_, maxY := lightCurvePlot.GetYBounds()
+			lightCurvePlot.SetYBounds(val, maxY)
+		}
+		updateRangeEntries()
+	}
 
-	// Create toolbar with X range controls
-	xRangeControls := container.NewHBox(
+	// Handle Y Max entry changes
+	yMaxEntry.OnSubmitted = func(text string) {
+		val, err := strconv.ParseFloat(text, 64)
+		if err == nil {
+			minY, _ := lightCurvePlot.GetYBounds()
+			lightCurvePlot.SetYBounds(minY, val)
+		}
+		updateRangeEntries()
+	}
+
+	// Wrap entries in containers (150px width)
+	xMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), xMinEntry)
+	xMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), xMaxEntry)
+	yMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMinEntry)
+	yMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMaxEntry)
+
+	// Create a toolbar with X and Y range controls
+	rangeControls := container.NewHBox(
 		widget.NewLabel("X Min:"),
 		xMinContainer,
 		widget.NewLabel("X Max:"),
 		xMaxContainer,
+		widget.NewLabel("Y Min:"),
+		yMinContainer,
+		widget.NewLabel("Y Max:"),
+		yMaxContainer,
 		widget.NewButton("Reset", func() {
 			lightCurvePlot.calculateBounds()
 			lightCurvePlot.Refresh()
-			updateXEntries()
+			updateRangeEntries()
 		}),
 	)
 
 	plotArea := container.NewBorder(
-		xRangeControls,  // top
+		rangeControls,   // top
 		plotStatusLabel, // bottom
 		nil,             // left
 		nil,             // right
@@ -1231,6 +1278,7 @@ func main() {
 		}
 
 		rebuildPlot()
+		updateRangeEntries()     // Update axis range entries when curves change
 		lightCurveList.Refresh() // Refresh to update visual indicators
 	}
 
