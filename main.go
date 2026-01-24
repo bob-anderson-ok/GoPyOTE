@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.8"
+const Version = "1.0.9"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -630,6 +630,26 @@ func showOccultationParametersDialog(w fyne.Window) {
 	customDialog.Show()
 }
 
+// FocusLossEntry is a custom Entry widget that triggers OnSubmitted when focus is lost
+type FocusLossEntry struct {
+	widget.Entry
+}
+
+// NewFocusLossEntry creates a new FocusLossEntry widget
+func NewFocusLossEntry() *FocusLossEntry {
+	e := &FocusLossEntry{}
+	e.ExtendBaseWidget(e)
+	return e
+}
+
+// FocusLost is called when the entry loses focus - triggers OnSubmitted
+func (e *FocusLossEntry) FocusLost() {
+	e.Entry.FocusLost()
+	if e.OnSubmitted != nil {
+		e.OnSubmitted(e.Text)
+	}
+}
+
 // PlotPoint represents a data point in the light curve
 type PlotPoint struct {
 	X      float64 // Time or frame number
@@ -1173,10 +1193,10 @@ func main() {
 	})
 
 	// Create X and Y axis range spinners (start empty, filled when the first curve selected)
-	xMinEntry := widget.NewEntry()
-	xMaxEntry := widget.NewEntry()
-	yMinEntry := widget.NewEntry()
-	yMaxEntry := widget.NewEntry()
+	xMinEntry := NewFocusLossEntry()
+	xMaxEntry := NewFocusLossEntry()
+	yMinEntry := NewFocusLossEntry()
+	yMaxEntry := NewFocusLossEntry()
 	xMinEntry.SetPlaceHolder("X Min")
 	xMaxEntry.SetPlaceHolder("X Max")
 	yMinEntry.SetPlaceHolder("Y Min")
