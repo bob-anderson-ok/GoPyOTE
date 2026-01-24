@@ -16,7 +16,7 @@
   "parallax_arcsec": 3.7711,
   "path_perpendicular_offset_from_center_km": -1.18,
   "path_to_external_image": "",
-  "path_to_qe_table_file": "c:\\Users\\boban\\Dropbox\\GolandProjects\\OccultDiffraction\\qhy174QEevery20nm",
+  "path_to_qe_table_file": "Watec910_every_40nm.qe",
   "percent_mag_drop": 75,
   "satellite": {
     "major_axis_km": 7.5,
@@ -26,7 +26,7 @@
     "y_center_km": -0.6,
   },
   "star_class": "K",
-  "star_diam_on_plane_mas": 0.5,
+  "star_diam_on_plane_mas": 0,
   "title": "(9203) Myrtus 2025 Feb 22",
   "window_size_pixels": 800,
 }

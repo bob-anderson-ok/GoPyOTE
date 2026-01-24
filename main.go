@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.3"
+const Version = "1.0.4"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -130,8 +130,10 @@ type LightCurveColumn struct {
 
 // LightCurveData holds all parsed data from a light curve CSV file
 type LightCurveData struct {
-	TimeValues []float64          // Decoded timestamps as float64 seconds
-	Columns    []LightCurveColumn // All data columns (excluding index and time)
+	TimeValues   []float64          // Decoded timestamps as float64 seconds
+	FrameNumbers []float64          // Frame numbers from the first column (used when timestamps empty)
+	Columns      []LightCurveColumn // All data columns (excluding index and time)
+	SkippedLines []string           // Comment and blank lines preserved for writing output
 }
 
 // decodeTimestamp converts a timestamp string like "[03:58:34.6796]" to float64 seconds
@@ -188,11 +190,14 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 	scanner := bufio.NewScanner(file)
 	var dataLines []string
 	var headerLine string
+	var skippedLines []string
 
-	// Read lines, skipping comments and blank lines
+	// Read lines, saving comments and blank lines for later use
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		line := scanner.Text()
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "#") {
+			skippedLines = append(skippedLines, line)
 			continue
 		}
 		if headerLine == "" {
@@ -223,8 +228,10 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 
 	// Initialize data structure
 	data := &LightCurveData{
-		TimeValues: make([]float64, 0, len(dataLines)),
-		Columns:    make([]LightCurveColumn, len(headers)-2), // Exclude index and time columns
+		TimeValues:   make([]float64, 0, len(dataLines)),
+		FrameNumbers: make([]float64, 0, len(dataLines)),
+		Columns:      make([]LightCurveColumn, len(headers)-2), // Exclude index and time columns
+		SkippedLines: skippedLines,
 	}
 
 	// Set column names (skip the first two: index and time)
@@ -245,6 +252,13 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 		if len(record) < len(headers) {
 			continue // Skip incomplete lines
 		}
+
+		// Parse frame number (first column)
+		frameNum, err := strconv.ParseFloat(record[0], 64)
+		if err != nil {
+			frameNum = float64(len(data.FrameNumbers)) // Use index as a fallback
+		}
+		data.FrameNumbers = append(data.FrameNumbers, frameNum)
 
 		// Decode timestamp (second column)
 		timeVal := decodeTimestamp(record[1], prevTime)
@@ -588,6 +602,7 @@ type LightCurvePlot struct {
 	onPointClicked func(point PlotPoint)
 	selectedSeries int
 	selectedIndex  int
+	xAxisLabel     string
 
 	// Plot bounds for coordinate conversion
 	minX, maxX, minY, maxY float64
@@ -603,6 +618,7 @@ func NewLightCurvePlot(series []PlotSeries, onPointClicked func(PlotPoint)) *Lig
 		onPointClicked: onPointClicked,
 		selectedSeries: -1,
 		selectedIndex:  -1,
+		xAxisLabel:     "Time",
 		marginLeft:     60,
 		marginRight:    20,
 		marginTop:      20,
@@ -611,6 +627,12 @@ func NewLightCurvePlot(series []PlotSeries, onPointClicked func(PlotPoint)) *Lig
 	p.calculateBounds()
 	p.ExtendBaseWidget(p)
 	return p
+}
+
+// SetXAxisLabel sets the label for the X axis
+func (p *LightCurvePlot) SetXAxisLabel(label string) {
+	p.xAxisLabel = label
+	p.Refresh()
 }
 
 // calculateBounds computes the data bounds across all series
@@ -771,7 +793,7 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	// If no series, show an empty plot
 	if len(p.series) == 0 {
 		plt.Title.Text = "Light Curve"
-		plt.X.Label.Text = "Time"
+		plt.X.Label.Text = p.xAxisLabel
 		plt.Y.Label.Text = "Brightness"
 
 		// Render empty plot
@@ -801,7 +823,7 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	}
 	plt.Title.Text = "Light Curve"
 	plt.Title.TextStyle.Font.Weight = 2 // Bold
-	plt.X.Label.Text = "Time"
+	plt.X.Label.Text = p.xAxisLabel
 	plt.X.Label.TextStyle.Font.Weight = 2
 	plt.Y.Label.Text = "Brightness"
 	plt.Y.Label.TextStyle.Font.Weight = 2
@@ -1002,11 +1024,18 @@ func main() {
 		},
 	}
 
+	// Track the current x-axis label for click callback
+	currentXAxisLabel := "Time"
+
 	// Create the plot with a click callback
-	lightCurvePlot := NewLightCurvePlot(lightCurveSeries, func(point PlotPoint) {
-		seriesName := lightCurveSeries[point.Series].Name
-		plotStatusLabel.SetText(fmt.Sprintf("%s - Point %d\nTime: %.2f\nBrightness: %.4f",
-			seriesName, point.Index, point.X, point.Y))
+	var lightCurvePlot *LightCurvePlot
+	lightCurvePlot = NewLightCurvePlot(lightCurveSeries, func(point PlotPoint) {
+		if point.Series < 0 || point.Series >= len(lightCurvePlot.series) {
+			return
+		}
+		seriesName := lightCurvePlot.series[point.Series].Name
+		plotStatusLabel.SetText(fmt.Sprintf("%s - Point %d\n%s: %.2f\nBrightness: %.4f",
+			seriesName, point.Index, currentXAxisLabel, point.X, point.Y))
 	})
 
 	plotArea := container.NewBorder(
@@ -1021,7 +1050,7 @@ func main() {
 	tab3Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 220, B: 200, A: 255})
 
 	// Create a list to display light curve column names
-	lightCurveListData := []string{}      // Will be populated when CSV is loaded
+	var lightCurveListData []string       // Will be populated when CSV is loaded
 	displayedCurves := make(map[int]bool) // Track which curves are currently displayed
 	var lightCurveList *widget.List
 
@@ -1043,6 +1072,15 @@ func main() {
 			return
 		}
 
+		// Check if timestamps are empty (all zeros) - use frame numbers instead
+		useFrameNumbers := true
+		for _, t := range loadedLightCurveData.TimeValues {
+			if t != 0 {
+				useFrameNumbers = false
+				break
+			}
+		}
+
 		var allSeries []PlotSeries
 		colorIdx := 0
 		var displayedNames []string
@@ -1055,8 +1093,12 @@ func main() {
 			col := loadedLightCurveData.Columns[colIdx]
 			points := make([]PlotPoint, len(col.Values))
 			for i, val := range col.Values {
+				xVal := loadedLightCurveData.TimeValues[i]
+				if useFrameNumbers {
+					xVal = loadedLightCurveData.FrameNumbers[i]
+				}
 				points[i] = PlotPoint{
-					X:      loadedLightCurveData.TimeValues[i],
+					X:      xVal,
 					Y:      val,
 					Index:  i,
 					Series: len(allSeries),
@@ -1072,9 +1114,18 @@ func main() {
 			colorIdx++
 		}
 
+		// Set appropriate X axis label
+		if useFrameNumbers {
+			currentXAxisLabel = "Frame Number"
+			lightCurvePlot.xAxisLabel = "Frame Number"
+		} else {
+			currentXAxisLabel = "Time"
+			lightCurvePlot.xAxisLabel = "Time"
+		}
+
 		if len(allSeries) == 0 {
 			// Clear the plot if no curves are selected
-			lightCurvePlot.SetSeries([]PlotSeries{})
+			lightCurvePlot.SetSeries(nil)
 			plotStatusLabel.SetText("No light curves selected")
 		} else {
 			lightCurvePlot.SetSeries(allSeries)
@@ -1144,11 +1195,23 @@ func main() {
 
 			loadedLightCurveData = data
 
+			// Check if the timestamp column was empty (all zeros)
+			timestampsEmpty := true
+			for _, t := range data.TimeValues {
+				if t != 0 {
+					timestampsEmpty = false
+					break
+				}
+			}
+			if timestampsEmpty && len(data.TimeValues) > 0 {
+				dialog.ShowInformation("Warning", "Manual timestamping is required.", w)
+			}
+
 			// Clear displayed curves and reset the plot
 			for k := range displayedCurves {
 				delete(displayedCurves, k)
 			}
-			lightCurvePlot.SetSeries([]PlotSeries{})
+			lightCurvePlot.SetSeries(nil)
 
 			// Update the list with column names
 			lightCurveListData = make([]string, len(data.Columns))
