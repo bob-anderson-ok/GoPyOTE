@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.12"
+const Version = "1.0.13"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -423,6 +423,75 @@ func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool
 
 // Global variable to hold loaded light curve data
 var loadedLightCurveData *LightCurveData
+
+// Global variables for action logging
+var (
+	actionLogFile   *os.File
+	actionLogWriter *bufio.Writer
+)
+
+// createActionLog creates a new log file based on the CSV file path
+func createActionLog(csvFilePath string) error {
+	// Close any existing log file
+	closeActionLog()
+
+	// Build log file path: same name as CSV but with .log extension
+	dir := filepath.Dir(csvFilePath)
+	base := filepath.Base(csvFilePath)
+	ext := filepath.Ext(base)
+	nameWithoutExt := strings.TrimSuffix(base, ext)
+	logPath := filepath.Join(dir, nameWithoutExt+".log")
+
+	// Create/open the log file (append mode)
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create log file: %w", err)
+	}
+
+	actionLogFile = file
+	actionLogWriter = bufio.NewWriter(file)
+
+	// Write session start marker
+	logAction("=== New Session Started ===")
+	logAction("CSV file: " + csvFilePath)
+
+	return nil
+}
+
+// logAction writes a timestamped action to the log file
+func logAction(action string) {
+	if actionLogWriter == nil {
+		return
+	}
+
+	timestamp := time.Now().Format("2006-Jan-02 15:04")
+	line := fmt.Sprintf("[%s] %s\n", timestamp, action)
+
+	if _, err := actionLogWriter.WriteString(line); err != nil {
+		fmt.Printf("Warning: failed to write to log: %v\n", err)
+		return
+	}
+	if err := actionLogWriter.Flush(); err != nil {
+		fmt.Printf("Warning: failed to flush log: %v\n", err)
+	}
+}
+
+// closeActionLog closes the current log file
+func closeActionLog() {
+	if actionLogWriter != nil {
+		logAction("=== Session Ended ===")
+		if err := actionLogWriter.Flush(); err != nil {
+			fmt.Printf("Warning: failed to flush log on close: %v\n", err)
+		}
+		actionLogWriter = nil
+	}
+	if actionLogFile != nil {
+		if err := actionLogFile.Close(); err != nil {
+			fmt.Printf("Warning: failed to close log file: %v\n", err)
+		}
+		actionLogFile = nil
+	}
+}
 
 // showOccultationParametersDialog displays a form dialog for editing occultation parameters
 func showOccultationParametersDialog(w fyne.Window) {
@@ -1316,6 +1385,8 @@ func main() {
 
 		plotStatusLabel.SetText(fmt.Sprintf("%s - Frame %d\n%s: %s\nValue: %.4f",
 			seriesName, frameNum, currentXAxisLabel, xValueStr, point.Y))
+		logAction(fmt.Sprintf("Clicked point: %s Frame %d, %s=%s, Value=%.4f",
+			seriesName, frameNum, currentXAxisLabel, xValueStr, point.Y))
 	})
 
 	// Create X and Y axis range spinners (start empty, filled when the first curve selected)
@@ -1366,6 +1437,7 @@ func main() {
 			_, maxX := lightCurvePlot.GetXBounds()
 			lightCurvePlot.SetXBounds(val, maxX)
 			userSetBounds = true
+			logAction(fmt.Sprintf("Set X Min to %.4f", val))
 		}
 		updateRangeEntries()
 	}
@@ -1388,6 +1460,7 @@ func main() {
 			minX, _ := lightCurvePlot.GetXBounds()
 			lightCurvePlot.SetXBounds(minX, val)
 			userSetBounds = true
+			logAction(fmt.Sprintf("Set X Max to %.4f", val))
 		}
 		updateRangeEntries()
 	}
@@ -1399,6 +1472,7 @@ func main() {
 			_, maxY := lightCurvePlot.GetYBounds()
 			lightCurvePlot.SetYBounds(val, maxY)
 			userSetBounds = true
+			logAction(fmt.Sprintf("Set Y Min to %.4f", val))
 		}
 		updateRangeEntries()
 	}
@@ -1410,6 +1484,7 @@ func main() {
 			minY, _ := lightCurvePlot.GetYBounds()
 			lightCurvePlot.SetYBounds(minY, val)
 			userSetBounds = true
+			logAction(fmt.Sprintf("Set Y Max to %.4f", val))
 		}
 		updateRangeEntries()
 	}
@@ -1426,6 +1501,11 @@ func main() {
 		// Update the entry box format to match the new mode
 		if len(lightCurvePlot.series) > 0 {
 			updateRangeEntries()
+		}
+		if checked {
+			logAction("Enabled timestamp tick format")
+		} else {
+			logAction("Disabled timestamp tick format")
 		}
 	})
 
@@ -1452,6 +1532,7 @@ func main() {
 			} else {
 				updateRangeEntries()
 			}
+			logAction("Reset axis bounds to default")
 		}),
 		timestampTicksCheck,
 	)
@@ -1559,10 +1640,13 @@ func main() {
 			return
 		}
 
+		curveName := loadedLightCurveData.Columns[columnIndex].Name
 		if displayedCurves[columnIndex] {
 			delete(displayedCurves, columnIndex)
+			logAction(fmt.Sprintf("Hid light curve: %s", curveName))
 		} else {
 			displayedCurves[columnIndex] = true
+			logAction(fmt.Sprintf("Displayed light curve: %s", curveName))
 		}
 
 		// Save bounds if the user has set them manually
@@ -1609,8 +1693,10 @@ func main() {
 			check.OnChanged = func(checked bool) {
 				if checked {
 					checkedCurveIndex = id
+					logAction(fmt.Sprintf("Selected light curve: %s", name))
 				} else if checkedCurveIndex == id {
 					checkedCurveIndex = -1
+					logAction(fmt.Sprintf("Deselected light curve: %s", name))
 				}
 				lightCurveList.Refresh() // Refresh to update other checkboxes
 			}
@@ -1661,6 +1747,12 @@ func main() {
 			}
 
 			loadedLightCurveData = data
+
+			// Create an action log file for this CSV
+			if err := createActionLog(filePath); err != nil {
+				fmt.Printf("Warning: could not create log file: %v\n", err)
+			}
+			logAction(fmt.Sprintf("Loaded CSV with %d columns and %d data points", len(data.Columns), len(data.TimeValues)))
 
 			// Check if the timestamp column was empty (all zeros)
 			timestampsEmpty := true
@@ -1727,9 +1819,11 @@ func main() {
 		outputPath, err := writeSelectedLightCurves(loadedLightCurveData, displayedCurves)
 		if err != nil {
 			dialog.ShowError(err, w)
+			logAction(fmt.Sprintf("Export failed: %v", err))
 			return
 		}
 
+		logAction(fmt.Sprintf("Exported selected light curves to: %s", outputPath))
 		dialog.ShowInformation("Export Complete",
 			fmt.Sprintf("Selected light curves exported to:\n%s", outputPath), w)
 	})
@@ -1914,6 +2008,7 @@ func main() {
 				prefs.SetInt("windowH", int(height))
 			}
 		}
+		closeActionLog() // Close the action log file
 		w.Close()
 	})
 
