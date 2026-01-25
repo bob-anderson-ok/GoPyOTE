@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.13"
+const Version = "1.0.14"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -335,7 +335,8 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 
 // writeSelectedLightCurves writes the selected light curves to a CSV file
 // The output file is named originalname + "_GoPyOTE.csv" in the same directory
-func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool) (string, error) {
+// Only rows within the frame range [startFrame, endFrame] are written
+func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool, startFrame, endFrame float64) (string, error) {
 	if data == nil {
 		return "", fmt.Errorf("no light curve data loaded")
 	}
@@ -394,12 +395,22 @@ func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool
 		return "", fmt.Errorf("failed to write header: %w", err)
 	}
 
-	// Write data rows
+	// Write data rows (filtered by frame range)
 	for rowIdx := 0; rowIdx < len(data.FrameNumbers); rowIdx++ {
+		frameNum := data.FrameNumbers[rowIdx]
+
+		// Filter by frame range
+		if startFrame > 0 && frameNum < startFrame {
+			continue
+		}
+		if endFrame > 0 && frameNum > endFrame {
+			continue
+		}
+
 		var row []string
 
 		// Frame number
-		row = append(row, fmt.Sprintf("%.0f", data.FrameNumbers[rowIdx]))
+		row = append(row, fmt.Sprintf("%.0f", frameNum))
 
 		// Timestamp - format as [hh:mm:ss.ssss]
 		row = append(row, "["+formatSecondsAsTimestamp(data.TimeValues[rowIdx])+"]")
@@ -1567,6 +1578,9 @@ func main() {
 		{R: 100, G: 100, B: 100, A: 255}, // Gray
 	}
 
+	// Track current frame range for filtering plot data
+	var frameRangeStart, frameRangeEnd float64
+
 	// Function to rebuild the plot with all currently displayed curves
 	rebuildPlot := func() {
 		if loadedLightCurveData == nil {
@@ -1592,18 +1606,31 @@ func main() {
 			}
 
 			col := loadedLightCurveData.Columns[colIdx]
-			points := make([]PlotPoint, len(col.Values))
+			var points []PlotPoint
 			for i, val := range col.Values {
+				// Filter by frame range if set
+				frameNum := loadedLightCurveData.FrameNumbers[i]
+				if frameRangeStart > 0 && frameNum < frameRangeStart {
+					continue
+				}
+				if frameRangeEnd > 0 && frameNum > frameRangeEnd {
+					continue
+				}
+
 				xVal := loadedLightCurveData.TimeValues[i]
 				if useFrameNumbers {
-					xVal = loadedLightCurveData.FrameNumbers[i]
+					xVal = frameNum
 				}
-				points[i] = PlotPoint{
+				points = append(points, PlotPoint{
 					X:      xVal,
 					Y:      val,
 					Index:  i,
 					Series: len(allSeries),
-				}
+				})
+			}
+
+			if len(points) == 0 {
+				continue // Skip series with no points in range
 			}
 
 			allSeries = append(allSeries, PlotSeries{
@@ -1724,6 +1751,32 @@ func main() {
 		lightCurveList.UnselectAll() // Unselect so clicking again works
 	}
 
+	// Frame number range entry boxes (defined here so they can be initialized when CSV is loaded)
+	startFrameEntry := NewFocusLossEntry()
+	startFrameEntry.SetPlaceHolder("Start Frame")
+	endFrameEntry := NewFocusLossEntry()
+	endFrameEntry.SetPlaceHolder("End Frame")
+
+	// Handle start frame entry changes
+	startFrameEntry.OnSubmitted = func(text string) {
+		val, err := strconv.ParseFloat(text, 64)
+		if err == nil && val != frameRangeStart {
+			frameRangeStart = val
+			logAction(fmt.Sprintf("Set start frame to %.0f", val))
+			rebuildPlot()
+		}
+	}
+
+	// Handle end frame entry changes
+	endFrameEntry.OnSubmitted = func(text string) {
+		val, err := strconv.ParseFloat(text, 64)
+		if err == nil && val != frameRangeEnd {
+			frameRangeEnd = val
+			logAction(fmt.Sprintf("Set end frame to %.0f", val))
+			rebuildPlot()
+		}
+	}
+
 	// Button to load a CSV file
 	loadCSVBtn := widget.NewButton("Load CSV", func() {
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
@@ -1795,6 +1848,14 @@ func main() {
 			}
 			lightCurveList.Refresh()
 
+			// Initialize frame number range entries and variables
+			if len(data.FrameNumbers) > 0 {
+				frameRangeStart = data.FrameNumbers[0]
+				frameRangeEnd = data.FrameNumbers[len(data.FrameNumbers)-1]
+				startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
+				endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
+			}
+
 			plotStatusLabel.SetText(fmt.Sprintf("Loaded %d light curves (%d shown) with %d data points. Click to toggle display.",
 				len(data.Columns), len(lightCurveListData), len(data.TimeValues)))
 		}, w)
@@ -1816,7 +1877,7 @@ func main() {
 			return
 		}
 
-		outputPath, err := writeSelectedLightCurves(loadedLightCurveData, displayedCurves)
+		outputPath, err := writeSelectedLightCurves(loadedLightCurveData, displayedCurves, frameRangeStart, frameRangeEnd)
 		if err != nil {
 			dialog.ShowError(err, w)
 			logAction(fmt.Sprintf("Export failed: %v", err))
@@ -1833,9 +1894,19 @@ func main() {
 	exportCSVBtnContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(220, 36)), exportCSVBtn)
 	dataTabButtons := container.NewHBox(loadCSVBtnContainer, exportCSVBtnContainer)
 
+	// Frame number range row (entries defined earlier so they can be initialized when CSV is loaded)
+	startFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), startFrameEntry)
+	endFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), endFrameEntry)
+	frameRangeRow := container.NewHBox(
+		widget.NewLabel("Start Frame:"),
+		startFrameContainer,
+		widget.NewLabel("End Frame:"),
+		endFrameContainer,
+	)
+
 	tab3Content := container.NewStack(tab3Bg, container.NewPadded(container.NewBorder(
 		dataTabButtons,       // top
-		nil,                  // bottom
+		frameRangeRow,        // bottom
 		nil,                  // left
 		nil,                  // right
 		lightCurveListScroll, // center
