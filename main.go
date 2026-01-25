@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.14"
+const Version = "1.0.15"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1327,6 +1327,17 @@ func main() {
 
 	// Load saved window geometry
 	prefs := a.Preferences()
+
+	// Initialize preferences on the first run to avoid EOF errors
+	if prefs.Int("initialized") == 0 {
+		prefs.SetInt("initialized", 1)
+		prefs.SetInt("windowX", -1)
+		prefs.SetInt("windowY", -1)
+		prefs.SetInt("windowW", 1000)
+		prefs.SetInt("windowH", 600)
+		prefs.SetFloat("splitOffset", 0.6)
+	}
+
 	savedX := int32(prefs.IntWithFallback("windowX", -1))
 	savedY := int32(prefs.IntWithFallback("windowY", -1))
 	savedW := int32(prefs.IntWithFallback("windowW", 1000))
@@ -1365,6 +1376,7 @@ func main() {
 		"ycentroid":  false,
 		"hit-defect": false,
 	}
+	acceptAnyName := false
 
 	// Create checkboxes for light curve prefixes
 	signalCheck := widget.NewCheck("signal", func(checked bool) { lightCurvePrefixes["signal"] = checked })
@@ -1377,6 +1389,7 @@ func main() {
 	xcentroidCheck := widget.NewCheck("xcentroid", func(checked bool) { lightCurvePrefixes["xcentroid"] = checked })
 	ycentroidCheck := widget.NewCheck("ycentroid", func(checked bool) { lightCurvePrefixes["ycentroid"] = checked })
 	hitDefectCheck := widget.NewCheck("hit-defect", func(checked bool) { lightCurvePrefixes["hit-defect"] = checked })
+	anyNameCheck := widget.NewCheck("any name", func(checked bool) { acceptAnyName = checked })
 
 	prefixCheckboxes := container.NewVBox(
 		widget.NewLabel("Light curve prefixes to include:"),
@@ -1389,6 +1402,7 @@ func main() {
 		xcentroidCheck,
 		ycentroidCheck,
 		hitDefectCheck,
+		anyNameCheck,
 	)
 
 	tab2Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 200, B: 230, A: 255})
@@ -1884,6 +1898,12 @@ func main() {
 			listIndexToColumnIndex = nil
 			checkedCurveIndex = -1 // Reset checked curve
 			for i, col := range data.Columns {
+				// If "any name" is checked, include all columns
+				if acceptAnyName {
+					lightCurveListData = append(lightCurveListData, col.Name)
+					listIndexToColumnIndex = append(listIndexToColumnIndex, i)
+					continue
+				}
 				// Check if the column name starts with any enabled prefix
 				for prefix, enabled := range lightCurvePrefixes {
 					if enabled && strings.HasPrefix(col.Name, prefix) {
@@ -1894,6 +1914,11 @@ func main() {
 				}
 			}
 			lightCurveList.Refresh()
+
+			// Automatically display the first light curve if available
+			if len(listIndexToColumnIndex) > 0 {
+				toggleLightCurve(listIndexToColumnIndex[0])
+			}
 
 			// Initialize frame number range entries and variables
 			if len(data.FrameNumbers) > 0 {
