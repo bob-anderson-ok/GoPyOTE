@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.11"
+const Version = "1.0.12"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1471,6 +1471,7 @@ func main() {
 	var lightCurveListData []string       // Will be populated when CSV is loaded (filtered by prefixes)
 	var listIndexToColumnIndex []int      // Maps list index to actual column index in data
 	displayedCurves := make(map[int]bool) // Track which curves are currently displayed (uses actual column indices)
+	checkedCurveIndex := -1               // Track which single curve is checked (-1 = none, uses list index)
 	var lightCurveList *widget.List
 
 	// Color palette for multiple light curves
@@ -1589,25 +1590,46 @@ func main() {
 	lightCurveList = widget.NewList(
 		func() int { return len(lightCurveListData) },
 		func() fyne.CanvasObject {
-			return widget.NewLabel("Light Curve Name")
+			check := widget.NewCheck("", nil)
+			label := widget.NewLabel("Light Curve Name")
+			return container.NewHBox(check, label)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			label := obj.(*widget.Label)
+			box := obj.(*fyne.Container)
+			check := box.Objects[0].(*widget.Check)
+			label := box.Objects[1].(*widget.Label)
+
 			name := lightCurveListData[id]
+			label.SetText(name)
+
+			// Set the checkbox state based on whether this is the checked curve
+			check.SetChecked(id == checkedCurveIndex)
+
+			// Handle checkbox changes - only one can be checked at a time
+			check.OnChanged = func(checked bool) {
+				if checked {
+					checkedCurveIndex = id
+				} else if checkedCurveIndex == id {
+					checkedCurveIndex = -1
+				}
+				lightCurveList.Refresh() // Refresh to update other checkboxes
+			}
+
 			// Map list index to actual column index for checking display status
 			colIdx := -1
 			if id >= 0 && id < len(listIndexToColumnIndex) {
 				colIdx = listIndexToColumnIndex[id]
 			}
 			if displayedCurves[colIdx] {
-				label.SetText("✓ " + name)
+				label.TextStyle.Bold = true
 			} else {
-				label.SetText("  " + name)
+				label.TextStyle.Bold = false
 			}
+			label.Refresh()
 		},
 	)
 
-	// Handle click on list items to toggle
+	// Handle click on list items to toggle the display
 	lightCurveList.OnSelected = func(id widget.ListItemID) {
 		// Map list index to actual column index
 		if id >= 0 && id < len(listIndexToColumnIndex) {
@@ -1668,6 +1690,7 @@ func main() {
 			// Update the list with column names, filtered by selected prefixes
 			lightCurveListData = nil
 			listIndexToColumnIndex = nil
+			checkedCurveIndex = -1 // Reset checked curve
 			for i, col := range data.Columns {
 				// Check if the column name starts with any enabled prefix
 				for prefix, enabled := range lightCurvePrefixes {
