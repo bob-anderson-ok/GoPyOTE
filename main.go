@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.9"
+const Version = "1.0.10"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -130,10 +130,12 @@ type LightCurveColumn struct {
 
 // LightCurveData holds all parsed data from a light curve CSV file
 type LightCurveData struct {
-	TimeValues   []float64          // Decoded timestamps as float64 seconds
-	FrameNumbers []float64          // Frame numbers from the first column (used when timestamps empty)
-	Columns      []LightCurveColumn // All data columns (excluding index and time)
-	SkippedLines []string           // Comment and blank lines preserved for writing output
+	TimeValues     []float64          // Decoded timestamps as float64 seconds
+	FrameNumbers   []float64          // Frame numbers from the first column (used when timestamps empty)
+	Columns        []LightCurveColumn // All data columns (excluding index and time)
+	SkippedLines   []string           // Comment and blank lines preserved for writing output
+	HeaderLine     string             // Original header line for writing output
+	SourceFilePath string             // Path to the original CSV file
 }
 
 // decodeTimestamp converts a timestamp string like "[03:58:34.6796]" to float64 seconds
@@ -190,7 +192,7 @@ func formatSecondsAsTimestamp(totalSeconds float64) string {
 	totalSeconds -= float64(minutes) * 60
 	seconds := totalSeconds
 
-	return fmt.Sprintf("%02d:%02d:%06.3f", hours, minutes, seconds)
+	return fmt.Sprintf("%02d:%02d:%07.4f", hours, minutes, seconds)
 }
 
 // parseTimestampInput parses a timestamp string (hh:mm:ss.sss or hh:mm:ss) to float64 seconds
@@ -279,10 +281,12 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 
 	// Initialize data structure
 	data := &LightCurveData{
-		TimeValues:   make([]float64, 0, len(dataLines)),
-		FrameNumbers: make([]float64, 0, len(dataLines)),
-		Columns:      make([]LightCurveColumn, len(headers)-2), // Exclude index and time columns
-		SkippedLines: skippedLines,
+		TimeValues:     make([]float64, 0, len(dataLines)),
+		FrameNumbers:   make([]float64, 0, len(dataLines)),
+		Columns:        make([]LightCurveColumn, len(headers)-2), // Exclude index and time columns
+		SkippedLines:   skippedLines,
+		HeaderLine:     headerLine,
+		SourceFilePath: filePath,
 	}
 
 	// Set column names (skip the first two: index and time)
@@ -327,6 +331,94 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 	}
 
 	return data, nil
+}
+
+// writeSelectedLightCurves writes the selected light curves to a CSV file
+// The output file is named originalname + "_GoPyOTE.csv" in the same directory
+func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool) (string, error) {
+	if data == nil {
+		return "", fmt.Errorf("no light curve data loaded")
+	}
+	if len(selectedColumns) == 0 {
+		return "", fmt.Errorf("no light curves selected")
+	}
+
+	// Build output file path: insert "_GoPyOTE" before .csv
+	dir := filepath.Dir(data.SourceFilePath)
+	base := filepath.Base(data.SourceFilePath)
+	ext := filepath.Ext(base)
+	nameWithoutExt := strings.TrimSuffix(base, ext)
+	outputPath := filepath.Join(dir, nameWithoutExt+"_GoPyOTE"+ext)
+
+	// Create the output file
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer func() {
+		if cerr := file.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close output file: %v\n", cerr)
+		}
+	}()
+
+	writer := bufio.NewWriter(file)
+
+	// Write skipped lines (comments) first
+	for _, line := range data.SkippedLines {
+		if _, err := fmt.Fprintln(writer, line); err != nil {
+			return "", fmt.Errorf("failed to write comment line: %w", err)
+		}
+	}
+
+	// Build a new header with only selected columns
+	// Parse the original header to get column names
+	headerReader := csv.NewReader(strings.NewReader(data.HeaderLine))
+	headers, err := headerReader.Read()
+	if err != nil {
+		return "", fmt.Errorf("failed to parse header: %w", err)
+	}
+
+	// Build selected header: Frame No., Timestamp, then selected columns
+	var selectedHeaders []string
+	selectedHeaders = append(selectedHeaders, headers[0], headers[1]) // Frame No. and Timestamp
+	var selectedIndices []int
+	for i := 0; i < len(data.Columns); i++ {
+		if selectedColumns[i] {
+			selectedHeaders = append(selectedHeaders, headers[i+2]) // +2 to skip Frame No. and Timestamp
+			selectedIndices = append(selectedIndices, i)
+		}
+	}
+
+	// Write header
+	if _, err := fmt.Fprintln(writer, strings.Join(selectedHeaders, ",")); err != nil {
+		return "", fmt.Errorf("failed to write header: %w", err)
+	}
+
+	// Write data rows
+	for rowIdx := 0; rowIdx < len(data.FrameNumbers); rowIdx++ {
+		var row []string
+
+		// Frame number
+		row = append(row, fmt.Sprintf("%.0f", data.FrameNumbers[rowIdx]))
+
+		// Timestamp - format as [hh:mm:ss.ssss]
+		row = append(row, "["+formatSecondsAsTimestamp(data.TimeValues[rowIdx])+"]")
+
+		// Selected data columns
+		for _, colIdx := range selectedIndices {
+			row = append(row, fmt.Sprintf("%g", data.Columns[colIdx].Values[rowIdx]))
+		}
+
+		if _, err := fmt.Fprintln(writer, strings.Join(row, ",")); err != nil {
+			return "", fmt.Errorf("failed to write data row: %w", err)
+		}
+	}
+
+	if err := writer.Flush(); err != nil {
+		return "", fmt.Errorf("failed to write output file: %w", err)
+	}
+
+	return outputPath, nil
 }
 
 // Global variable to hold loaded light curve data
@@ -954,10 +1046,14 @@ func (r *lightCurvePlotRenderer) Refresh() {
 
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, img.Image()); err != nil {
-			fmt.Printf("Error encoding plot image: %v", err)
+			fmt.Printf("Error encoding plot image: %v\n", err)
 			return
 		}
-		goImg, _ := png.Decode(bytes.NewReader(buf.Bytes()))
+		goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
+		if err != nil {
+			fmt.Printf("Error decoding plot image: %v\n", err)
+			return
+		}
 
 		if r.image == nil {
 			r.image = canvas.NewImageFromImage(goImg)
@@ -990,13 +1086,21 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		}
 
 		// Create line
-		line, _ := plotter.NewLine(pts)
+		line, err := plotter.NewLine(pts)
+		if err != nil {
+			fmt.Printf("Error creating line plot: %v\n", err)
+			continue
+		}
 		line.Color = series.Color
 		line.Width = vg.Points(2)
 		plt.Add(line)
 
 		// Create scatter points
-		scatter, _ := plotter.NewScatter(pts)
+		scatter, err := plotter.NewScatter(pts)
+		if err != nil {
+			fmt.Printf("Error creating scatter plot: %v\n", err)
+			continue
+		}
 		scatter.Color = series.Color
 		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
 		scatter.GlyphStyle.Radius = vg.Points(4)
@@ -1010,11 +1114,15 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			selectedPt := make(plotter.XYs, 1)
 			selectedPt[0].X = series.Points[p.selectedIndex].X
 			selectedPt[0].Y = series.Points[p.selectedIndex].Y
-			selectedScatter, _ := plotter.NewScatter(selectedPt)
-			selectedScatter.Color = color.RGBA{R: 255, G: 50, B: 50, A: 255}
-			selectedScatter.GlyphStyle.Shape = draw.CircleGlyph{}
-			selectedScatter.GlyphStyle.Radius = vg.Points(7)
-			plt.Add(selectedScatter)
+			selectedScatter, err := plotter.NewScatter(selectedPt)
+			if err != nil {
+				fmt.Printf("Error creating selected point scatter: %v\n", err)
+			} else {
+				selectedScatter.Color = color.RGBA{R: 255, G: 50, B: 50, A: 255}
+				selectedScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+				selectedScatter.GlyphStyle.Radius = vg.Points(7)
+				plt.Add(selectedScatter)
+			}
 		} else {
 			plt.Add(scatter)
 		}
@@ -1048,10 +1156,14 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	// Convert to Go image
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img.Image()); err != nil {
-		fmt.Printf("Error encoding plot image: %v", err)
+		fmt.Printf("Error encoding plot image: %v\n", err)
 		return
 	}
-	goImg, _ := png.Decode(bytes.NewReader(buf.Bytes()))
+	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		fmt.Printf("Error decoding plot image: %v\n", err)
+		return
+	}
 
 	// Create or update Fyne image
 	if r.image == nil {
@@ -1120,39 +1232,6 @@ func main() {
 		return container.NewStack(bg, container.NewCenter(label))
 	}
 
-	// Tab 1: Country of origin
-	tab1Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 230, B: 200, A: 255})
-	buttonSize := fyne.NewSize(180, 35)
-	countryBtn1 := widget.NewButton("Select Country", func() {})
-	countryBtn1.Resize(buttonSize)
-	countryCheck1 := widget.NewCheck("Enabled", func(bool) {})
-	row1 := container.NewHBox(container.New(layout.NewGridWrapLayout(buttonSize), countryBtn1), countryCheck1)
-
-	countryBtn2 := widget.NewButton("View Details", func() {})
-	countryBtn2.Resize(buttonSize)
-	countryCheck2 := widget.NewCheck("Detailed", func(bool) {})
-	row2 := container.NewHBox(container.New(layout.NewGridWrapLayout(buttonSize), countryBtn2), countryCheck2)
-
-	countryBtn3 := widget.NewButton("Edit Entry", func() {})
-	countryBtn3.Resize(buttonSize)
-	countryCheck3 := widget.NewCheck("Editable", func(bool) {})
-	row3 := container.NewHBox(container.New(layout.NewGridWrapLayout(buttonSize), countryBtn3), countryCheck3)
-
-	countryBtn4 := widget.NewButton("Delete Entry", func() {})
-	countryBtn4.Resize(buttonSize)
-	countryCheck4 := widget.NewCheck("Confirm", func(bool) {})
-	row4 := container.NewHBox(container.New(layout.NewGridWrapLayout(buttonSize), countryBtn4), countryCheck4)
-
-	countryButtons := container.NewVBox(row1, row2, row3, row4)
-	verticallyCentered := container.NewVBox(
-		layout.NewSpacer(),
-		countryButtons,
-		layout.NewSpacer(),
-	)
-	leftAlignedButtons := container.NewBorder(nil, nil, verticallyCentered, nil, nil)
-	tab1Content := container.NewStack(tab1Bg, container.NewPadded(leftAlignedButtons))
-	tab1 := container.NewTabItem("Country of origin", tab1Content)
-
 	// Tab 2: Settings
 	tab2 := container.NewTabItem("Settings",
 		makeTabContent("Settings page content", color.RGBA{R: 200, G: 200, B: 230, A: 255}))
@@ -1188,8 +1267,23 @@ func main() {
 			return
 		}
 		seriesName := lightCurvePlot.series[point.Series].Name
-		plotStatusLabel.SetText(fmt.Sprintf("%s - Point %d\n%s: %.2f\nBrightness: %.4f",
-			seriesName, point.Index, currentXAxisLabel, point.X, point.Y))
+
+		// Get frame number from loaded data
+		frameNum := point.Index // fallback to index
+		if loadedLightCurveData != nil && point.Index < len(loadedLightCurveData.FrameNumbers) {
+			frameNum = int(loadedLightCurveData.FrameNumbers[point.Index])
+		}
+
+		// Format X value based on timestamp ticks setting
+		var xValueStr string
+		if lightCurvePlot.GetUseTimestampTicks() {
+			xValueStr = formatSecondsAsTimestamp(point.X)
+		} else {
+			xValueStr = fmt.Sprintf("%.4f", point.X)
+		}
+
+		plotStatusLabel.SetText(fmt.Sprintf("%s - Frame %d\n%s: %s\nValue: %.4f",
+			seriesName, frameNum, currentXAxisLabel, xValueStr, point.Y))
 	})
 
 	// Create X and Y axis range spinners (start empty, filled when the first curve selected)
@@ -1479,7 +1573,7 @@ func main() {
 	}
 
 	// Button to load a CSV file
-	loadCSVBtn := widget.NewButton("Load Light Curve CSV...", func() {
+	loadCSVBtn := widget.NewButton("Load CSV", func() {
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -1544,14 +1638,40 @@ func main() {
 	lightCurveListScroll := container.NewVScroll(lightCurveList)
 	lightCurveListScroll.SetMinSize(fyne.NewSize(200, 300))
 
+	// Button to export selected light curves to CSV
+	exportCSVBtn := widget.NewButton("Export selected light curves", func() {
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+		if len(displayedCurves) == 0 {
+			dialog.ShowError(fmt.Errorf("no light curves selected"), w)
+			return
+		}
+
+		outputPath, err := writeSelectedLightCurves(loadedLightCurveData, displayedCurves)
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+
+		dialog.ShowInformation("Export Complete",
+			fmt.Sprintf("Selected light curves exported to:\n%s", outputPath), w)
+	})
+
+	// Buttons row for Data tab - wrap in containers with minimum size for full labels
+	loadCSVBtnContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(220, 36)), loadCSVBtn)
+	exportCSVBtnContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(220, 36)), exportCSVBtn)
+	dataTabButtons := container.NewHBox(loadCSVBtnContainer, exportCSVBtnContainer)
+
 	tab3Content := container.NewStack(tab3Bg, container.NewPadded(container.NewBorder(
-		loadCSVBtn,           // top
+		dataTabButtons,       // top
 		nil,                  // bottom
 		nil,                  // left
 		nil,                  // right
 		lightCurveListScroll, // center
 	)))
-	tab3 := container.NewTabItem("Data", tab3Content)
+	tab3 := container.NewTabItem("Read/Write csv files", tab3Content)
 
 	// Tab 4: Reports
 	tab4Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 200, B: 220, A: 255})
@@ -1564,7 +1684,7 @@ func main() {
 		radioGroup,
 	)))
 	tab4 := container.NewTabItem("Reports", tab4Content)
-	tabs := container.NewAppTabs(tab1, tab2, tab3, tab4)
+	tabs := container.NewAppTabs(tab2, tab3, tab4)
 
 	// Create buttons
 	btnRegenerate := widget.NewButton("Regenerate Plot", func() {
