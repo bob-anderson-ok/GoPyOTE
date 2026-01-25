@@ -822,6 +822,53 @@ func (e *FocusLossEntry) FocusLost() {
 	}
 }
 
+// HoverableCheck is a checkbox with tooltip support on hover
+type HoverableCheck struct {
+	widget.Check
+	tooltip   string
+	popUp     *widget.PopUp
+	parentWin fyne.Window
+}
+
+// NewHoverableCheck creates a new HoverableCheck widget with a tooltip
+func NewHoverableCheck(label string, changed func(bool), tooltip string, win fyne.Window) *HoverableCheck {
+	h := &HoverableCheck{
+		tooltip:   tooltip,
+		parentWin: win,
+	}
+	h.Text = label
+	h.OnChanged = changed
+	h.ExtendBaseWidget(h)
+	return h
+}
+
+// MouseIn is called when the mouse enters the widget - shows tooltip
+func (h *HoverableCheck) MouseIn(e *desktop.MouseEvent) {
+	if h.tooltip == "" || h.parentWin == nil {
+		return
+	}
+
+	tooltipLabel := widget.NewLabel(h.tooltip)
+	tooltipLabel.Wrapping = fyne.TextWrapOff
+	tooltipContent := container.NewPadded(tooltipLabel)
+
+	h.popUp = widget.NewPopUp(tooltipContent, h.parentWin.Canvas())
+	h.popUp.ShowAtPosition(fyne.NewPos(e.AbsolutePosition.X+10, e.AbsolutePosition.Y+20))
+}
+
+// MouseMoved is called when the mouse moves within the widget
+func (h *HoverableCheck) MouseMoved(_ *desktop.MouseEvent) {
+	// Required to implement desktop.Hoverable interface
+}
+
+// MouseOut is called when the mouse leaves the widget - hides tooltip
+func (h *HoverableCheck) MouseOut() {
+	if h.popUp != nil {
+		h.popUp.Hide()
+		h.popUp = nil
+	}
+}
+
 // PlotPoint represents a data point in the light curve
 type PlotPoint struct {
 	X      float64 // Time or frame number
@@ -1578,7 +1625,7 @@ func main() {
 		{R: 100, G: 100, B: 100, A: 255}, // Gray
 	}
 
-	// Track current frame range for filtering plot data
+	// Track the current frame range for filtering plot data
 	var frameRangeStart, frameRangeEnd float64
 
 	// Function to rebuild the plot with all currently displayed curves
@@ -1701,13 +1748,13 @@ func main() {
 	lightCurveList = widget.NewList(
 		func() int { return len(lightCurveListData) },
 		func() fyne.CanvasObject {
-			check := widget.NewCheck("", nil)
+			check := NewHoverableCheck("", nil, "Checking this box enables this light curve to be used as the normalization reference (used for treating cloud effects)", w)
 			label := widget.NewLabel("Light Curve Name")
 			return container.NewHBox(check, label)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			box := obj.(*fyne.Container)
-			check := box.Objects[0].(*widget.Check)
+			check := box.Objects[0].(*HoverableCheck)
 			label := box.Objects[1].(*widget.Label)
 
 			name := lightCurveListData[id]
@@ -1720,10 +1767,10 @@ func main() {
 			check.OnChanged = func(checked bool) {
 				if checked {
 					checkedCurveIndex = id
-					logAction(fmt.Sprintf("Selected light curve: %s", name))
+					logAction(fmt.Sprintf("Checked normalization reference: %s", name))
 				} else if checkedCurveIndex == id {
 					checkedCurveIndex = -1
-					logAction(fmt.Sprintf("Deselected light curve: %s", name))
+					logAction(fmt.Sprintf("Unchecked normalization reference: %s", name))
 				}
 				lightCurveList.Refresh() // Refresh to update other checkboxes
 			}
