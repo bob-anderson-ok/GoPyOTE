@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.10"
+const Version = "1.0.11"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1225,16 +1225,48 @@ func main() {
 	mainMenu := fyne.NewMainMenu(fileMenu, editMenu, helpMenu)
 	w.SetMainMenu(mainMenu)
 
-	// Helper to create tab content with a colored background
-	makeTabContent := func(text string, bgColor color.Color) *fyne.Container {
-		bg := canvas.NewRectangle(bgColor)
-		label := widget.NewLabel(text)
-		return container.NewStack(bg, container.NewCenter(label))
+	// Tab 2: Settings
+	// Track which light curve prefixes to include when loading CSV
+	lightCurvePrefixes := map[string]bool{
+		"signal":     true,
+		"appsum":     false,
+		"avgbkg":     false,
+		"stdbkg":     false,
+		"nmaskpx":    false,
+		"maxpx":      false,
+		"xcentroid":  false,
+		"ycentroid":  false,
+		"hit-defect": false,
 	}
 
-	// Tab 2: Settings
-	tab2 := container.NewTabItem("Settings",
-		makeTabContent("Settings page content", color.RGBA{R: 200, G: 200, B: 230, A: 255}))
+	// Create checkboxes for light curve prefixes
+	signalCheck := widget.NewCheck("signal", func(checked bool) { lightCurvePrefixes["signal"] = checked })
+	signalCheck.SetChecked(true)
+	appsumCheck := widget.NewCheck("appsum", func(checked bool) { lightCurvePrefixes["appsum"] = checked })
+	avgbkgCheck := widget.NewCheck("avgbkg", func(checked bool) { lightCurvePrefixes["avgbkg"] = checked })
+	stdbkgCheck := widget.NewCheck("stdbkg", func(checked bool) { lightCurvePrefixes["stdbkg"] = checked })
+	nmaskpxCheck := widget.NewCheck("nmaskpx", func(checked bool) { lightCurvePrefixes["nmaskpx"] = checked })
+	maxpxCheck := widget.NewCheck("maxpx", func(checked bool) { lightCurvePrefixes["maxpx"] = checked })
+	xcentroidCheck := widget.NewCheck("xcentroid", func(checked bool) { lightCurvePrefixes["xcentroid"] = checked })
+	ycentroidCheck := widget.NewCheck("ycentroid", func(checked bool) { lightCurvePrefixes["ycentroid"] = checked })
+	hitDefectCheck := widget.NewCheck("hit-defect", func(checked bool) { lightCurvePrefixes["hit-defect"] = checked })
+
+	prefixCheckboxes := container.NewVBox(
+		widget.NewLabel("Light curve prefixes to include:"),
+		signalCheck,
+		appsumCheck,
+		avgbkgCheck,
+		stdbkgCheck,
+		nmaskpxCheck,
+		maxpxCheck,
+		xcentroidCheck,
+		ycentroidCheck,
+		hitDefectCheck,
+	)
+
+	tab2Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 200, B: 230, A: 255})
+	tab2Content := container.NewStack(tab2Bg, container.NewPadded(prefixCheckboxes))
+	tab2 := container.NewTabItem("Settings", tab2Content)
 
 	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
 	plotStatusLabel := widget.NewLabel("Click on a point to see details")
@@ -1436,8 +1468,9 @@ func main() {
 	tab3Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 220, B: 200, A: 255})
 
 	// Create a list to display light curve column names
-	var lightCurveListData []string       // Will be populated when CSV is loaded
-	displayedCurves := make(map[int]bool) // Track which curves are currently displayed
+	var lightCurveListData []string       // Will be populated when CSV is loaded (filtered by prefixes)
+	var listIndexToColumnIndex []int      // Maps list index to actual column index in data
+	displayedCurves := make(map[int]bool) // Track which curves are currently displayed (uses actual column indices)
 	var lightCurveList *widget.List
 
 	// Color palette for multiple light curves
@@ -1540,11 +1573,14 @@ func main() {
 
 		rebuildPlot()
 
-		// Restore bounds if the user had set them, otherwise update entries
+		// Restore bounds if the user had set them, otherwise set Y min to 0 and update entries
 		if userSetBounds {
 			lightCurvePlot.SetXBounds(savedMinX, savedMaxX)
 			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 		} else {
+			// Set Y min to 0.0 by default
+			_, maxY := lightCurvePlot.GetYBounds()
+			lightCurvePlot.SetYBounds(0.0, maxY)
 			updateRangeEntries()
 		}
 		lightCurveList.Refresh() // Refresh to update visual indicators
@@ -1558,7 +1594,12 @@ func main() {
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			label := obj.(*widget.Label)
 			name := lightCurveListData[id]
-			if displayedCurves[id] {
+			// Map list index to actual column index for checking display status
+			colIdx := -1
+			if id >= 0 && id < len(listIndexToColumnIndex) {
+				colIdx = listIndexToColumnIndex[id]
+			}
+			if displayedCurves[colIdx] {
 				label.SetText("✓ " + name)
 			} else {
 				label.SetText("  " + name)
@@ -1568,7 +1609,10 @@ func main() {
 
 	// Handle click on list items to toggle
 	lightCurveList.OnSelected = func(id widget.ListItemID) {
-		toggleLightCurve(id)
+		// Map list index to actual column index
+		if id >= 0 && id < len(listIndexToColumnIndex) {
+			toggleLightCurve(listIndexToColumnIndex[id])
+		}
 		lightCurveList.UnselectAll() // Unselect so clicking again works
 	}
 
@@ -1621,15 +1665,23 @@ func main() {
 			yMinEntry.SetText("")
 			yMaxEntry.SetText("")
 
-			// Update the list with column names
-			lightCurveListData = make([]string, len(data.Columns))
+			// Update the list with column names, filtered by selected prefixes
+			lightCurveListData = nil
+			listIndexToColumnIndex = nil
 			for i, col := range data.Columns {
-				lightCurveListData[i] = col.Name
+				// Check if the column name starts with any enabled prefix
+				for prefix, enabled := range lightCurvePrefixes {
+					if enabled && strings.HasPrefix(col.Name, prefix) {
+						lightCurveListData = append(lightCurveListData, col.Name)
+						listIndexToColumnIndex = append(listIndexToColumnIndex, i)
+						break
+					}
+				}
 			}
 			lightCurveList.Refresh()
 
-			plotStatusLabel.SetText(fmt.Sprintf("Loaded %d light curves with %d data points. Click to toggle display.",
-				len(data.Columns), len(data.TimeValues)))
+			plotStatusLabel.SetText(fmt.Sprintf("Loaded %d light curves (%d shown) with %d data points. Click to toggle display.",
+				len(data.Columns), len(lightCurveListData), len(data.TimeValues)))
 		}, w)
 		fileDialog.Resize(fyne.NewSize(1200, 800))
 		fileDialog.Show()
@@ -1686,23 +1738,6 @@ func main() {
 	tab4 := container.NewTabItem("Reports", tab4Content)
 	tabs := container.NewAppTabs(tab2, tab3, tab4)
 
-	// Create buttons
-	btnRegenerate := widget.NewButton("Regenerate Plot", func() {
-		newSeries := []PlotSeries{
-			{
-				Points: generateRandomLightCurve(50, 0, 1.0, 0.3+rand.Float64()*0.4),
-				Color:  series1Color,
-				Name:   "Star A",
-			},
-			{
-				Points: generateRandomLightCurve(50, 1, 0.8, 0.3+rand.Float64()*0.4),
-				Color:  series2Color,
-				Name:   "Star B",
-			},
-		}
-		lightCurvePlot.SetSeries(newSeries)
-		plotStatusLabel.SetText("Plot regenerated - click a point")
-	})
 	// Helper function to run IOTAdiffraction with a given parameter file
 	runIOTAdiffraction := func(paramFilePath string) {
 		// Get the current working directory
@@ -1829,7 +1864,7 @@ func main() {
 	btnOccultParams := widget.NewButton("Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
 	})
-	buttons := container.NewHBox(btnRegenerate, btnIOTA, btnOccultParams)
+	buttons := container.NewHBox(btnIOTA, btnOccultParams)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
