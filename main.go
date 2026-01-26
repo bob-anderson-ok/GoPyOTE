@@ -39,7 +39,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.18"
+const Version = "1.0.19"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -892,6 +892,7 @@ type LightCurvePlot struct {
 	series            []PlotSeries
 	pointRadius       float32
 	onPointClicked    func(point PlotPoint)
+	onScroll          func(position fyne.Position, scrollDelta float32) // Callback for scroll events
 	selectedSeries    int
 	selectedIndex     int
 	xAxisLabel        string
@@ -965,6 +966,18 @@ func (p *LightCurvePlot) SetUseTimestampTicks(use bool) {
 // GetUseTimestampTicks returns whether X axis ticks are formatted as timestamps
 func (p *LightCurvePlot) GetUseTimestampTicks() bool {
 	return p.useTimestampTicks
+}
+
+// SetOnScroll sets the callback for scroll events
+func (p *LightCurvePlot) SetOnScroll(callback func(position fyne.Position, scrollDelta float32)) {
+	p.onScroll = callback
+}
+
+// Scrolled handles scroll wheel events
+func (p *LightCurvePlot) Scrolled(ev *fyne.ScrollEvent) {
+	if p.onScroll != nil {
+		p.onScroll(ev.Position, ev.Scrolled.DY)
+	}
 }
 
 // timestampTicker is a custom tick marker that formats values as timestamps
@@ -1368,7 +1381,7 @@ func main() {
 	// Tab 2: Settings
 	// Track which light curve prefixes to include when loading CSV
 	lightCurvePrefixes := map[string]bool{
-		"signal":     false,
+		"signal":     true,
 		"appsum":     false,
 		"avgbkg":     false,
 		"stdbkg":     false,
@@ -1378,20 +1391,73 @@ func main() {
 		"ycentroid":  false,
 		"hit-defect": false,
 	}
-	acceptAnyName := true
+	acceptAnyName := false
+
+	// Function variable for refreshing light curve list when filter changes (set later)
+	var refreshLightCurveFilter func()
 
 	// Create checkboxes for light curve prefixes
-	signalCheck := widget.NewCheck("signal", func(checked bool) { lightCurvePrefixes["signal"] = checked })
-	appsumCheck := widget.NewCheck("appsum", func(checked bool) { lightCurvePrefixes["appsum"] = checked })
-	avgbkgCheck := widget.NewCheck("avgbkg", func(checked bool) { lightCurvePrefixes["avgbkg"] = checked })
-	stdbkgCheck := widget.NewCheck("stdbkg", func(checked bool) { lightCurvePrefixes["stdbkg"] = checked })
-	nmaskpxCheck := widget.NewCheck("nmaskpx", func(checked bool) { lightCurvePrefixes["nmaskpx"] = checked })
-	maxpxCheck := widget.NewCheck("maxpx", func(checked bool) { lightCurvePrefixes["maxpx"] = checked })
-	xcentroidCheck := widget.NewCheck("xcentroid", func(checked bool) { lightCurvePrefixes["xcentroid"] = checked })
-	ycentroidCheck := widget.NewCheck("ycentroid", func(checked bool) { lightCurvePrefixes["ycentroid"] = checked })
-	hitDefectCheck := widget.NewCheck("hit-defect", func(checked bool) { lightCurvePrefixes["hit-defect"] = checked })
-	anyNameCheck := widget.NewCheck("any name", func(checked bool) { acceptAnyName = checked })
-	anyNameCheck.SetChecked(true)
+	signalCheck := widget.NewCheck("signal", func(checked bool) {
+		lightCurvePrefixes["signal"] = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
+	signalCheck.SetChecked(true)
+	appsumCheck := widget.NewCheck("appsum", func(checked bool) {
+		lightCurvePrefixes["appsum"] = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
+	avgbkgCheck := widget.NewCheck("avgbkg", func(checked bool) {
+		lightCurvePrefixes["avgbkg"] = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
+	stdbkgCheck := widget.NewCheck("stdbkg", func(checked bool) {
+		lightCurvePrefixes["stdbkg"] = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
+	nmaskpxCheck := widget.NewCheck("nmaskpx", func(checked bool) {
+		lightCurvePrefixes["nmaskpx"] = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
+	maxpxCheck := widget.NewCheck("maxpx", func(checked bool) {
+		lightCurvePrefixes["maxpx"] = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
+	xcentroidCheck := widget.NewCheck("xcentroid", func(checked bool) {
+		lightCurvePrefixes["xcentroid"] = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
+	ycentroidCheck := widget.NewCheck("ycentroid", func(checked bool) {
+		lightCurvePrefixes["ycentroid"] = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
+	hitDefectCheck := widget.NewCheck("hit-defect", func(checked bool) {
+		lightCurvePrefixes["hit-defect"] = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
+	anyNameCheck := widget.NewCheck("any name", func(checked bool) {
+		acceptAnyName = checked
+		if refreshLightCurveFilter != nil {
+			refreshLightCurveFilter()
+		}
+	})
 
 	prefixCheckboxes := container.NewVBox(
 		widget.NewLabel("Light curve prefixes to include:"),
@@ -1816,6 +1882,50 @@ func main() {
 		lightCurveList.UnselectAll() // Unselect so clicking again works
 	}
 
+	// Set up the function to refresh light curve list when filter checkboxes change
+	refreshLightCurveFilter = func() {
+		if loadedLightCurveData == nil {
+			return
+		}
+
+		// Clear displayed curves
+		for k := range displayedCurves {
+			delete(displayedCurves, k)
+		}
+
+		// Re-filter the light curve list
+		lightCurveListData = nil
+		listIndexToColumnIndex = nil
+		checkedCurveIndex = -1
+
+		for i, col := range loadedLightCurveData.Columns {
+			// If "any name" is checked, include all columns
+			if acceptAnyName {
+				lightCurveListData = append(lightCurveListData, col.Name)
+				listIndexToColumnIndex = append(listIndexToColumnIndex, i)
+				continue
+			}
+			// Check if the column name starts with any enabled prefix
+			for prefix, enabled := range lightCurvePrefixes {
+				if enabled && strings.HasPrefix(col.Name, prefix) {
+					lightCurveListData = append(lightCurveListData, col.Name)
+					listIndexToColumnIndex = append(listIndexToColumnIndex, i)
+					break
+				}
+			}
+		}
+		lightCurveList.Refresh()
+
+		// Automatically display the first light curve if available
+		if len(listIndexToColumnIndex) > 0 {
+			toggleLightCurve(listIndexToColumnIndex[0])
+		} else {
+			rebuildPlot() // Rebuild with empty plot if no curves match
+		}
+
+		logAction("Filter settings changed, refreshed light curve list")
+	}
+
 	// Frame number range entry boxes (defined here so they can be initialized when CSV is loaded)
 	startFrameEntry := NewFocusLossEntry()
 	startFrameEntry.SetPlaceHolder("Start Frame")
@@ -1875,6 +1985,84 @@ func main() {
 			rebuildPlot()
 		}
 	}
+
+	// Set up scroll wheel zoom on the plot
+	lightCurvePlot.SetOnScroll(func(position fyne.Position, scrollDelta float32) {
+		if loadedLightCurveData == nil || maxFrameNum == minFrameNum {
+			return
+		}
+
+		// Get plot size
+		plotSize := lightCurvePlot.Size()
+		if plotSize.Width <= 0 || plotSize.Height <= 0 {
+			return
+		}
+
+		// Calculate the relative X position within the plot area (0 to 1)
+		// Account for margins
+		plotAreaWidth := plotSize.Width - lightCurvePlot.marginLeft - lightCurvePlot.marginRight
+		relX := float64((position.X - lightCurvePlot.marginLeft) / plotAreaWidth)
+		if relX < 0 {
+			relX = 0
+		}
+		if relX > 1 {
+			relX = 1
+		}
+
+		// Calculate the frame number under the cursor
+		currentRange := frameRangeEnd - frameRangeStart
+		frameUnderCursor := frameRangeStart + relX*currentRange
+
+		// Determine zoom factor (scroll up = zoom in, scroll down = zoom out)
+		zoomFactor := float64(1.0)
+		if scrollDelta > 0 {
+			zoomFactor = 0.8 // Zoom in - reduce range by 20%
+		} else if scrollDelta < 0 {
+			zoomFactor = 1.25 // Zoom out - increase range by 25%
+		} else {
+			return
+		}
+
+		// Calculate new range
+		newRange := currentRange * zoomFactor
+
+		// Ensure minimum range of 3
+		if newRange < 3 {
+			newRange = 3
+		}
+
+		// Ensure we don't exceed the full data range
+		fullRange := maxFrameNum - minFrameNum
+		if newRange > fullRange {
+			newRange = fullRange
+		}
+
+		// Calculate new start and end, keeping frameUnderCursor at the same relative position
+		newStart := frameUnderCursor - relX*newRange
+		newEnd := frameUnderCursor + (1-relX)*newRange
+
+		// Clamp to valid bounds
+		if newStart < minFrameNum {
+			newStart = minFrameNum
+			newEnd = newStart + newRange
+		}
+		if newEnd > maxFrameNum {
+			newEnd = maxFrameNum
+			newStart = newEnd - newRange
+			if newStart < minFrameNum {
+				newStart = minFrameNum
+			}
+		}
+
+		// Update frame range and UI
+		if newStart != frameRangeStart || newEnd != frameRangeEnd {
+			frameRangeStart = newStart
+			frameRangeEnd = newEnd
+			startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
+			endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
+			rebuildPlot()
+		}
+	})
 
 	// Button to load a CSV file
 	loadCSVBtn := widget.NewButton("Open browser to select csv file", func() {
