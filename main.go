@@ -9,7 +9,6 @@ import (
 	"image/png"
 	"io"
 	"math"
-	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.20"
+const Version = "1.0.21"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -919,10 +918,10 @@ func NewLightCurvePlot(series []PlotSeries, onPointClicked func(PlotPoint)) *Lig
 		selectedPointDataIndex: -1,
 		selectedSeriesName:     "",
 		xAxisLabel:             "Time",
-		marginLeft:             60,
-		marginRight:            20,
-		marginTop:              20,
-		marginBottom:           40,
+		marginLeft:             75,
+		marginRight:            15,
+		marginTop:              15,
+		marginBottom:           45,
 	}
 	p.calculateBounds()
 	p.ExtendBaseWidget(p)
@@ -1345,23 +1344,6 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	r.image.Resize(size)
 }
 
-// generateRandomLightCurve creates sample light curve data
-func generateRandomLightCurve(numPoints int, seriesIndex int, baseY float64, dipCenter float64) []PlotPoint {
-	points := make([]PlotPoint, numPoints)
-
-	for i := 0; i < numPoints; i++ {
-		x := float64(i)
-		y := baseY + rand.Float64()*0.1 - 0.05
-		dipPos := int(float64(numPoints) * dipCenter)
-		if i > dipPos-numPoints/6 && i < dipPos+numPoints/6 {
-			dip := 0.3 * math.Exp(-math.Pow(float64(i-dipPos)/5.0, 2))
-			y -= dip
-		}
-		points[i] = PlotPoint{X: x, Y: y, Index: i, Series: seriesIndex}
-	}
-	return points
-}
-
 func main() {
 	a := app.NewWithID("com.gopyote.app")
 	w := a.NewWindow("GoPyOTE Version: " + Version)
@@ -1507,29 +1489,12 @@ func main() {
 	plotStatusLabel := widget.NewLabel("Click on a point to see details")
 	plotStatusLabel.Wrapping = fyne.TextWrapWord
 
-	// Generate two light curve series with different colors
-	series1Color := color.RGBA{R: 70, G: 130, B: 180, A: 255} // Steel blue
-	series2Color := color.RGBA{R: 220, G: 120, B: 50, A: 255} // Orange
-
-	lightCurveSeries := []PlotSeries{
-		{
-			Points: generateRandomLightCurve(50, 0, 1.0, 0.4),
-			Color:  series1Color,
-			Name:   "Star A",
-		},
-		{
-			Points: generateRandomLightCurve(50, 1, 0.8, 0.6),
-			Color:  series2Color,
-			Name:   "Star B",
-		},
-	}
-
 	// Track the current x-axis label for click callback
 	currentXAxisLabel := "Time"
 
-	// Create the plot with a click callback
+	// Create the plot with an empty series (will be populated when CSV is loaded)
 	var lightCurvePlot *LightCurvePlot
-	lightCurvePlot = NewLightCurvePlot(lightCurveSeries, func(point PlotPoint) {
+	lightCurvePlot = NewLightCurvePlot(nil, func(point PlotPoint) {
 		if point.Series < 0 || point.Series >= len(lightCurvePlot.series) {
 			return
 		}
@@ -1662,7 +1627,7 @@ func main() {
 	yMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMaxEntry)
 
 	// Checkbox for timestamp tick format
-	timestampTicksCheck := widget.NewCheck("Change seconds to timestamp", func(checked bool) {
+	timestampTicksCheck := widget.NewCheck("use timestamps", func(checked bool) {
 		lightCurvePlot.SetUseTimestampTicks(checked)
 		// Update the entry box format to match the new mode
 		if len(lightCurvePlot.series) > 0 {
@@ -1981,7 +1946,10 @@ func main() {
 		if val != frameRangeStart {
 			frameRangeStart = val
 			logAction(fmt.Sprintf("Set start frame to %.0f", val))
+			// Save Y bounds before rebuild to preserve Y axis scaling
+			savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
 			rebuildPlot()
+			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 		}
 	}
 
@@ -2008,7 +1976,10 @@ func main() {
 		if val != frameRangeEnd {
 			frameRangeEnd = val
 			logAction(fmt.Sprintf("Set end frame to %.0f", val))
+			// Save Y bounds before rebuild to preserve Y axis scaling
+			savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
 			rebuildPlot()
+			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 		}
 	}
 
@@ -2086,7 +2057,12 @@ func main() {
 			frameRangeEnd = newEnd
 			startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
 			endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
+
+			// Save Y bounds before rebuild to preserve Y axis scaling during zoom
+			savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
 			rebuildPlot()
+			// Restore Y bounds after rebuild
+			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 		}
 	})
 
@@ -2251,7 +2227,15 @@ func main() {
 		radioGroup,
 	)))
 	tab4 := container.NewTabItem("Reports", tab4Content)
-	tabs := container.NewAppTabs(tab2, tab3, tab4)
+
+	// Tab 5: Block integration
+	tab5Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 220, B: 200, A: 255})
+	tab5Content := container.NewStack(tab5Bg, container.NewPadded(container.NewVBox(
+		widget.NewLabel("Block integration"),
+	)))
+	tab5 := container.NewTabItem("Block integration", tab5Content)
+
+	tabs := container.NewAppTabs(tab2, tab3, tab4, tab5)
 
 	// Helper function to run IOTAdiffraction with a given parameter file
 	runIOTAdiffraction := func(paramFilePath string) {
