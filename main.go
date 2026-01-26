@@ -39,7 +39,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.17"
+const Version = "1.0.18"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1570,7 +1570,7 @@ func main() {
 	yMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMaxEntry)
 
 	// Checkbox for timestamp tick format
-	timestampTicksCheck := widget.NewCheck("Timestamp ticks", func(checked bool) {
+	timestampTicksCheck := widget.NewCheck("Change seconds to timestamp", func(checked bool) {
 		lightCurvePlot.SetUseTimestampTicks(checked)
 		// Update the entry box format to match the new mode
 		if len(lightCurvePlot.series) > 0 {
@@ -1643,6 +1643,8 @@ func main() {
 
 	// Track the current frame range for filtering plot data
 	var frameRangeStart, frameRangeEnd float64
+	// Save min/max frame numbers from loaded CSV for validation
+	var minFrameNum, maxFrameNum float64
 
 	// Function to rebuild the plot with all currently displayed curves
 	rebuildPlot := func() {
@@ -1823,7 +1825,24 @@ func main() {
 	// Handle start frame entry changes
 	startFrameEntry.OnSubmitted = func(text string) {
 		val, err := strconv.ParseFloat(text, 64)
-		if err == nil && val != frameRangeStart {
+		if err != nil {
+			startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
+			return
+		}
+		// Validate: not less than minFrameNum
+		if val < minFrameNum {
+			val = minFrameNum
+			startFrameEntry.SetText(fmt.Sprintf("%.0f", val))
+		}
+		// Validate: end - start must be at least 3
+		if frameRangeEnd-val < 3 {
+			val = frameRangeEnd - 3
+			if val < minFrameNum {
+				val = minFrameNum
+			}
+			startFrameEntry.SetText(fmt.Sprintf("%.0f", val))
+		}
+		if val != frameRangeStart {
 			frameRangeStart = val
 			logAction(fmt.Sprintf("Set start frame to %.0f", val))
 			rebuildPlot()
@@ -1833,7 +1852,24 @@ func main() {
 	// Handle end frame entry changes
 	endFrameEntry.OnSubmitted = func(text string) {
 		val, err := strconv.ParseFloat(text, 64)
-		if err == nil && val != frameRangeEnd {
+		if err != nil {
+			endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
+			return
+		}
+		// Validate: not greater than maxFrameNum
+		if val > maxFrameNum {
+			val = maxFrameNum
+			endFrameEntry.SetText(fmt.Sprintf("%.0f", val))
+		}
+		// Validate: end - start must be at least 3
+		if val-frameRangeStart < 3 {
+			val = frameRangeStart + 3
+			if val > maxFrameNum {
+				val = maxFrameNum
+			}
+			endFrameEntry.SetText(fmt.Sprintf("%.0f", val))
+		}
+		if val != frameRangeEnd {
 			frameRangeEnd = val
 			logAction(fmt.Sprintf("Set end frame to %.0f", val))
 			rebuildPlot()
@@ -1924,8 +1960,10 @@ func main() {
 
 			// Initialize frame number range entries and variables
 			if len(data.FrameNumbers) > 0 {
-				frameRangeStart = data.FrameNumbers[0]
-				frameRangeEnd = data.FrameNumbers[len(data.FrameNumbers)-1]
+				minFrameNum = data.FrameNumbers[0]
+				maxFrameNum = data.FrameNumbers[len(data.FrameNumbers)-1]
+				frameRangeStart = minFrameNum
+				frameRangeEnd = maxFrameNum
 				startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
 				endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
 			}
@@ -1986,7 +2024,7 @@ func main() {
 		nil,                  // right
 		lightCurveListScroll, // center
 	)))
-	tab3 := container.NewTabItem("Load csv file", tab3Content)
+	tab3 := container.NewTabItem("csv file ops", tab3Content)
 
 	// Tab 4: Reports
 	tab4Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 200, B: 220, A: 255})
