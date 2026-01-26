@@ -39,7 +39,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.19"
+const Version = "1.0.20"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -898,6 +898,10 @@ type LightCurvePlot struct {
 	xAxisLabel        string
 	useTimestampTicks bool // When true, format X axis ticks as timestamps
 
+	// Stable identifiers for preserving selection across rebuilds
+	selectedPointDataIndex int    // Original data index of a selected point
+	selectedSeriesName     string // Name of the series containing the selected point
+
 	// Plot bounds for coordinate conversion
 	minX, maxX, minY, maxY float64
 	// Plot area margins (in pixels) - approximate values for gonum/plot
@@ -907,16 +911,18 @@ type LightCurvePlot struct {
 // NewLightCurvePlot creates a new light curve plot widget
 func NewLightCurvePlot(series []PlotSeries, onPointClicked func(PlotPoint)) *LightCurvePlot {
 	p := &LightCurvePlot{
-		series:         series,
-		pointRadius:    5,
-		onPointClicked: onPointClicked,
-		selectedSeries: -1,
-		selectedIndex:  -1,
-		xAxisLabel:     "Time",
-		marginLeft:     60,
-		marginRight:    20,
-		marginTop:      20,
-		marginBottom:   40,
+		series:                 series,
+		pointRadius:            5,
+		onPointClicked:         onPointClicked,
+		selectedSeries:         -1,
+		selectedIndex:          -1,
+		selectedPointDataIndex: -1,
+		selectedSeriesName:     "",
+		xAxisLabel:             "Time",
+		marginLeft:             60,
+		marginRight:            20,
+		marginTop:              20,
+		marginBottom:           40,
 	}
 	p.calculateBounds()
 	p.ExtendBaseWidget(p)
@@ -1046,6 +1052,23 @@ func (p *LightCurvePlot) SetSeries(series []PlotSeries) {
 	p.series = series
 	p.selectedSeries = -1
 	p.selectedIndex = -1
+
+	// Try to restore the selection based on saved stable identifiers
+	if p.selectedPointDataIndex >= 0 && p.selectedSeriesName != "" {
+		for s, ser := range series {
+			if ser.Name == p.selectedSeriesName {
+				for i, pt := range ser.Points {
+					if pt.Index == p.selectedPointDataIndex {
+						p.selectedSeries = s
+						p.selectedIndex = i
+						break
+					}
+				}
+				break
+			}
+		}
+	}
+
 	p.calculateBounds()
 	p.Refresh()
 }
@@ -1112,6 +1135,9 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 	if closestSeries >= 0 && closestIdx >= 0 {
 		p.selectedSeries = closestSeries
 		p.selectedIndex = closestIdx
+		// Save stable identifiers for preserving selection across rebuilds
+		p.selectedPointDataIndex = p.series[closestSeries].Points[closestIdx].Index
+		p.selectedSeriesName = p.series[closestSeries].Name
 		p.Refresh()
 		if p.onPointClicked != nil {
 			p.onPointClicked(p.series[closestSeries].Points[closestIdx])
@@ -1393,7 +1419,7 @@ func main() {
 	}
 	acceptAnyName := false
 
-	// Function variable for refreshing light curve list when filter changes (set later)
+	// Function variable for refreshing the light curve list when filter changes (set later)
 	var refreshLightCurveFilter func()
 
 	// Create checkboxes for light curve prefixes
@@ -1882,7 +1908,7 @@ func main() {
 		lightCurveList.UnselectAll() // Unselect so clicking again works
 	}
 
-	// Set up the function to refresh light curve list when filter checkboxes change
+	// Set up the function to refresh the light curve list when filter checkboxes change
 	refreshLightCurveFilter = func() {
 		if loadedLightCurveData == nil {
 			return
@@ -1920,7 +1946,7 @@ func main() {
 		if len(listIndexToColumnIndex) > 0 {
 			toggleLightCurve(listIndexToColumnIndex[0])
 		} else {
-			rebuildPlot() // Rebuild with empty plot if no curves match
+			rebuildPlot() // Rebuild with an empty plot if no curves match
 		}
 
 		logAction("Filter settings changed, refreshed light curve list")
@@ -2014,9 +2040,9 @@ func main() {
 		frameUnderCursor := frameRangeStart + relX*currentRange
 
 		// Determine zoom factor (scroll up = zoom in, scroll down = zoom out)
-		zoomFactor := float64(1.0)
+		zoomFactor := 1.0
 		if scrollDelta > 0 {
-			zoomFactor = 0.8 // Zoom in - reduce range by 20%
+			zoomFactor = 0.8 // Zoom in - reduce the range by 20%
 		} else if scrollDelta < 0 {
 			zoomFactor = 1.25 // Zoom out - increase range by 25%
 		} else {
@@ -2026,7 +2052,7 @@ func main() {
 		// Calculate new range
 		newRange := currentRange * zoomFactor
 
-		// Ensure minimum range of 3
+		// Ensure a minimum range of 3
 		if newRange < 3 {
 			newRange = 3
 		}
@@ -2037,7 +2063,7 @@ func main() {
 			newRange = fullRange
 		}
 
-		// Calculate new start and end, keeping frameUnderCursor at the same relative position
+		// Calculate a new start and end, keeping frameUnderCursor at the same relative position
 		newStart := frameUnderCursor - relX*newRange
 		newEnd := frameUnderCursor + (1-relX)*newRange
 
