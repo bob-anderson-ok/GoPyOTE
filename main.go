@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.22"
+const Version = "1.0.23"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2248,9 +2248,10 @@ func main() {
 	// Tab 6: Flash tags
 	tab6Bg := canvas.NewRectangle(color.RGBA{R: 220, G: 200, B: 220, A: 255})
 
-	// Alevel and Blevel display labels (read-only)
+	// Alevel, Blevel, and flashEdgeNum display labels (read-only)
 	alevelValue := widget.NewLabel("---")
 	blevelValue := widget.NewLabel("---")
+	flashEdgeNumValue := widget.NewLabel("---")
 
 	// Button to compute both Alevel and Blevel from the selected point
 	computeLevelsBtn := widget.NewButton("Compute Levels", func() {
@@ -2269,6 +2270,14 @@ func main() {
 		// Get the selected series and find the data
 		series := lightCurvePlot.series[lightCurvePlot.selectedSeries]
 		selectedIdx := lightCurvePlot.selectedIndex
+		selectedPointValue := series.Points[selectedIdx].Y
+
+		// Get the frame number of the selected point for logging
+		selectedFrameNum := float64(series.Points[selectedIdx].Index)
+		if loadedLightCurveData != nil && series.Points[selectedIdx].Index < len(loadedLightCurveData.FrameNumbers) {
+			selectedFrameNum = loadedLightCurveData.FrameNumbers[series.Points[selectedIdx].Index]
+		}
+		logAction(fmt.Sprintf("Flash tag: Computing levels for selected point at frame %.0f, value %.4f", selectedFrameNum, selectedPointValue))
 
 		// Compute Alevel: average of 10 points to the left (before selected point)
 		aCount := 0
@@ -2278,12 +2287,16 @@ func main() {
 			aCount++
 		}
 
+		var alevel float64
+		alevelValid := false
 		if aCount == 0 {
 			alevelValue.SetText("N/A")
+			logAction("Flash tag: Alevel N/A (no points to the left)")
 		} else {
-			alevel := aSum / float64(aCount)
+			alevel = aSum / float64(aCount)
+			alevelValid = true
 			alevelValue.SetText(fmt.Sprintf("%.4f", alevel))
-			logAction(fmt.Sprintf("Computed Alevel: %.4f (average of %d points)", alevel, aCount))
+			logAction(fmt.Sprintf("Flash tag: Alevel = %.4f (average of %d points)", alevel, aCount))
 		}
 
 		// Compute Blevel: average of 10 points to the right (after the selected point)
@@ -2294,12 +2307,32 @@ func main() {
 			bCount++
 		}
 
+		var blevel float64
+		blevelValid := false
 		if bCount == 0 {
 			blevelValue.SetText("N/A")
+			logAction("Flash tag: Blevel N/A (no points to the right)")
 		} else {
-			blevel := bSum / float64(bCount)
+			blevel = bSum / float64(bCount)
+			blevelValid = true
 			blevelValue.SetText(fmt.Sprintf("%.4f", blevel))
-			logAction(fmt.Sprintf("Computed Blevel: %.4f (average of %d points)", blevel, bCount))
+			logAction(fmt.Sprintf("Flash tag: Blevel = %.4f (average of %d points)", blevel, bCount))
+		}
+
+		// Compute flashEdgeNum = (Blevel - selected point value) / (Blevel - Alevel) + selected point frame num - 1.0
+		if alevelValid && blevelValid {
+			denominator := blevel - alevel
+			if denominator == 0 {
+				flashEdgeNumValue.SetText("N/A (div by 0)")
+				logAction("Flash tag: flashEdgeNum N/A (division by zero, Blevel equals Alevel)")
+			} else {
+				flashEdgeNum := (blevel-selectedPointValue)/denominator + selectedFrameNum - 1.0
+				flashEdgeNumValue.SetText(fmt.Sprintf("%.4f", flashEdgeNum))
+				logAction(fmt.Sprintf("Flash tag: flashEdgeNum = %.4f", flashEdgeNum))
+			}
+		} else {
+			flashEdgeNumValue.SetText("N/A")
+			logAction("Flash tag: flashEdgeNum N/A (Alevel or Blevel unavailable)")
 		}
 	})
 
@@ -2307,6 +2340,7 @@ func main() {
 		widget.NewLabel("Flash tags"),
 		container.NewHBox(widget.NewLabel("Alevel:"), alevelValue),
 		container.NewHBox(widget.NewLabel("Blevel:"), blevelValue),
+		container.NewHBox(widget.NewLabel("flashEdgeNum:"), flashEdgeNumValue),
 		computeLevelsBtn,
 	)))
 	tab6 := container.NewTabItem("Flash tags", tab6Content)
