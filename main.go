@@ -27,6 +27,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/KevinWang15/go-json5"
@@ -38,7 +39,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.15"
+const Version = "1.0.16"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1366,7 +1367,7 @@ func main() {
 	// Tab 2: Settings
 	// Track which light curve prefixes to include when loading CSV
 	lightCurvePrefixes := map[string]bool{
-		"signal":     true,
+		"signal":     false,
 		"appsum":     false,
 		"avgbkg":     false,
 		"stdbkg":     false,
@@ -1376,11 +1377,10 @@ func main() {
 		"ycentroid":  false,
 		"hit-defect": false,
 	}
-	acceptAnyName := false
+	acceptAnyName := true
 
 	// Create checkboxes for light curve prefixes
 	signalCheck := widget.NewCheck("signal", func(checked bool) { lightCurvePrefixes["signal"] = checked })
-	signalCheck.SetChecked(true)
 	appsumCheck := widget.NewCheck("appsum", func(checked bool) { lightCurvePrefixes["appsum"] = checked })
 	avgbkgCheck := widget.NewCheck("avgbkg", func(checked bool) { lightCurvePrefixes["avgbkg"] = checked })
 	stdbkgCheck := widget.NewCheck("stdbkg", func(checked bool) { lightCurvePrefixes["stdbkg"] = checked })
@@ -1390,9 +1390,11 @@ func main() {
 	ycentroidCheck := widget.NewCheck("ycentroid", func(checked bool) { lightCurvePrefixes["ycentroid"] = checked })
 	hitDefectCheck := widget.NewCheck("hit-defect", func(checked bool) { lightCurvePrefixes["hit-defect"] = checked })
 	anyNameCheck := widget.NewCheck("any name", func(checked bool) { acceptAnyName = checked })
+	anyNameCheck.SetChecked(true)
 
 	prefixCheckboxes := container.NewVBox(
 		widget.NewLabel("Light curve prefixes to include:"),
+		anyNameCheck,
 		signalCheck,
 		appsumCheck,
 		avgbkgCheck,
@@ -1402,7 +1404,6 @@ func main() {
 		xcentroidCheck,
 		ycentroidCheck,
 		hitDefectCheck,
-		anyNameCheck,
 	)
 
 	tab2Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 200, B: 230, A: 255})
@@ -1839,7 +1840,7 @@ func main() {
 	}
 
 	// Button to load a CSV file
-	loadCSVBtn := widget.NewButton("Load CSV", func() {
+	loadCSVBtn := widget.NewButton("Open browser to select csv file", func() {
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -1931,6 +1932,7 @@ func main() {
 			plotStatusLabel.SetText(fmt.Sprintf("Loaded %d light curves (%d shown) with %d data points. Click to toggle display.",
 				len(data.Columns), len(lightCurveListData), len(data.TimeValues)))
 		}, w)
+		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".csv"}))
 		fileDialog.Resize(fyne.NewSize(1200, 800))
 		fileDialog.Show()
 	})
@@ -1983,7 +1985,7 @@ func main() {
 		nil,                  // right
 		lightCurveListScroll, // center
 	)))
-	tab3 := container.NewTabItem("Read/Write csv files", tab3Content)
+	tab3 := container.NewTabItem("Load csv file", tab3Content)
 
 	// Tab 4: Reports
 	tab4Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 200, B: 220, A: 255})
