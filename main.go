@@ -39,7 +39,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.16"
+const Version = "1.0.17"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -246,16 +246,17 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 	var headerLine string
 	var skippedLines []string
 
-	// Read lines, saving comments and blank lines for later use
+	// Read lines, accumulating header lines until we find a line starting with "FrameNum,"
+	foundHeader := false
 	for scanner.Scan() {
 		line := scanner.Text()
-		trimmedLine := strings.TrimSpace(line)
-		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "#") {
-			skippedLines = append(skippedLines, line)
-			continue
-		}
-		if headerLine == "" {
-			headerLine = line
+		if !foundHeader {
+			if strings.HasPrefix(line, "FrameNum,") {
+				headerLine = line
+				foundHeader = true
+			} else {
+				skippedLines = append(skippedLines, line)
+			}
 		} else {
 			dataLines = append(dataLines, line)
 		}
@@ -266,7 +267,7 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 	}
 
 	if headerLine == "" {
-		return nil, fmt.Errorf("no valid header line found")
+		return nil, fmt.Errorf("no header line starting with 'FrameNum,' found")
 	}
 
 	// Parse header to get column names
