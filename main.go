@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.21"
+const Version = "1.0.22"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1132,6 +1132,16 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 	}
 
 	if closestSeries >= 0 && closestIdx >= 0 {
+		// If clicking on the already selected point, deselect it
+		if p.selectedSeries == closestSeries && p.selectedIndex == closestIdx {
+			p.selectedSeries = -1
+			p.selectedIndex = -1
+			p.selectedPointDataIndex = -1
+			p.selectedSeriesName = ""
+			p.Refresh()
+			return
+		}
+
 		p.selectedSeries = closestSeries
 		p.selectedIndex = closestIdx
 		// Save stable identifiers for preserving selection across rebuilds
@@ -2214,7 +2224,7 @@ func main() {
 		nil,                  // right
 		lightCurveListScroll, // center
 	)))
-	tab3 := container.NewTabItem("csv file ops", tab3Content)
+	tab3 := container.NewTabItem(".csv ops", tab3Content)
 
 	// Tab 4: Reports
 	tab4Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 200, B: 220, A: 255})
@@ -2231,11 +2241,77 @@ func main() {
 	// Tab 5: Block integration
 	tab5Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 220, B: 200, A: 255})
 	tab5Content := container.NewStack(tab5Bg, container.NewPadded(container.NewVBox(
-		widget.NewLabel("Block integration"),
+		widget.NewLabel("BlockInt"),
 	)))
-	tab5 := container.NewTabItem("Block integration", tab5Content)
+	tab5 := container.NewTabItem("BlockInt", tab5Content)
 
-	tabs := container.NewAppTabs(tab2, tab3, tab4, tab5)
+	// Tab 6: Flash tags
+	tab6Bg := canvas.NewRectangle(color.RGBA{R: 220, G: 200, B: 220, A: 255})
+
+	// Alevel and Blevel display labels (read-only)
+	alevelValue := widget.NewLabel("---")
+	blevelValue := widget.NewLabel("---")
+
+	// Button to compute both Alevel and Blevel from the selected point
+	computeLevelsBtn := widget.NewButton("Compute Levels", func() {
+		// Check if a point is selected
+		if lightCurvePlot.selectedSeries < 0 || lightCurvePlot.selectedIndex < 0 {
+			dialog.ShowError(fmt.Errorf("no point selected - click on a point first"), w)
+			return
+		}
+
+		// Check if we have loaded data
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		// Get the selected series and find the data
+		series := lightCurvePlot.series[lightCurvePlot.selectedSeries]
+		selectedIdx := lightCurvePlot.selectedIndex
+
+		// Compute Alevel: average of 10 points to the left (before selected point)
+		aCount := 0
+		aSum := 0.0
+		for i := selectedIdx - 1; i >= 0 && aCount < 10; i-- {
+			aSum += series.Points[i].Y
+			aCount++
+		}
+
+		if aCount == 0 {
+			alevelValue.SetText("N/A")
+		} else {
+			alevel := aSum / float64(aCount)
+			alevelValue.SetText(fmt.Sprintf("%.4f", alevel))
+			logAction(fmt.Sprintf("Computed Alevel: %.4f (average of %d points)", alevel, aCount))
+		}
+
+		// Compute Blevel: average of 10 points to the right (after the selected point)
+		bCount := 0
+		bSum := 0.0
+		for i := selectedIdx + 1; i < len(series.Points) && bCount < 10; i++ {
+			bSum += series.Points[i].Y
+			bCount++
+		}
+
+		if bCount == 0 {
+			blevelValue.SetText("N/A")
+		} else {
+			blevel := bSum / float64(bCount)
+			blevelValue.SetText(fmt.Sprintf("%.4f", blevel))
+			logAction(fmt.Sprintf("Computed Blevel: %.4f (average of %d points)", blevel, bCount))
+		}
+	})
+
+	tab6Content := container.NewStack(tab6Bg, container.NewPadded(container.NewVBox(
+		widget.NewLabel("Flash tags"),
+		container.NewHBox(widget.NewLabel("Alevel:"), alevelValue),
+		container.NewHBox(widget.NewLabel("Blevel:"), blevelValue),
+		computeLevelsBtn,
+	)))
+	tab6 := container.NewTabItem("Flash tags", tab6Content)
+
+	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab4)
 
 	// Helper function to run IOTAdiffraction with a given parameter file
 	runIOTAdiffraction := func(paramFilePath string) {
