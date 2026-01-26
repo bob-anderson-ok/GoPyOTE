@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.23"
+const Version = "1.0.24"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2248,23 +2248,29 @@ func main() {
 	// Tab 6: Flash tags
 	tab6Bg := canvas.NewRectangle(color.RGBA{R: 220, G: 200, B: 220, A: 255})
 
-	// Alevel, Blevel, and flashEdgeNum display labels (read-only)
+	// Alevel, Blevel display labels (read-only)
 	alevelValue := widget.NewLabel("---")
 	blevelValue := widget.NewLabel("---")
-	flashEdgeNumValue := widget.NewLabel("---")
 
-	// Button to compute both Alevel and Blevel from the selected point
-	computeLevelsBtn := widget.NewButton("Compute Levels", func() {
+	// Two flashEdgeNum calculations with stored values
+	var savedFlashEdge1, savedFlashEdge2 float64
+	flashEdge1Valid := false
+	flashEdge2Valid := false
+	flashEdge1Value := widget.NewLabel("---")
+	flashEdge2Value := widget.NewLabel("---")
+
+	// Helper function to compute flash edge number from the current selection
+	computeFlashEdge := func() (float64, bool) {
 		// Check if a point is selected
 		if lightCurvePlot.selectedSeries < 0 || lightCurvePlot.selectedIndex < 0 {
 			dialog.ShowError(fmt.Errorf("no point selected - click on a point first"), w)
-			return
+			return 0, false
 		}
 
 		// Check if we have loaded data
 		if loadedLightCurveData == nil {
 			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
-			return
+			return 0, false
 		}
 
 		// Get the selected series and find the data
@@ -2272,7 +2278,7 @@ func main() {
 		selectedIdx := lightCurvePlot.selectedIndex
 		selectedPointValue := series.Points[selectedIdx].Y
 
-		// Get the frame number of the selected point for logging
+		// Get the frame number of the selected point
 		selectedFrameNum := float64(series.Points[selectedIdx].Index)
 		if loadedLightCurveData != nil && series.Points[selectedIdx].Index < len(loadedLightCurveData.FrameNumbers) {
 			selectedFrameNum = loadedLightCurveData.FrameNumbers[series.Points[selectedIdx].Index]
@@ -2323,25 +2329,68 @@ func main() {
 		if alevelValid && blevelValid {
 			denominator := blevel - alevel
 			if denominator == 0 {
-				flashEdgeNumValue.SetText("N/A (div by 0)")
 				logAction("Flash tag: flashEdgeNum N/A (division by zero, Blevel equals Alevel)")
-			} else {
-				flashEdgeNum := (blevel-selectedPointValue)/denominator + selectedFrameNum - 1.0
-				flashEdgeNumValue.SetText(fmt.Sprintf("%.4f", flashEdgeNum))
-				logAction(fmt.Sprintf("Flash tag: flashEdgeNum = %.4f", flashEdgeNum))
+				return 0, false
 			}
+			flashEdgeNum := (blevel-selectedPointValue)/denominator + selectedFrameNum - 1.0
+			logAction(fmt.Sprintf("Flash tag: flashEdgeNum = %.4f", flashEdgeNum))
+			return flashEdgeNum, true
+		}
+		logAction("Flash tag: flashEdgeNum N/A (Alevel or Blevel unavailable)")
+		return 0, false
+	}
+
+	// Button to compute and save flash edge 1
+	computeEdge1Btn := widget.NewButton("Set Edge 1", func() {
+		if val, ok := computeFlashEdge(); ok {
+			savedFlashEdge1 = val
+			flashEdge1Valid = true
+			flashEdge1Value.SetText(fmt.Sprintf("%.4f", val))
+			logAction(fmt.Sprintf("Flash tag: Saved Edge 1 = %.4f", val))
 		} else {
-			flashEdgeNumValue.SetText("N/A")
-			logAction("Flash tag: flashEdgeNum N/A (Alevel or Blevel unavailable)")
+			flashEdge1Value.SetText("N/A")
+			flashEdge1Valid = false
 		}
 	})
+
+	// Button to compute and save flash edge 2
+	computeEdge2Btn := widget.NewButton("Set Edge 2", func() {
+		if val, ok := computeFlashEdge(); ok {
+			savedFlashEdge2 = val
+			flashEdge2Valid = true
+			flashEdge2Value.SetText(fmt.Sprintf("%.4f", val))
+			logAction(fmt.Sprintf("Flash tag: Saved Edge 2 = %.4f", val))
+		} else {
+			flashEdge2Value.SetText("N/A")
+			flashEdge2Valid = false
+		}
+	})
+
+	// Suppress unused variable warnings (these will be used for further calculations)
+	_ = savedFlashEdge1
+	_ = savedFlashEdge2
+	_ = flashEdge1Valid
+	_ = flashEdge2Valid
+
+	// Timestamp entry boxes
+	timestamp1Entry := NewFocusLossEntry()
+	timestamp1Entry.SetPlaceHolder("hh:mm:ss.ssss")
+
+	timestamp2Entry := NewFocusLossEntry()
+	timestamp2Entry.SetPlaceHolder("hh:mm:ss.ssss")
+
+	// Wrap timestamp entries in containers
+	timestamp1Container := container.New(layout.NewGridWrapLayout(fyne.NewSize(187.5, 36)), timestamp1Entry)
+	timestamp2Container := container.New(layout.NewGridWrapLayout(fyne.NewSize(187.5, 36)), timestamp2Entry)
 
 	tab6Content := container.NewStack(tab6Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Flash tags"),
 		container.NewHBox(widget.NewLabel("Alevel:"), alevelValue),
 		container.NewHBox(widget.NewLabel("Blevel:"), blevelValue),
-		container.NewHBox(widget.NewLabel("flashEdgeNum:"), flashEdgeNumValue),
-		computeLevelsBtn,
+		container.NewHBox(computeEdge1Btn, widget.NewLabel("Edge 1:"), flashEdge1Value),
+		container.NewHBox(computeEdge2Btn, widget.NewLabel("Edge 2:"), flashEdge2Value),
+		container.NewHBox(widget.NewLabel("Timestamp 1:"), timestamp1Container),
+		container.NewHBox(widget.NewLabel("Timestamp 2:"), timestamp2Container),
 	)))
 	tab6 := container.NewTabItem("Flash tags", tab6Content)
 
