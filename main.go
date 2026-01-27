@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.28"
+const Version = "1.0.29"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1074,6 +1074,7 @@ func (p *LightCurvePlot) SetSeries(series []PlotSeries) {
 	p.selectedIndex2 = -1
 
 	// Try to restore selection 1 based on saved stable identifiers
+	// Keep stable identifiers even if the point is off-screen (will restore when zoomed back)
 	if p.selectedPointDataIndex >= 0 && p.selectedSeriesName != "" {
 		for s, ser := range series {
 			if ser.Name == p.selectedSeriesName {
@@ -1089,15 +1090,12 @@ func (p *LightCurvePlot) SetSeries(series []PlotSeries) {
 				break
 			}
 		}
-		// If not found, invalidate point 1
-		if p.selectedSeries < 0 {
-			p.SelectedPoint1Valid = false
-			p.selectedPointDataIndex = -1
-			p.selectedSeriesName = ""
-		}
+		// If not found in the current view, keep stable identifiers but don't highlight
+		// Selection will be restored when the point comes back into view
 	}
 
 	// Try to restore selection 2 based on saved stable identifiers
+	// Keep stable identifiers even if the point is off-screen (will restore when zoomed back)
 	if p.selectedPointDataIndex2 >= 0 && p.selectedSeriesName2 != "" {
 		for s, ser := range series {
 			if ser.Name == p.selectedSeriesName2 {
@@ -1113,12 +1111,8 @@ func (p *LightCurvePlot) SetSeries(series []PlotSeries) {
 				break
 			}
 		}
-		// If not found, invalidate point 2
-		if p.selectedSeries2 < 0 {
-			p.SelectedPoint2Valid = false
-			p.selectedPointDataIndex2 = -1
-			p.selectedSeriesName2 = ""
-		}
+		// If not found in the current view, keep stable identifiers but don't highlight
+		// Selection will be restored when the point comes back into view
 	}
 
 	p.calculateBounds()
