@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.29"
+const Version = "1.0.30"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -892,6 +892,7 @@ type LightCurvePlot struct {
 	pointRadius       float32
 	onPointClicked    func(point PlotPoint)
 	onScroll          func(position fyne.Position, scrollDelta float32) // Callback for scroll events
+	onWarning         func(message string)                              // Callback for warnings
 	selectedSeries    int
 	selectedIndex     int
 	selectedSeries2   int
@@ -972,6 +973,7 @@ func (p *LightCurvePlot) SetYBounds(minY, maxY float64) {
 	if maxY > minY {
 		p.minY = minY
 		p.maxY = maxY
+		p.updateMargins()
 		p.Refresh()
 	}
 }
@@ -984,6 +986,7 @@ func (p *LightCurvePlot) GetYBounds() (float64, float64) {
 // SetUseTimestampTicks sets whether X axis ticks should be formatted as timestamps
 func (p *LightCurvePlot) SetUseTimestampTicks(use bool) {
 	p.useTimestampTicks = use
+	p.updateMargins()
 	p.Refresh()
 }
 
@@ -995,6 +998,11 @@ func (p *LightCurvePlot) GetUseTimestampTicks() bool {
 // SetOnScroll sets the callback for scroll events
 func (p *LightCurvePlot) SetOnScroll(callback func(position fyne.Position, scrollDelta float32)) {
 	p.onScroll = callback
+}
+
+// SetOnWarning sets the callback for warning messages
+func (p *LightCurvePlot) SetOnWarning(callback func(message string)) {
+	p.onWarning = callback
 }
 
 // Scrolled handles scroll wheel events
@@ -1063,6 +1071,43 @@ func (p *LightCurvePlot) calculateBounds() {
 	p.maxX += rangeX * 0.05
 	p.minY -= rangeY * 0.05
 	p.maxY += rangeY * 0.05
+
+	// Update margins based on tick label widths
+	p.updateMargins()
+}
+
+// updateMargins calculates dynamic margins based on tick label widths
+func (p *LightCurvePlot) updateMargins() {
+	// Estimate left margin based on Y tick label width
+	// Find the widest Y value that would be displayed
+	maxYStr := fmt.Sprintf("%.0f", p.maxY)
+	minYStr := fmt.Sprintf("%.0f", p.minY)
+	maxLen := len(maxYStr)
+	if len(minYStr) > maxLen {
+		maxLen = len(minYStr)
+	}
+	// Each character is approximately 7 pixels wide, plus padding for axis label
+	// Base: 45 pixels for Y axis label and padding, plus ~8 pixels per character
+	p.marginLeft = float32(45 + maxLen*8)
+	if p.marginLeft < 60 {
+		p.marginLeft = 60
+	}
+	if p.marginLeft > 120 {
+		p.marginLeft = 120
+	}
+
+	// Estimate bottom margin based on X tick label width
+	// For timestamp format (hh:mm:ss.ssss), need more space
+	if p.useTimestampTicks {
+		p.marginBottom = 55
+	} else {
+		maxXStr := fmt.Sprintf("%.0f", p.maxX)
+		if len(maxXStr) > 6 {
+			p.marginBottom = 50
+		} else {
+			p.marginBottom = 45
+		}
+	}
 }
 
 // SetSeries updates the plot data
@@ -1144,7 +1189,14 @@ func (p *LightCurvePlot) screenToData(pos fyne.Position, size fyne.Size) (float6
 	plotWidth := size.Width - p.marginLeft - p.marginRight
 	plotHeight := size.Height - p.marginTop - p.marginBottom
 
-	// Convert screen position to data coordinates
+	// Avoid division by zero
+	if plotWidth <= 0 {
+		plotWidth = 1
+	}
+	if plotHeight <= 0 {
+		plotHeight = 1
+	}
+
 	dataX := p.minX + float64((pos.X-p.marginLeft)/plotWidth)*(p.maxX-p.minX)
 	dataY := p.maxY - float64((pos.Y-p.marginTop)/plotHeight)*(p.maxY-p.minY)
 
@@ -1157,21 +1209,36 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 	}
 
 	size := p.Size()
-	clickX, clickY := p.screenToData(pos, size)
 
-	// Find the closest point in data space
-	clickRadius := (p.maxX - p.minX) * 0.03 // 3% of data range
+	// Convert click position to data coordinates
+	clickDataX, clickDataY := p.screenToData(pos, size)
+
+	// Find the closest point by X coordinate (frame number), then check Y is reasonable
+	// Use 2% of X range as the search radius for X
+	xRange := p.maxX - p.minX
+	yRange := p.maxY - p.minY
+	if xRange <= 0 {
+		xRange = 1
+	}
+	if yRange <= 0 {
+		yRange = 1
+	}
+
+	xTolerance := xRange * 0.02 // 2% of X range
+	yTolerance := yRange * 0.15 // 15% of Y range for vertical tolerance
+
 	var closestSeries = -1
 	var closestIdx = -1
-	var closestDist = clickRadius * 2
+	var closestXDist = xTolerance * 2
 
 	for s, series := range p.series {
 		for i, pt := range series.Points {
-			dx := pt.X - clickX
-			dy := (pt.Y - clickY) * (p.maxX - p.minX) / (p.maxY - p.minY) // Normalize
-			dist := math.Sqrt(dx*dx + dy*dy)
-			if dist < clickRadius && dist < closestDist {
-				closestDist = dist
+			xDist := math.Abs(pt.X - clickDataX)
+			yDist := math.Abs(pt.Y - clickDataY)
+
+			// Point must be within Y tolerance and closer in X than previous best
+			if xDist < xTolerance && yDist < yTolerance && xDist < closestXDist {
+				closestXDist = xDist
 				closestSeries = s
 				closestIdx = i
 			}
@@ -1241,6 +1308,12 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 
 		// If point 2 is not selected, select as point 2
 		if p.selectedSeries2 < 0 {
+			// Warn if point 2 is on a different light curve than point 1
+			if p.selectedSeries >= 0 && closestSeries != p.selectedSeries {
+				if p.onWarning != nil {
+					p.onWarning("Point 2 is on a different light curve than Point 1")
+				}
+			}
 			p.selectedSeries2 = closestSeries
 			p.selectedIndex2 = closestIdx
 			p.selectedPointDataIndex2 = clickedPoint.Index
@@ -2155,6 +2228,11 @@ func main() {
 		return wasZoomed
 	}
 
+	// Set up a warning callback for the plot
+	lightCurvePlot.SetOnWarning(func(message string) {
+		dialog.ShowInformation("Warning", message, w)
+	})
+
 	// Set up scroll wheel zoom on the plot
 	lightCurvePlot.SetOnScroll(func(position fyne.Position, scrollDelta float32) {
 		if loadedLightCurveData == nil || maxFrameNum == minFrameNum {
@@ -2630,9 +2708,34 @@ func main() {
 			timestamp2Seconds, timestamp1Seconds, savedFlashEdge2, savedFlashEdge1, timePerFrame))
 	})
 
+	// Tzero calculation: Tzero = Timestamp 1 - (edge1 - start frame) * time per frame
+	tzeroValue := widget.NewLabel("---")
+	var tzero float64
+	calcTzeroBtn := widget.NewButton("Calc Tzero", func() {
+		if !timestamp1Valid {
+			dialog.ShowError(fmt.Errorf("timestamp 1 must be entered"), w)
+			tzeroValue.SetText("N/A")
+			return
+		}
+		if !flashEdge1Valid {
+			dialog.ShowError(fmt.Errorf("edge 1 must be set"), w)
+			tzeroValue.SetText("N/A")
+			return
+		}
+		if timePerFrame == 0 {
+			dialog.ShowError(fmt.Errorf("time per frame must be calculated first"), w)
+			tzeroValue.SetText("N/A")
+			return
+		}
+		tzero = timestamp1Seconds - (savedFlashEdge1-minFrameNum)*timePerFrame
+		tzeroValue.SetText(formatSecondsAsTimestamp(tzero))
+		logAction(fmt.Sprintf("Flash tag: Tzero = %.4f - (%.4f - %.0f) * %.6f = %.4f (%s)",
+			timestamp1Seconds, savedFlashEdge1, minFrameNum, timePerFrame, tzero, formatSecondsAsTimestamp(tzero)))
+	})
+
 	// Suppress unused variable warning
 	_ = cameraExposureTime
-	_ = timePerFrame
+	_ = tzero
 
 	tab6Content := container.NewStack(tab6Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Flash tags"),
@@ -2644,6 +2747,7 @@ func main() {
 		container.NewHBox(widget.NewLabel("Timestamp 2:"), timestamp2Container),
 		container.NewHBox(widget.NewLabel("Exposure time:"), exposureTimeContainer),
 		container.NewHBox(calcTimePerFrameBtn, widget.NewLabel("Time/frame:"), timePerFrameValue),
+		container.NewHBox(calcTzeroBtn, widget.NewLabel("Tzero:"), tzeroValue),
 	)))
 	tab6 := container.NewTabItem("Flash tags", tab6Content)
 
