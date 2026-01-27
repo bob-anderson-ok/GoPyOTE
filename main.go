@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.24"
+const Version = "1.0.25"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -894,12 +894,27 @@ type LightCurvePlot struct {
 	onScroll          func(position fyne.Position, scrollDelta float32) // Callback for scroll events
 	selectedSeries    int
 	selectedIndex     int
+	selectedSeries2   int
+	selectedIndex2    int
 	xAxisLabel        string
 	useTimestampTicks bool // When true, format X axis ticks as timestamps
 
 	// Stable identifiers for preserving selection across rebuilds
-	selectedPointDataIndex int    // Original data index of a selected point
-	selectedSeriesName     string // Name of the series containing the selected point
+	selectedPointDataIndex  int    // Original data index of selected point 1
+	selectedSeriesName      string // Name of the series containing selected point 1
+	selectedPointDataIndex2 int    // Original data index of selected point 2
+	selectedSeriesName2     string // Name of the series containing selected point 2
+
+	// Selected point values available for later internal use
+	SelectedPoint1Valid bool
+	SelectedPoint1Frame float64
+	SelectedPoint1Value float64
+	SelectedPoint2Valid bool
+	SelectedPoint2Frame float64
+	SelectedPoint2Value float64
+
+	// Selection mode
+	SingleSelectMode bool // When true, only allow single point selection
 
 	// Plot bounds for coordinate conversion
 	minX, maxX, minY, maxY float64
@@ -910,18 +925,22 @@ type LightCurvePlot struct {
 // NewLightCurvePlot creates a new light curve plot widget
 func NewLightCurvePlot(series []PlotSeries, onPointClicked func(PlotPoint)) *LightCurvePlot {
 	p := &LightCurvePlot{
-		series:                 series,
-		pointRadius:            5,
-		onPointClicked:         onPointClicked,
-		selectedSeries:         -1,
-		selectedIndex:          -1,
-		selectedPointDataIndex: -1,
-		selectedSeriesName:     "",
-		xAxisLabel:             "Time",
-		marginLeft:             75,
-		marginRight:            15,
-		marginTop:              15,
-		marginBottom:           45,
+		series:                  series,
+		pointRadius:             5,
+		onPointClicked:          onPointClicked,
+		selectedSeries:          -1,
+		selectedIndex:           -1,
+		selectedSeries2:         -1,
+		selectedIndex2:          -1,
+		selectedPointDataIndex:  -1,
+		selectedSeriesName:      "",
+		selectedPointDataIndex2: -1,
+		selectedSeriesName2:     "",
+		xAxisLabel:              "Time",
+		marginLeft:              75,
+		marginRight:             15,
+		marginTop:               15,
+		marginBottom:            45,
 	}
 	p.calculateBounds()
 	p.ExtendBaseWidget(p)
@@ -1051,8 +1070,10 @@ func (p *LightCurvePlot) SetSeries(series []PlotSeries) {
 	p.series = series
 	p.selectedSeries = -1
 	p.selectedIndex = -1
+	p.selectedSeries2 = -1
+	p.selectedIndex2 = -1
 
-	// Try to restore the selection based on saved stable identifiers
+	// Try to restore selection 1 based on saved stable identifiers
 	if p.selectedPointDataIndex >= 0 && p.selectedSeriesName != "" {
 		for s, ser := range series {
 			if ser.Name == p.selectedSeriesName {
@@ -1060,11 +1081,43 @@ func (p *LightCurvePlot) SetSeries(series []PlotSeries) {
 					if pt.Index == p.selectedPointDataIndex {
 						p.selectedSeries = s
 						p.selectedIndex = i
+						p.SelectedPoint1Frame = pt.X
+						p.SelectedPoint1Value = pt.Y
 						break
 					}
 				}
 				break
 			}
+		}
+		// If not found, invalidate point 1
+		if p.selectedSeries < 0 {
+			p.SelectedPoint1Valid = false
+			p.selectedPointDataIndex = -1
+			p.selectedSeriesName = ""
+		}
+	}
+
+	// Try to restore selection 2 based on saved stable identifiers
+	if p.selectedPointDataIndex2 >= 0 && p.selectedSeriesName2 != "" {
+		for s, ser := range series {
+			if ser.Name == p.selectedSeriesName2 {
+				for i, pt := range ser.Points {
+					if pt.Index == p.selectedPointDataIndex2 {
+						p.selectedSeries2 = s
+						p.selectedIndex2 = i
+						p.SelectedPoint2Frame = pt.X
+						p.SelectedPoint2Value = pt.Y
+						break
+					}
+				}
+				break
+			}
+		}
+		// If not found, invalidate point 2
+		if p.selectedSeries2 < 0 {
+			p.SelectedPoint2Valid = false
+			p.selectedPointDataIndex2 = -1
+			p.selectedSeriesName2 = ""
 		}
 	}
 
@@ -1132,24 +1185,93 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 	}
 
 	if closestSeries >= 0 && closestIdx >= 0 {
-		// If clicking on the already selected point, deselect it
+		clickedPoint := p.series[closestSeries].Points[closestIdx]
+
+		// If clicking on point 1, deselect it
 		if p.selectedSeries == closestSeries && p.selectedIndex == closestIdx {
 			p.selectedSeries = -1
 			p.selectedIndex = -1
 			p.selectedPointDataIndex = -1
 			p.selectedSeriesName = ""
+			p.SelectedPoint1Valid = false
+			p.SelectedPoint1Frame = 0
+			p.SelectedPoint1Value = 0
 			p.Refresh()
 			return
 		}
 
+		// Single select mode: just replace point 1
+		if p.SingleSelectMode {
+			p.selectedSeries = closestSeries
+			p.selectedIndex = closestIdx
+			p.selectedPointDataIndex = clickedPoint.Index
+			p.selectedSeriesName = p.series[closestSeries].Name
+			p.SelectedPoint1Valid = true
+			p.SelectedPoint1Frame = clickedPoint.X
+			p.SelectedPoint1Value = clickedPoint.Y
+			p.Refresh()
+			if p.onPointClicked != nil {
+				p.onPointClicked(clickedPoint)
+			}
+			return
+		}
+
+		// If clicking on point 2, deselect it
+		if p.selectedSeries2 == closestSeries && p.selectedIndex2 == closestIdx {
+			p.selectedSeries2 = -1
+			p.selectedIndex2 = -1
+			p.selectedPointDataIndex2 = -1
+			p.selectedSeriesName2 = ""
+			p.SelectedPoint2Valid = false
+			p.SelectedPoint2Frame = 0
+			p.SelectedPoint2Value = 0
+			p.Refresh()
+			return
+		}
+
+		// If point 1 is not selected, select as point 1
+		if p.selectedSeries < 0 {
+			p.selectedSeries = closestSeries
+			p.selectedIndex = closestIdx
+			p.selectedPointDataIndex = clickedPoint.Index
+			p.selectedSeriesName = p.series[closestSeries].Name
+			p.SelectedPoint1Valid = true
+			p.SelectedPoint1Frame = clickedPoint.X
+			p.SelectedPoint1Value = clickedPoint.Y
+			p.Refresh()
+			if p.onPointClicked != nil {
+				p.onPointClicked(clickedPoint)
+			}
+			return
+		}
+
+		// If point 2 is not selected, select as point 2
+		if p.selectedSeries2 < 0 {
+			p.selectedSeries2 = closestSeries
+			p.selectedIndex2 = closestIdx
+			p.selectedPointDataIndex2 = clickedPoint.Index
+			p.selectedSeriesName2 = p.series[closestSeries].Name
+			p.SelectedPoint2Valid = true
+			p.SelectedPoint2Frame = clickedPoint.X
+			p.SelectedPoint2Value = clickedPoint.Y
+			p.Refresh()
+			if p.onPointClicked != nil {
+				p.onPointClicked(clickedPoint)
+			}
+			return
+		}
+
+		// Both points are selected, replace point 1
 		p.selectedSeries = closestSeries
 		p.selectedIndex = closestIdx
-		// Save stable identifiers for preserving selection across rebuilds
-		p.selectedPointDataIndex = p.series[closestSeries].Points[closestIdx].Index
+		p.selectedPointDataIndex = clickedPoint.Index
 		p.selectedSeriesName = p.series[closestSeries].Name
+		p.SelectedPoint1Valid = true
+		p.SelectedPoint1Frame = clickedPoint.X
+		p.SelectedPoint1Value = clickedPoint.Y
 		p.Refresh()
 		if p.onPointClicked != nil {
-			p.onPointClicked(p.series[closestSeries].Points[closestIdx])
+			p.onPointClicked(clickedPoint)
 		}
 	}
 }
@@ -1282,26 +1404,39 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
 		scatter.GlyphStyle.Radius = vg.Points(4)
 
-		// Highlight the selected point
-		if s == p.selectedSeries && p.selectedIndex >= 0 && p.selectedIndex < len(series.Points) {
-			// Draw regular points first
-			plt.Add(scatter)
+		// Draw regular scatter points
+		plt.Add(scatter)
 
-			// Draw the selected point larger and in red
+		// Highlight selected point 1 (red)
+		if s == p.selectedSeries && p.selectedIndex >= 0 && p.selectedIndex < len(series.Points) {
 			selectedPt := make(plotter.XYs, 1)
 			selectedPt[0].X = series.Points[p.selectedIndex].X
 			selectedPt[0].Y = series.Points[p.selectedIndex].Y
 			selectedScatter, err := plotter.NewScatter(selectedPt)
 			if err != nil {
-				fmt.Printf("Error creating selected point scatter: %v\n", err)
+				fmt.Printf("Error creating selected point 1 scatter: %v\n", err)
 			} else {
-				selectedScatter.Color = color.RGBA{R: 255, G: 50, B: 50, A: 255}
+				selectedScatter.Color = color.RGBA{R: 255, G: 50, B: 50, A: 255} // Red
 				selectedScatter.GlyphStyle.Shape = draw.CircleGlyph{}
 				selectedScatter.GlyphStyle.Radius = vg.Points(7)
 				plt.Add(selectedScatter)
 			}
-		} else {
-			plt.Add(scatter)
+		}
+
+		// Highlight selected point 2 (blue)
+		if s == p.selectedSeries2 && p.selectedIndex2 >= 0 && p.selectedIndex2 < len(series.Points) {
+			selectedPt := make(plotter.XYs, 1)
+			selectedPt[0].X = series.Points[p.selectedIndex2].X
+			selectedPt[0].Y = series.Points[p.selectedIndex2].Y
+			selectedScatter, err := plotter.NewScatter(selectedPt)
+			if err != nil {
+				fmt.Printf("Error creating selected point 2 scatter: %v\n", err)
+			} else {
+				selectedScatter.Color = color.RGBA{R: 50, G: 50, B: 255, A: 255} // Blue
+				selectedScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+				selectedScatter.GlyphStyle.Radius = vg.Points(7)
+				plt.Add(selectedScatter)
+			}
 		}
 
 		// Add to legend
@@ -2076,8 +2211,8 @@ func main() {
 		}
 	})
 
-	// Button to load a CSV file
-	loadCSVBtn := widget.NewButton("Open browser to select csv file", func() {
+	// Function to open the CSV file dialog
+	openCSVDialog := func() {
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -2174,6 +2309,11 @@ func main() {
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".csv"}))
 		fileDialog.Resize(fyne.NewSize(1200, 800))
 		fileDialog.Show()
+	}
+
+	// Button to load a CSV file
+	loadCSVBtn := widget.NewButton("Open browser to select csv file", func() {
+		openCSVDialog()
 	})
 
 	lightCurveListScroll := container.NewVScroll(lightCurveList)
@@ -2327,6 +2467,12 @@ func main() {
 
 		// Compute flashEdgeNum = (Blevel - selected point value) / (Blevel - Alevel) + selected point frame num - 1.0
 		if alevelValid && blevelValid {
+			// Check for rising edge (Alevel must be less than Blevel)
+			if alevel > blevel {
+				dialog.ShowError(fmt.Errorf("flash tag edges must always be rising edges (falling edges are subject to slow responses which could cause timing inaccuracies)"), w)
+				logAction(fmt.Sprintf("Flash tag: Error - not a rising edge"))
+				return 0, false
+			}
 			denominator := blevel - alevel
 			if denominator == 0 {
 				logAction("Flash tag: flashEdgeNum N/A (division by zero, Blevel equals Alevel)")
@@ -2395,6 +2541,30 @@ func main() {
 	tab6 := container.NewTabItem("Flash tags", tab6Content)
 
 	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab4)
+
+	// Handle tab selection events
+	tabs.OnSelected = func(tab *container.TabItem) {
+		if tab == tab6 {
+			// Flash tags tab: enable single select mode
+			lightCurvePlot.SingleSelectMode = true
+			// Clear point 2 selection when entering the Flash tags tab
+			lightCurvePlot.selectedSeries2 = -1
+			lightCurvePlot.selectedIndex2 = -1
+			lightCurvePlot.selectedPointDataIndex2 = -1
+			lightCurvePlot.selectedSeriesName2 = ""
+			lightCurvePlot.SelectedPoint2Valid = false
+			lightCurvePlot.SelectedPoint2Frame = 0
+			lightCurvePlot.SelectedPoint2Value = 0
+			lightCurvePlot.Refresh()
+		} else {
+			lightCurvePlot.SingleSelectMode = false
+		}
+
+		if tab == tab3 {
+			// CSV ops tab: automatically open file selection dialog
+			openCSVDialog()
+		}
+	}
 
 	// Helper function to run IOTAdiffraction with a given parameter file
 	runIOTAdiffraction := func(paramFilePath string) {
