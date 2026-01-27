@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.25"
+const Version = "1.0.26"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2512,22 +2512,95 @@ func main() {
 		}
 	})
 
-	// Suppress unused variable warnings (these will be used for further calculations)
-	_ = savedFlashEdge1
-	_ = savedFlashEdge2
-	_ = flashEdge1Valid
-	_ = flashEdge2Valid
+	// Timestamp entry boxes with parsed values
+	var timestamp1Seconds, timestamp2Seconds float64
+	var timestamp1Valid, timestamp2Valid bool
 
-	// Timestamp entry boxes
 	timestamp1Entry := NewFocusLossEntry()
 	timestamp1Entry.SetPlaceHolder("hh:mm:ss.ssss")
+	timestamp1Entry.OnSubmitted = func(text string) {
+		if text == "" {
+			timestamp1Valid = false
+			return
+		}
+		if val, ok := parseTimestampInput(text); ok {
+			timestamp1Seconds = val
+			timestamp1Valid = true
+			logAction(fmt.Sprintf("Flash tag: Timestamp 1 = %s (%.4f seconds)", text, val))
+		} else {
+			timestamp1Valid = false
+			dialog.ShowError(fmt.Errorf("invalid timestamp format: %s", text), w)
+		}
+	}
 
 	timestamp2Entry := NewFocusLossEntry()
 	timestamp2Entry.SetPlaceHolder("hh:mm:ss.ssss")
+	timestamp2Entry.OnSubmitted = func(text string) {
+		if text == "" {
+			timestamp2Valid = false
+			return
+		}
+		if val, ok := parseTimestampInput(text); ok {
+			timestamp2Seconds = val
+			timestamp2Valid = true
+			logAction(fmt.Sprintf("Flash tag: Timestamp 2 = %s (%.4f seconds)", text, val))
+		} else {
+			timestamp2Valid = false
+			dialog.ShowError(fmt.Errorf("invalid timestamp format: %s", text), w)
+		}
+	}
 
 	// Wrap timestamp entries in containers
 	timestamp1Container := container.New(layout.NewGridWrapLayout(fyne.NewSize(187.5, 36)), timestamp1Entry)
 	timestamp2Container := container.New(layout.NewGridWrapLayout(fyne.NewSize(187.5, 36)), timestamp2Entry)
+
+	// Camera exposure time entry
+	var cameraExposureTime float64
+	exposureTimeEntry := NewFocusLossEntry()
+	exposureTimeEntry.SetPlaceHolder("seconds")
+	exposureTimeEntry.OnSubmitted = func(text string) {
+		if text == "" {
+			return
+		}
+		val, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("invalid exposure time: %s", text), w)
+			return
+		}
+		cameraExposureTime = val
+		logAction(fmt.Sprintf("Flash tag: Camera exposure time set to %.4f seconds", cameraExposureTime))
+	}
+	exposureTimeContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(100, 36)), exposureTimeEntry)
+
+	// Time per frame calculation
+	timePerFrameValue := widget.NewLabel("---")
+	var timePerFrame float64
+	calcTimePerFrameBtn := widget.NewButton("Calc time/frame", func() {
+		if !timestamp1Valid || !timestamp2Valid {
+			dialog.ShowError(fmt.Errorf("both timestamps must be entered"), w)
+			timePerFrameValue.SetText("N/A")
+			return
+		}
+		if !flashEdge1Valid || !flashEdge2Valid {
+			dialog.ShowError(fmt.Errorf("both edge values must be set"), w)
+			timePerFrameValue.SetText("N/A")
+			return
+		}
+		edgeDiff := savedFlashEdge2 - savedFlashEdge1
+		if edgeDiff == 0 {
+			dialog.ShowError(fmt.Errorf("edge 2 and edge 1 are equal (division by zero)"), w)
+			timePerFrameValue.SetText("N/A")
+			return
+		}
+		timePerFrame = (timestamp2Seconds - timestamp1Seconds) / edgeDiff
+		timePerFrameValue.SetText(fmt.Sprintf("%.6f", timePerFrame))
+		logAction(fmt.Sprintf("Flash tag: timePerFrame = (%.4f - %.4f) / (%.4f - %.4f) = %.6f seconds",
+			timestamp2Seconds, timestamp1Seconds, savedFlashEdge2, savedFlashEdge1, timePerFrame))
+	})
+
+	// Suppress unused variable warning
+	_ = cameraExposureTime
+	_ = timePerFrame
 
 	tab6Content := container.NewStack(tab6Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Flash tags"),
@@ -2537,6 +2610,8 @@ func main() {
 		container.NewHBox(computeEdge2Btn, widget.NewLabel("Edge 2:"), flashEdge2Value),
 		container.NewHBox(widget.NewLabel("Timestamp 1:"), timestamp1Container),
 		container.NewHBox(widget.NewLabel("Timestamp 2:"), timestamp2Container),
+		container.NewHBox(widget.NewLabel("Exposure time:"), exposureTimeContainer),
+		container.NewHBox(calcTimePerFrameBtn, widget.NewLabel("Time/frame:"), timePerFrameValue),
 	)))
 	tab6 := container.NewTabItem("Flash tags", tab6Content)
 
