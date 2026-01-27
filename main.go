@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.27"
+const Version = "1.0.28"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1678,6 +1678,10 @@ func main() {
 	// Track if the user has manually set any bounds (don't reset on curve toggle)
 	userSetBounds := false
 
+	// Function to reset frame range (assigned later after entry boxes are defined)
+	// Returns true if the frame range was zoomed and got reset, false if already at original values
+	var resetFrameRange func() bool
+
 	// Update entries when plot bounds change
 	updateRangeEntries := func() {
 		minX, maxX := lightCurvePlot.GetXBounds()
@@ -1796,19 +1800,29 @@ func main() {
 		widget.NewLabel("Y Max:"),
 		yMaxContainer,
 		widget.NewButton("Reset", func() {
-			userSetBounds = false
-			lightCurvePlot.calculateBounds()
-			lightCurvePlot.Refresh()
-			// Clear entries if no curves selected, otherwise update with calculated bounds
-			if len(lightCurvePlot.series) == 0 {
-				xMinEntry.SetText("")
-				xMaxEntry.SetText("")
-				yMinEntry.SetText("")
-				yMaxEntry.SetText("")
-			} else {
-				updateRangeEntries()
+			// Check if the frame range was zoomed and reset it
+			wasZoomed := false
+			if resetFrameRange != nil {
+				wasZoomed = resetFrameRange()
 			}
-			logAction("Reset axis bounds to default")
+			// Only reset X/Y bounds if the frame range was not zoomed
+			if !wasZoomed {
+				userSetBounds = false
+				lightCurvePlot.calculateBounds()
+				lightCurvePlot.Refresh()
+				// Clear entries if no curves selected, otherwise update with calculated bounds
+				if len(lightCurvePlot.series) == 0 {
+					xMinEntry.SetText("")
+					xMaxEntry.SetText("")
+					yMinEntry.SetText("")
+					yMaxEntry.SetText("")
+				} else {
+					updateRangeEntries()
+				}
+				logAction("Reset axis bounds to default")
+			} else {
+				logAction("Reset frame range to default")
+			}
 		}),
 		timestampTicksCheck,
 	)
@@ -2127,6 +2141,24 @@ func main() {
 			rebuildPlot()
 			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 		}
+	}
+
+	// Assign the resetFrameRange function now that entry boxes are defined
+	// Returns true if the frame range was zoomed and got reset, false otherwise
+	resetFrameRange = func() bool {
+		if minFrameNum == 0 && maxFrameNum == 0 {
+			return false // No data loaded
+		}
+		// Check if currently zoomed (frame range differs from the original)
+		wasZoomed := frameRangeStart != minFrameNum || frameRangeEnd != maxFrameNum
+		if wasZoomed {
+			frameRangeStart = minFrameNum
+			frameRangeEnd = maxFrameNum
+			startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
+			endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
+			rebuildPlot()
+		}
+		return wasZoomed
 	}
 
 	// Set up scroll wheel zoom on the plot
