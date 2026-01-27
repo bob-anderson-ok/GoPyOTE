@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.26"
+const Version = "1.0.27"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2050,6 +2050,7 @@ func main() {
 				}
 			}
 		}
+		lightCurveList.UnselectAll()
 		lightCurveList.Refresh()
 
 		// Automatically display the first light curve if available
@@ -2286,14 +2287,10 @@ func main() {
 					}
 				}
 			}
+			lightCurveList.UnselectAll()
 			lightCurveList.Refresh()
 
-			// Automatically display the first light curve if available
-			if len(listIndexToColumnIndex) > 0 {
-				toggleLightCurve(listIndexToColumnIndex[0])
-			}
-
-			// Initialize frame number range entries and variables
+			// Initialize frame number range entries and variables BEFORE displaying curves
 			if len(data.FrameNumbers) > 0 {
 				minFrameNum = data.FrameNumbers[0]
 				maxFrameNum = data.FrameNumbers[len(data.FrameNumbers)-1]
@@ -2301,6 +2298,15 @@ func main() {
 				frameRangeEnd = maxFrameNum
 				startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
 				endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
+			} else {
+				// Reset frame range if no frame numbers
+				frameRangeStart = 0
+				frameRangeEnd = 0
+			}
+
+			// Automatically display the first light curve if available
+			if len(listIndexToColumnIndex) > 0 {
+				toggleLightCurve(listIndexToColumnIndex[0])
 			}
 
 			plotStatusLabel.SetText(fmt.Sprintf("Loaded %d light curves (%d shown) with %d data points. Click to toggle display.",
@@ -2633,11 +2639,6 @@ func main() {
 			lightCurvePlot.Refresh()
 		} else {
 			lightCurvePlot.SingleSelectMode = false
-		}
-
-		if tab == tab3 {
-			// CSV ops tab: automatically open file selection dialog
-			openCSVDialog()
 		}
 	}
 
