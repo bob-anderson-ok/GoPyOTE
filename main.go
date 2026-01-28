@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.34"
+const Version = "1.0.35"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2745,7 +2745,7 @@ func main() {
 			return
 		}
 		if !flashEdge1Valid {
-			dialog.ShowError(fmt.Errorf("flash 1 must be set first"), w)
+			dialog.ShowError(fmt.Errorf("Flash 1 must be set first"), w)
 			tzeroValue.SetText("N/A")
 			return
 		}
@@ -2753,6 +2753,16 @@ func main() {
 		tzeroValue.SetText(formatSecondsAsTimestamp(tzero))
 		logAction(fmt.Sprintf("Flash tag: Tzero = %.4f - (%.4f - %.0f) * %.6f = %.4f (%s)",
 			timestamp1Seconds, savedFlashEdge1, minFrameNum, timePerFrame, tzero, formatSecondsAsTimestamp(tzero)))
+
+		// Update all light curve timestamps: timestamp = Tzero + (frameNumber - minFrameNum) * timePerFrame
+		if loadedLightCurveData != nil {
+			for i, frameNum := range loadedLightCurveData.FrameNumbers {
+				loadedLightCurveData.TimeValues[i] = tzero + (frameNum-minFrameNum)*timePerFrame
+			}
+			logAction(fmt.Sprintf("Flash tag: Updated %d light curve timestamps", len(loadedLightCurveData.TimeValues)))
+			dialog.ShowInformation("Timestamps updated/inserted",
+				fmt.Sprintf("Updated %d light curve timestamps", len(loadedLightCurveData.TimeValues)), w)
+		}
 	})
 
 	// Frame timestamp calculation: frameTime = tzero + (frameNum - minFrameNum) * timePerFrame
