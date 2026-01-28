@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.30"
+const Version = "1.0.31"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2504,6 +2504,7 @@ func main() {
 
 	// Two flashEdgeNum calculations with stored values
 	var savedFlashEdge1, savedFlashEdge2 float64
+	var savedPoint1Frame float64 // Frame number of the point used for Edge 1
 	flashEdge1Valid := false
 	flashEdge2Valid := false
 	flashEdge1Value := widget.NewLabel("---")
@@ -2597,12 +2598,20 @@ func main() {
 	}
 
 	// Button to compute and save flash edge 1
-	computeEdge1Btn := widget.NewButton("Set Edge 1", func() {
+	computeEdge1Btn := widget.NewButton("Use selected point as Flash 1", func() {
 		if val, ok := computeFlashEdge(); ok {
 			savedFlashEdge1 = val
 			flashEdge1Valid = true
 			flashEdge1Value.SetText(fmt.Sprintf("%.4f", val))
-			logAction(fmt.Sprintf("Flash tag: Saved Edge 1 = %.4f", val))
+			// Save the frame number of the point used for Edge 1
+			if lightCurvePlot.selectedSeries >= 0 && lightCurvePlot.selectedIndex >= 0 {
+				series := lightCurvePlot.series[lightCurvePlot.selectedSeries]
+				pointDataIdx := series.Points[lightCurvePlot.selectedIndex].Index
+				if loadedLightCurveData != nil && pointDataIdx < len(loadedLightCurveData.FrameNumbers) {
+					savedPoint1Frame = loadedLightCurveData.FrameNumbers[pointDataIdx]
+				}
+			}
+			logAction(fmt.Sprintf("Flash tag: Saved Edge 1 = %.4f, Point1 Frame = %.0f", val, savedPoint1Frame))
 		} else {
 			flashEdge1Value.SetText("N/A")
 			flashEdge1Valid = false
@@ -2610,7 +2619,7 @@ func main() {
 	})
 
 	// Button to compute and save flash edge 2
-	computeEdge2Btn := widget.NewButton("Set Edge 2", func() {
+	computeEdge2Btn := widget.NewButton("Use selected point as Flash 2", func() {
 		if val, ok := computeFlashEdge(); ok {
 			savedFlashEdge2 = val
 			flashEdge2Valid = true
@@ -2708,17 +2717,38 @@ func main() {
 			timestamp2Seconds, timestamp1Seconds, savedFlashEdge2, savedFlashEdge1, timePerFrame))
 	})
 
-	// Tzero calculation: Tzero = Timestamp 1 - (edge1 - start frame) * time per frame
-	tzeroValue := widget.NewLabel("---")
-	var tzero float64
-	calcTzeroBtn := widget.NewButton("Calc Tzero", func() {
+	// Point1 time calculation: point1Time = timestamp1 + (1.0 - fractional part of edge1) * time per frame
+	point1TimeValue := widget.NewLabel("---")
+	var point1Time float64
+	calcPoint1TimeBtn := widget.NewButton("Calc Point1 Time", func() {
 		if !timestamp1Valid {
 			dialog.ShowError(fmt.Errorf("timestamp 1 must be entered"), w)
-			tzeroValue.SetText("N/A")
+			point1TimeValue.SetText("N/A")
 			return
 		}
 		if !flashEdge1Valid {
 			dialog.ShowError(fmt.Errorf("edge 1 must be set"), w)
+			point1TimeValue.SetText("N/A")
+			return
+		}
+		if timePerFrame == 0 {
+			dialog.ShowError(fmt.Errorf("time per frame must be calculated first"), w)
+			point1TimeValue.SetText("N/A")
+			return
+		}
+		edge1Frac := savedFlashEdge1 - math.Floor(savedFlashEdge1)
+		point1Time = timestamp1Seconds + (1.0-edge1Frac)*timePerFrame
+		point1TimeValue.SetText(formatSecondsAsTimestamp(point1Time))
+		logAction(fmt.Sprintf("Flash tag: Point1 Time = %.4f + (1.0 - %.4f) * %.6f = %.4f (%s)",
+			timestamp1Seconds, edge1Frac, timePerFrame, point1Time, formatSecondsAsTimestamp(point1Time)))
+	})
+
+	// Tzero calculation: Tzero = point1Time - (point1Frame - start frame) * time per frame
+	tzeroValue := widget.NewLabel("---")
+	var tzero float64
+	calcTzeroBtn := widget.NewButton("Calc Tzero", func() {
+		if point1Time == 0 {
+			dialog.ShowError(fmt.Errorf("point1 Time must be calculated first"), w)
 			tzeroValue.SetText("N/A")
 			return
 		}
@@ -2727,26 +2757,34 @@ func main() {
 			tzeroValue.SetText("N/A")
 			return
 		}
-		tzero = timestamp1Seconds - (savedFlashEdge1-minFrameNum)*timePerFrame
+		if !flashEdge1Valid {
+			dialog.ShowError(fmt.Errorf("edge 1 must be set first"), w)
+			tzeroValue.SetText("N/A")
+			return
+		}
+		point1Frame := savedPoint1Frame
+		tzero = point1Time - (point1Frame-minFrameNum)*timePerFrame
 		tzeroValue.SetText(formatSecondsAsTimestamp(tzero))
-		logAction(fmt.Sprintf("Flash tag: Tzero = %.4f - (%.4f - %.0f) * %.6f = %.4f (%s)",
-			timestamp1Seconds, savedFlashEdge1, minFrameNum, timePerFrame, tzero, formatSecondsAsTimestamp(tzero)))
+		logAction(fmt.Sprintf("Flash tag: Tzero = %.4f - (%.0f - %.0f) * %.6f = %.4f (%s)",
+			point1Time, point1Frame, minFrameNum, timePerFrame, tzero, formatSecondsAsTimestamp(tzero)))
 	})
 
 	// Suppress unused variable warning
 	_ = cameraExposureTime
 	_ = tzero
+	_ = point1Time
 
 	tab6Content := container.NewStack(tab6Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Flash tags"),
 		container.NewHBox(widget.NewLabel("Alevel:"), alevelValue),
 		container.NewHBox(widget.NewLabel("Blevel:"), blevelValue),
-		container.NewHBox(computeEdge1Btn, widget.NewLabel("Edge 1:"), flashEdge1Value),
-		container.NewHBox(computeEdge2Btn, widget.NewLabel("Edge 2:"), flashEdge2Value),
-		container.NewHBox(widget.NewLabel("Timestamp 1:"), timestamp1Container),
-		container.NewHBox(widget.NewLabel("Timestamp 2:"), timestamp2Container),
+		container.NewHBox(computeEdge1Btn, widget.NewLabel("Flash 1 frame"), flashEdge1Value),
+		container.NewHBox(computeEdge2Btn, widget.NewLabel("Flash 2 frame"), flashEdge2Value),
+		container.NewHBox(widget.NewLabel("Flash 1 timestamp"), timestamp1Container),
+		container.NewHBox(widget.NewLabel("Flash 2 timestamp"), timestamp2Container),
 		container.NewHBox(widget.NewLabel("Exposure time:"), exposureTimeContainer),
 		container.NewHBox(calcTimePerFrameBtn, widget.NewLabel("Time/frame:"), timePerFrameValue),
+		container.NewHBox(calcPoint1TimeBtn, widget.NewLabel("Point1 Time:"), point1TimeValue),
 		container.NewHBox(calcTzeroBtn, widget.NewLabel("Tzero:"), tzeroValue),
 	)))
 	tab6 := container.NewTabItem("Flash tags", tab6Content)
