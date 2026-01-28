@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.31"
+const Version = "1.0.32"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1184,23 +1184,14 @@ func (p *LightCurvePlot) MouseDown(ev *desktop.MouseEvent) {
 	p.handleClick(ev.Position)
 }
 
-// screenToData converts screen coordinates to data coordinates
-func (p *LightCurvePlot) screenToData(pos fyne.Position, size fyne.Size) (float64, float64) {
-	plotWidth := size.Width - p.marginLeft - p.marginRight
-	plotHeight := size.Height - p.marginTop - p.marginBottom
+// pixelToDataX converts pixel X coordinate to data X coordinate
+func pixelToDataX(minX, maxX, px, width float64) float64 {
+	return minX + px/width*(maxX-minX)
+}
 
-	// Avoid division by zero
-	if plotWidth <= 0 {
-		plotWidth = 1
-	}
-	if plotHeight <= 0 {
-		plotHeight = 1
-	}
-
-	dataX := p.minX + float64((pos.X-p.marginLeft)/plotWidth)*(p.maxX-p.minX)
-	dataY := p.maxY - float64((pos.Y-p.marginTop)/plotHeight)*(p.maxY-p.minY)
-
-	return dataX, dataY
+// pixelToDataY converts pixel Y coordinate to data Y coordinate (Y axis is inverted in screen space)
+func pixelToDataY(minY, maxY, py, height float64) float64 {
+	return maxY - py/height*(maxY-minY)
 }
 
 func (p *LightCurvePlot) handleClick(pos fyne.Position) {
@@ -1210,40 +1201,60 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 
 	size := p.Size()
 
-	// Convert click position to data coordinates
-	clickDataX, clickDataY := p.screenToData(pos, size)
-
-	// Find the closest point by X coordinate (frame number), then check Y is reasonable
-	// Use 2% of X range as the search radius for X
-	xRange := p.maxX - p.minX
-	yRange := p.maxY - p.minY
-	if xRange <= 0 {
-		xRange = 1
+	// Calculate plot area dimensions
+	plotWidth := float64(size.Width - p.marginLeft - p.marginRight)
+	plotHeight := float64(size.Height - p.marginTop - p.marginBottom)
+	if plotWidth <= 0 {
+		plotWidth = 1
 	}
-	if yRange <= 0 {
-		yRange = 1
+	if plotHeight <= 0 {
+		plotHeight = 1
 	}
 
-	xTolerance := xRange * 0.02 // 2% of X range
-	yTolerance := yRange * 0.15 // 15% of Y range for vertical tolerance
+	// Convert click position to pixel coordinates relative to the plot area
+	clickPx := float64(pos.X - p.marginLeft)
+	clickPy := float64(pos.Y - p.marginTop)
+
+	// Convert click to data coordinates
+	clickDataX := pixelToDataX(p.minX, p.maxX, clickPx, plotWidth)
+	clickDataY := pixelToDataY(p.minY, p.maxY, clickPy, plotHeight)
+
+	// Find the closest point across all series using nearestPoint
+	// Work in normalized pixel space (0 to 1) so X and Y have equal weight
+	clickNormX := clickPx / plotWidth
+	clickNormY := clickPy / plotHeight
 
 	var closestSeries = -1
 	var closestIdx = -1
-	var closestXDist = xTolerance * 2
+	var bestDistSq = math.MaxFloat64
+	tolerance := 0.08 // 8% of plot area
 
 	for s, series := range p.series {
+		// Build arrays of normalized pixel coordinates for this series
+		xs := make([]float64, len(series.Points))
+		ys := make([]float64, len(series.Points))
 		for i, pt := range series.Points {
-			xDist := math.Abs(pt.X - clickDataX)
-			yDist := math.Abs(pt.Y - clickDataY)
+			// Convert data coordinates to normalized pixel coordinates (0 to 1)
+			xs[i] = (pt.X - p.minX) / (p.maxX - p.minX)
+			ys[i] = (p.maxY - pt.Y) / (p.maxY - p.minY) // Y inverted
+		}
 
-			// Point must be within Y tolerance and closer in X than previous best
-			if xDist < xTolerance && yDist < yTolerance && xDist < closestXDist {
-				closestXDist = xDist
+		// Find the nearest point in this series
+		for i := range xs {
+			dx := xs[i] - clickNormX
+			dy := ys[i] - clickNormY
+			distSq := dx*dx + dy*dy
+			if distSq < bestDistSq && distSq < tolerance*tolerance {
+				bestDistSq = distSq
 				closestSeries = s
 				closestIdx = i
 			}
 		}
 	}
+
+	// Log for debugging
+	_ = clickDataX
+	_ = clickDataY
 
 	if closestSeries >= 0 && closestIdx >= 0 {
 		clickedPoint := p.series[closestSeries].Points[closestIdx]
