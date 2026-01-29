@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.37"
+const Version = "1.0.38"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1591,22 +1591,34 @@ func main() {
 	firstRun := savedX == -1 && savedY == -1
 
 	// Create a menu
-	fileMenu := fyne.NewMenu("File",
-		fyne.NewMenuItem("New", func() {}),
-		fyne.NewMenuItem("Open", func() {}),
-		fyne.NewMenuItem("Save", func() {}),
+	helpMenu := fyne.NewMenu("Help Topics",
+		fyne.NewMenuItem("Light curve normalization", func() {
+			dialog.ShowInformation("Light Curve Normalization",
+				"Light curve normalization helps correct for atmospheric effects like clouds.\n\n"+
+					"To use:\n"+
+					"1. Load a CSV file with multiple light curves\n"+
+					"2. Check the box next to a comparison star to use as reference\n"+
+					"3. The target star's brightness will be divided by the reference", w)
+		}),
+		fyne.NewMenuItem("Block integration", func() {
+			dialog.ShowInformation("Block Integration",
+				"Block integration averages consecutive data points to reduce noise.\n\n"+
+					"To use:\n"+
+					"1. Click on a point to select the start of a block\n"+
+					"2. Click on another point in the same light curve to define block size\n"+
+					"3. Go to the BlockInt tab and click 'Block Integrate'\n"+
+					"4. Points are averaged in groups, with partial blocks at ends ignored\n\n"+
+					"Note: Reload the CSV to restore original data.", w)
+		}),
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Quit", func() { a.Quit() }),
+		fyne.NewMenuItem("About", func() {
+			dialog.ShowInformation("About GoPyOTE",
+				fmt.Sprintf("GoPyOTE Version %s\n\n"+
+					"A Go desktop application for astronomical\n"+
+					"occultation timing and analysis.", Version), w)
+		}),
 	)
-	editMenu := fyne.NewMenu("Edit",
-		fyne.NewMenuItem("Cut", func() {}),
-		fyne.NewMenuItem("Copy", func() {}),
-		fyne.NewMenuItem("Paste", func() {}),
-	)
-	helpMenu := fyne.NewMenu("Help",
-		fyne.NewMenuItem("About", func() {}),
-	)
-	mainMenu := fyne.NewMainMenu(fileMenu, editMenu, helpMenu)
+	mainMenu := fyne.NewMainMenu(helpMenu)
 	w.SetMainMenu(mainMenu)
 
 	// Tab 2: Settings
