@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.35"
+const Version = "1.0.36"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1712,6 +1712,20 @@ func main() {
 	plotStatusLabel := widget.NewLabel("Click on a point to see details")
 	plotStatusLabel.Wrapping = fyne.TextWrapWord
 
+	// Frame number range entry boxes (created here so they can be in the plot area bottom)
+	startFrameEntry := NewFocusLossEntry()
+	startFrameEntry.SetPlaceHolder("Start Frame")
+	endFrameEntry := NewFocusLossEntry()
+	endFrameEntry.SetPlaceHolder("End Frame")
+	startFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), startFrameEntry)
+	endFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), endFrameEntry)
+	frameRangeRow := container.NewHBox(
+		widget.NewLabel("Start Frame:"),
+		startFrameContainer,
+		widget.NewLabel("End Frame:"),
+		endFrameContainer,
+	)
+
 	// Track the current x-axis label for click callback
 	currentXAxisLabel := "Time"
 
@@ -1905,12 +1919,21 @@ func main() {
 		timestampTicksCheck,
 	)
 
-	plotArea := container.NewBorder(
-		rangeControls,   // top
-		plotStatusLabel, // bottom
-		nil,             // left
+	// Bottom section with frame range controls on left and status label on right
+	plotBottomRow := container.NewBorder(
+		nil,             // top
+		nil,             // bottom
+		frameRangeRow,   // left
 		nil,             // right
-		lightCurvePlot,  // center
+		plotStatusLabel, // center (takes remaining space)
+	)
+
+	plotArea := container.NewBorder(
+		rangeControls,  // top
+		plotBottomRow,  // bottom
+		nil,            // left
+		nil,            // right
+		lightCurvePlot, // center
 	)
 
 	// Tab 3: Data - Light curve list with click to toggle on/off plot
@@ -2154,12 +2177,6 @@ func main() {
 
 		logAction("Filter settings changed, refreshed light curve list")
 	}
-
-	// Frame number range entry boxes (defined here so they can be initialized when CSV is loaded)
-	startFrameEntry := NewFocusLossEntry()
-	startFrameEntry.SetPlaceHolder("Start Frame")
-	endFrameEntry := NewFocusLossEntry()
-	endFrameEntry.SetPlaceHolder("End Frame")
 
 	// Handle start frame entry changes
 	startFrameEntry.OnSubmitted = func(text string) {
@@ -2468,19 +2485,9 @@ func main() {
 	exportCSVBtnContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(220, 36)), exportCSVBtn)
 	dataTabButtons := container.NewHBox(loadCSVBtnContainer, exportCSVBtnContainer)
 
-	// Frame number range row (entries defined earlier so they can be initialized when CSV is loaded)
-	startFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), startFrameEntry)
-	endFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), endFrameEntry)
-	frameRangeRow := container.NewHBox(
-		widget.NewLabel("Start Frame:"),
-		startFrameContainer,
-		widget.NewLabel("End Frame:"),
-		endFrameContainer,
-	)
-
 	tab3Content := container.NewStack(tab3Bg, container.NewPadded(container.NewBorder(
 		dataTabButtons,       // top
-		frameRangeRow,        // bottom
+		nil,                  // bottom (frame controls moved to plot area)
 		nil,                  // left
 		nil,                  // right
 		lightCurveListScroll, // center
@@ -2745,7 +2752,7 @@ func main() {
 			return
 		}
 		if !flashEdge1Valid {
-			dialog.ShowError(fmt.Errorf("Flash 1 must be set first"), w)
+			dialog.ShowError(fmt.Errorf("flash 1 must be set first"), w)
 			tzeroValue.SetText("N/A")
 			return
 		}
