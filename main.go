@@ -39,7 +39,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.39"
+const Version = "1.0.40"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -337,6 +337,7 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 
 // writeSelectedLightCurves writes the selected light curves to a CSV file
 // The output file is named originalname + "_GoPyOTE.csv" in the same directory
+// If normalization has been applied, "_NORMALIZED" is inserted in the filename
 // Only rows within the frame range [startFrame, endFrame] are written
 func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool, startFrame, endFrame float64) (string, error) {
 	if data == nil {
@@ -346,12 +347,16 @@ func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool
 		return "", fmt.Errorf("no light curves selected")
 	}
 
-	// Build output file path: insert "_GoPyOTE" before .csv
+	// Build output file path: insert "_GoPyOTE" (and "_NORMALIZED" if applicable) before .csv
 	dir := filepath.Dir(data.SourceFilePath)
 	base := filepath.Base(data.SourceFilePath)
 	ext := filepath.Ext(base)
 	nameWithoutExt := strings.TrimSuffix(base, ext)
-	outputPath := filepath.Join(dir, nameWithoutExt+"_GoPyOTE"+ext)
+	suffix := "_GoPyOTE"
+	if normalizationApplied {
+		suffix = "_NORMALIZED_GoPyOTE"
+	}
+	outputPath := filepath.Join(dir, nameWithoutExt+suffix+ext)
 
 	// Create the output file
 	file, err := os.Create(outputPath)
@@ -436,6 +441,9 @@ func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool
 
 // Global variable to hold loaded light curve data
 var loadedLightCurveData *LightCurveData
+
+// Flag to track if normalization has been applied (for filename generation)
+var normalizationApplied bool
 
 // Global variables for action logging
 var (
@@ -2441,7 +2449,8 @@ func main() {
 				delete(displayedCurves, k)
 			}
 			lightCurvePlot.SetSeries(nil)
-			smoothedSeries = nil // Clear any previous smooth curve
+			smoothedSeries = nil         // Clear any previous smooth curve
+			normalizationApplied = false // Reset normalization flag
 
 			// Clear range entries and reset the user bounds flag
 			userSetBounds = false
@@ -3170,16 +3179,87 @@ func main() {
 		logAction(statusMsg)
 	})
 
+	// Normalize button - uses the smoothed reference curve to normalize all light curves
+	normalizeButton := widget.NewButton("Normalize", func() {
+		// Check if we have loaded data
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		// Check if a smoothed curve exists
+		if smoothedSeries == nil {
+			dialog.ShowError(fmt.Errorf("no smoothed reference curve - click 'Smooth' first"), w)
+			return
+		}
+
+		// Check that the smoothed series has the same number of points as the data
+		if len(smoothedSeries.Points) != len(loadedLightCurveData.FrameNumbers) {
+			dialog.ShowError(fmt.Errorf("smoothed curve length (%d) does not match data length (%d) - please re-smooth after any data changes",
+				len(smoothedSeries.Points), len(loadedLightCurveData.FrameNumbers)), w)
+			return
+		}
+
+		// Calculate the mean of the smoothed reference curve
+		var sumSmooth float64
+		for _, pt := range smoothedSeries.Points {
+			sumSmooth += pt.Y
+		}
+		meanSmooth := sumSmooth / float64(len(smoothedSeries.Points))
+
+		logAction(fmt.Sprintf("Normalizing light curves using smoothed reference (mean = %.4f)", meanSmooth))
+
+		// Apply normalization to all columns: y_norm[i] = (mean * y[i]) / smooth[i]
+		for colIdx := range loadedLightCurveData.Columns {
+			for i := range loadedLightCurveData.Columns[colIdx].Values {
+				smoothVal := smoothedSeries.Points[i].Y
+				if smoothVal != 0 {
+					loadedLightCurveData.Columns[colIdx].Values[i] =
+						(meanSmooth * loadedLightCurveData.Columns[colIdx].Values[i]) / smoothVal
+				}
+			}
+		}
+
+		// Clear the smoothed series since it's now incorporated into the data
+		smoothedSeries = nil
+
+		// Set normalization flag for filename generation
+		normalizationApplied = true
+
+		// Save Y bounds before rebuild
+		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+
+		// Rebuild the plot with normalized data
+		rebuildPlot()
+
+		// Restore Y bounds
+		lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+
+		// Update status
+		statusMsg := fmt.Sprintf("Normalized all light curves (reference mean = %.4f)", meanSmooth)
+		smoothStatusLabel.SetText(statusMsg)
+		logAction(statusMsg)
+
+		dialog.ShowInformation("Normalization Complete",
+			fmt.Sprintf("All light curves have been normalized.\n\nReference mean: %.4f\n\nNote: Reload the CSV to restore original data.", meanSmooth), w)
+	})
+
 	tab7Content := container.NewStack(tab7Bg, container.NewPadded(container.NewVBox(
-		widget.NewLabel("Savitzky-Golay Smoothing"),
+		widget.NewLabel("Savitzky-Golay Smoothing & Normalization"),
 		widget.NewSeparator(),
-		widget.NewLabel("Instructions:"),
+		widget.NewLabel("Smoothing Instructions:"),
 		widget.NewLabel("1. Check the box next to a light curve to use as reference"),
 		widget.NewLabel("2. Click on a point to select point 1"),
 		widget.NewLabel("3. Click on another point to define window size"),
 		widget.NewLabel("4. Click 'Smooth' to apply Savitzky-Golay filter"),
 		widget.NewSeparator(),
 		container.NewHBox(smoothButton, clearSmoothButton),
+		widget.NewSeparator(),
+		widget.NewLabel("Normalization (after smoothing):"),
+		widget.NewLabel("5. Click 'Normalize' to apply smoothed reference to all curves"),
+		widget.NewLabel("Formula: y_norm[i] = (mean_ref * y[i]) / smooth_ref[i]"),
+		widget.NewSeparator(),
+		normalizeButton,
 		widget.NewSeparator(),
 		smoothStatusLabel,
 	)))
