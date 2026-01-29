@@ -30,6 +30,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/KevinWang15/go-json5"
+	"github.com/pconstantinou/savitzkygolay"
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
 	"gonum.org/v1/plot/vg"
@@ -38,7 +39,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.38"
+const Version = "1.0.39"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1970,6 +1971,9 @@ func main() {
 		{R: 100, G: 100, B: 100, A: 255}, // Gray
 	}
 
+	// Savitzky-Golay smoothed series (nil if no smoothing has been applied)
+	var smoothedSeries *PlotSeries
+
 	// Track the current frame range for filtering plot data
 	var frameRangeStart, frameRangeEnd float64
 	// Save min/max frame numbers from loaded CSV for validation
@@ -2043,6 +2047,40 @@ func main() {
 		} else {
 			currentXAxisLabel = "Time"
 			lightCurvePlot.xAxisLabel = "Time"
+		}
+
+		// Add smoothed series if available
+		if smoothedSeries != nil {
+			// Rebuild smoothed series points with correct X values (frame numbers or timestamps)
+			var smoothPoints []PlotPoint
+			for _, pt := range smoothedSeries.Points {
+				// Filter by frame range
+				frameNum := loadedLightCurveData.FrameNumbers[pt.Index]
+				if frameRangeStart > 0 && frameNum < frameRangeStart {
+					continue
+				}
+				if frameRangeEnd > 0 && frameNum > frameRangeEnd {
+					continue
+				}
+				xVal := loadedLightCurveData.TimeValues[pt.Index]
+				if useFrameNumbers {
+					xVal = frameNum
+				}
+				smoothPoints = append(smoothPoints, PlotPoint{
+					X:      xVal,
+					Y:      pt.Y,
+					Index:  pt.Index,
+					Series: len(allSeries),
+				})
+			}
+			if len(smoothPoints) > 0 {
+				allSeries = append(allSeries, PlotSeries{
+					Points: smoothPoints,
+					Color:  smoothedSeries.Color,
+					Name:   smoothedSeries.Name,
+				})
+				displayedNames = append(displayedNames, smoothedSeries.Name)
+			}
 		}
 
 		if len(allSeries) == 0 {
@@ -2403,6 +2441,7 @@ func main() {
 				delete(displayedCurves, k)
 			}
 			lightCurvePlot.SetSeries(nil)
+			smoothedSeries = nil // Clear any previous smooth curve
 
 			// Clear range entries and reset the user bounds flag
 			userSetBounds = false
@@ -2630,6 +2669,9 @@ func main() {
 		loadedLightCurveData.FrameNumbers = newFrameNumbers
 		loadedLightCurveData.TimeValues = newTimeValues
 		loadedLightCurveData.Columns = newColumns
+
+		// Clear smooth curve since indices are now invalid
+		smoothedSeries = nil
 
 		// Update frame range limits
 		minFrameNum = newFrameNumbers[0]
@@ -2993,7 +3035,157 @@ func main() {
 	)))
 	tab6 := container.NewTabItem("Flash tags", tab6Content)
 
-	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab4)
+	// Tab 7: Savitzky-Golay Smoothing
+	tab7Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 200, B: 230, A: 255})
+
+	// Status label for smoothing
+	smoothStatusLabel := widget.NewLabel("Select two points to define window size, check a reference curve")
+
+	// Clear smooth button
+	clearSmoothButton := widget.NewButton("Clear Smooth", func() {
+		smoothedSeries = nil
+		// Save Y bounds before rebuild
+		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+		rebuildPlot()
+		lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		smoothStatusLabel.SetText("Smooth curve cleared")
+		logAction("Cleared Savitzky-Golay smooth curve")
+	})
+
+	// Smooth button
+	smoothButton := widget.NewButton("Smooth", func() {
+		// Check if we have loaded data
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		// Check if a reference curve is checked
+		if checkedCurveIndex < 0 {
+			dialog.ShowError(fmt.Errorf("no reference curve selected - check the box next to a light curve in the list"), w)
+			return
+		}
+
+		// Check if two points are selected
+		if lightCurvePlot.selectedSeries < 0 || lightCurvePlot.selectedIndex < 0 {
+			dialog.ShowError(fmt.Errorf("point 1 not selected - click on a point to select it"), w)
+			return
+		}
+		if lightCurvePlot.selectedSeries2 < 0 || lightCurvePlot.selectedIndex2 < 0 {
+			dialog.ShowError(fmt.Errorf("point 2 not selected - click on another point to define window size"), w)
+			return
+		}
+
+		// Get the column index of the checked curve
+		if checkedCurveIndex >= len(listIndexToColumnIndex) {
+			dialog.ShowError(fmt.Errorf("invalid reference curve index"), w)
+			return
+		}
+		refColIdx := listIndexToColumnIndex[checkedCurveIndex]
+		refColumn := loadedLightCurveData.Columns[refColIdx]
+
+		// Get the indices of the two selected points to determine window size
+		series := lightCurvePlot.series[lightCurvePlot.selectedSeries]
+		idx1 := series.Points[lightCurvePlot.selectedIndex].Index
+		series2 := lightCurvePlot.series[lightCurvePlot.selectedSeries2]
+		idx2 := series2.Points[lightCurvePlot.selectedIndex2].Index
+
+		// Calculate window size
+		windowSize := idx2 - idx1
+		if windowSize < 0 {
+			windowSize = -windowSize
+		}
+		windowSize++ // inclusive
+
+		// Make window size odd if needed
+		if windowSize%2 == 0 {
+			windowSize++
+		}
+
+		// Minimum window size check
+		if windowSize < 3 {
+			windowSize = 3
+		}
+
+		logAction(fmt.Sprintf("Savitzky-Golay smoothing: window size = %d, reference curve = %s", windowSize, refColumn.Name))
+
+		// Get Y values for the reference column
+		ys := refColumn.Values
+		numPoints := len(ys)
+
+		if numPoints < windowSize {
+			dialog.ShowError(fmt.Errorf("not enough data points (%d) for window size %d", numPoints, windowSize), w)
+			return
+		}
+
+		// Create X values (just indices for the filter)
+		xs := make([]float64, numPoints)
+		for i := range xs {
+			xs[i] = float64(i)
+		}
+
+		// Create Savitzky-Golay filter
+		filter, err := savitzkygolay.NewFilterWindow(windowSize)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to create Savitzky-Golay filter: %v", err), w)
+			return
+		}
+
+		// Apply the filter
+		smoothedYs, err := filter.Process(ys, xs)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to apply Savitzky-Golay filter: %v", err), w)
+			return
+		}
+
+		// Create the smoothed series
+		var smoothPoints []PlotPoint
+		for i, y := range smoothedYs {
+			smoothPoints = append(smoothPoints, PlotPoint{
+				X:      0, // Will be set in rebuildPlot based on frame numbers or timestamps
+				Y:      y,
+				Index:  i,
+				Series: 0,
+			})
+		}
+
+		smoothedSeries = &PlotSeries{
+			Points: smoothPoints,
+			Color:  color.RGBA{R: 255, G: 0, B: 255, A: 255}, // Magenta for a smooth curve
+			Name:   "Smooth(" + refColumn.Name + ")",
+		}
+
+		// Save Y bounds before rebuild
+		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+
+		// Rebuild the plot to include the smoothed series
+		rebuildPlot()
+
+		// Restore Y bounds
+		lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+
+		// Update status
+		statusMsg := fmt.Sprintf("Smoothed %s with window size %d", refColumn.Name, windowSize)
+		smoothStatusLabel.SetText(statusMsg)
+		logAction(statusMsg)
+	})
+
+	tab7Content := container.NewStack(tab7Bg, container.NewPadded(container.NewVBox(
+		widget.NewLabel("Savitzky-Golay Smoothing"),
+		widget.NewSeparator(),
+		widget.NewLabel("Instructions:"),
+		widget.NewLabel("1. Check the box next to a light curve to use as reference"),
+		widget.NewLabel("2. Click on a point to select point 1"),
+		widget.NewLabel("3. Click on another point to define window size"),
+		widget.NewLabel("4. Click 'Smooth' to apply Savitzky-Golay filter"),
+		widget.NewSeparator(),
+		container.NewHBox(smoothButton, clearSmoothButton),
+		widget.NewSeparator(),
+		smoothStatusLabel,
+	)))
+	tab7 := container.NewTabItem("Smooth", tab7Content)
+
+	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, tab4)
 
 	// Handle tab selection events
 	tabs.OnSelected = func(tab *container.TabItem) {
