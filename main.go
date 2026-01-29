@@ -38,7 +38,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.36"
+const Version = "1.0.37"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2508,8 +2508,165 @@ func main() {
 
 	// Tab 5: Block integration
 	tab5Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 220, B: 200, A: 255})
+
+	// Status label for block integration
+	blockIntStatusLabel := widget.NewLabel("Select two points on the plot to define a block size")
+
+	// Block integrate button
+	blockIntegrateButton := widget.NewButton("Block Integrate", func() {
+		// Check if we have loaded data
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		// Check if two points are selected
+		if lightCurvePlot.selectedSeries < 0 || lightCurvePlot.selectedIndex < 0 {
+			dialog.ShowError(fmt.Errorf("point 1 not selected - click on a point to select it"), w)
+			return
+		}
+		if lightCurvePlot.selectedSeries2 < 0 || lightCurvePlot.selectedIndex2 < 0 {
+			dialog.ShowError(fmt.Errorf("point 2 not selected - click on another point in the same light curve"), w)
+			return
+		}
+
+		// Check if both points are on the same series
+		if lightCurvePlot.selectedSeries != lightCurvePlot.selectedSeries2 {
+			dialog.ShowError(fmt.Errorf("both points must be on the same series to define a block"), w)
+			return
+		}
+
+		// Get the indices of the two selected points (in the original data)
+		series := lightCurvePlot.series[lightCurvePlot.selectedSeries]
+		idx1 := series.Points[lightCurvePlot.selectedIndex].Index
+		idx2 := series.Points[lightCurvePlot.selectedIndex2].Index
+
+		// Ensure idx1 < idx2
+		if idx1 > idx2 {
+			idx1, idx2 = idx2, idx1
+		}
+
+		// Calculate block size (number of points inclusive)
+		blockSize := idx2 - idx1 + 1
+		if blockSize < 2 {
+			dialog.ShowError(fmt.Errorf("block size must be at least 2 points (current: %d)", blockSize), w)
+			return
+		}
+
+		logAction(fmt.Sprintf("Block Integration: block size = %d points (from index %d to %d)", blockSize, idx1, idx2))
+
+		// Apply block integration to all columns in the loaded data
+		numPoints := len(loadedLightCurveData.FrameNumbers)
+
+		if numPoints == 0 {
+			dialog.ShowError(fmt.Errorf("no data points in loaded file"), w)
+			return
+		}
+
+		// Block integration starts from the first selected point (idx1)
+		// Calculate complete blocks going left and right from idx1
+		pointsBefore := idx1               // points before idx1 (indices 0 to idx1-1)
+		pointsFromIdx1 := numPoints - idx1 // points from idx1 to end (indices idx1 to numPoints-1)
+
+		blocksBefore := pointsBefore / blockSize     // complete blocks to the left
+		blocksFromIdx1 := pointsFromIdx1 / blockSize // complete blocks from idx1 onward
+
+		numBlocks := blocksBefore + blocksFromIdx1
+
+		if numBlocks == 0 {
+			dialog.ShowError(fmt.Errorf("not enough points for even one complete block of size %d", blockSize), w)
+			return
+		}
+
+		// Calculate where the first complete block starts
+		// Blocks to the left: the leftmost complete block starts at idx1 - (blocksBefore * blockSize)
+		firstBlockStart := idx1 - (blocksBefore * blockSize)
+
+		logAction(fmt.Sprintf("Block Integration: idx1=%d, blocksBefore=%d, blocksFromIdx1=%d, total=%d, firstBlockStart=%d",
+			idx1, blocksBefore, blocksFromIdx1, numBlocks, firstBlockStart))
+
+		// Create new arrays for block-integrated data
+		newFrameNumbers := make([]float64, numBlocks)
+		newTimeValues := make([]float64, numBlocks)
+		newColumns := make([]LightCurveColumn, len(loadedLightCurveData.Columns))
+
+		for i := range newColumns {
+			newColumns[i].Name = loadedLightCurveData.Columns[i].Name
+			newColumns[i].Values = make([]float64, numBlocks)
+		}
+
+		// Process each block starting from the firstBlockStart
+		for blockIdx := 0; blockIdx < numBlocks; blockIdx++ {
+			startIdx := firstBlockStart + (blockIdx * blockSize)
+			endIdx := startIdx + blockSize // exclusive
+
+			// Use the frame number and time of the first point in the block
+			newFrameNumbers[blockIdx] = loadedLightCurveData.FrameNumbers[startIdx]
+			newTimeValues[blockIdx] = loadedLightCurveData.TimeValues[startIdx]
+
+			// Average each column's values in this block
+			for colIdx := range loadedLightCurveData.Columns {
+				sum := 0.0
+				for i := startIdx; i < endIdx; i++ {
+					sum += loadedLightCurveData.Columns[colIdx].Values[i]
+				}
+				newColumns[colIdx].Values[blockIdx] = sum / float64(blockSize)
+			}
+		}
+
+		// Update the loaded data with block-integrated values
+		loadedLightCurveData.FrameNumbers = newFrameNumbers
+		loadedLightCurveData.TimeValues = newTimeValues
+		loadedLightCurveData.Columns = newColumns
+
+		// Update frame range limits
+		minFrameNum = newFrameNumbers[0]
+		maxFrameNum = newFrameNumbers[len(newFrameNumbers)-1]
+		frameRangeStart = minFrameNum
+		frameRangeEnd = maxFrameNum
+		startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
+		endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
+
+		// Clear selections since indices are now invalid
+		lightCurvePlot.selectedSeries = -1
+		lightCurvePlot.selectedIndex = -1
+		lightCurvePlot.selectedSeries2 = -1
+		lightCurvePlot.selectedIndex2 = -1
+		lightCurvePlot.selectedPointDataIndex = -1
+		lightCurvePlot.selectedPointDataIndex2 = -1
+		lightCurvePlot.selectedSeriesName = ""
+		lightCurvePlot.selectedSeriesName2 = ""
+
+		// Save Y bounds before rebuilding (preserve user scaling)
+		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+
+		// Rebuild the plot with the new data
+		rebuildPlot()
+
+		// Restore Y bounds to preserve user scaling
+		lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+
+		// Update status
+		statusMsg := fmt.Sprintf("Block integrated: %d points → %d blocks (block size: %d)", numPoints, numBlocks, blockSize)
+		blockIntStatusLabel.SetText(statusMsg)
+		logAction(statusMsg)
+
+		dialog.ShowInformation("Block Integration Complete",
+			fmt.Sprintf("Original: %d points\nBlock size: %d\nResult: %d averaged blocks\n\nNote: Reload the CSV to restore original data.", numPoints, blockSize, numBlocks), w)
+	})
+
 	tab5Content := container.NewStack(tab5Bg, container.NewPadded(container.NewVBox(
-		widget.NewLabel("BlockInt"),
+		widget.NewLabel("Block Integration"),
+		widget.NewSeparator(),
+		widget.NewLabel("Instructions:"),
+		widget.NewLabel("1. Click on a point to select point 1"),
+		widget.NewLabel("2. Click on another point in the same light curve"),
+		widget.NewLabel("3. The two points define the block size"),
+		widget.NewLabel("4. Click 'Block Integrate' to apply"),
+		widget.NewSeparator(),
+		blockIntegrateButton,
+		widget.NewSeparator(),
+		blockIntStatusLabel,
 	)))
 	tab5 := container.NewTabItem("BlockInt", tab5Content)
 
