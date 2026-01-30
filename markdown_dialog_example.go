@@ -1,0 +1,237 @@
+package main
+
+import (
+	"embed"
+	"image"
+	"regexp"
+	"strings"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/widget"
+
+	// Import image decoders
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+)
+
+// Example embedded filesystem - in your actual code, use your own embed directive
+// //go:embed images/*
+// var embeddedImages embed.FS
+
+// MarkdownSegment represents a piece of the markdown content
+type MarkdownSegment struct {
+	IsImage bool
+	Content string // Text content or image path
+	AltText string // Alt text for images
+}
+
+// imageRegex matches Markdown image syntax: ![alt text](image_path)
+var imageRegex = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+
+// parseMarkdownWithImages parses markdown text and separates text from image references
+func parseMarkdownWithImages(markdown string) []MarkdownSegment {
+	var segments []MarkdownSegment
+
+	// Find all image matches
+	matches := imageRegex.FindAllStringSubmatchIndex(markdown, -1)
+
+	if len(matches) == 0 {
+		// No images, return the whole text as one segment
+		return []MarkdownSegment{{IsImage: false, Content: markdown}}
+	}
+
+	lastEnd := 0
+	for _, match := range matches {
+		// match[0]:match[1] is the full match
+		// match[2]:match[3] is the alt text
+		// match[4]:match[5] is the image path
+
+		// Add text before this image
+		if match[0] > lastEnd {
+			textBefore := markdown[lastEnd:match[0]]
+			if strings.TrimSpace(textBefore) != "" {
+				segments = append(segments, MarkdownSegment{
+					IsImage: false,
+					Content: textBefore,
+				})
+			}
+		}
+
+		// Add the image segment
+		altText := markdown[match[2]:match[3]]
+		imagePath := markdown[match[4]:match[5]]
+		segments = append(segments, MarkdownSegment{
+			IsImage: true,
+			Content: imagePath,
+			AltText: altText,
+		})
+
+		lastEnd = match[1]
+	}
+
+	// Add any remaining text after the last image
+	if lastEnd < len(markdown) {
+		textAfter := markdown[lastEnd:]
+		if strings.TrimSpace(textAfter) != "" {
+			segments = append(segments, MarkdownSegment{
+				IsImage: false,
+				Content: textAfter,
+			})
+		}
+	}
+
+	return segments
+}
+
+// loadImageFromEmbedFS loads an image from an embedded filesystem
+func loadImageFromEmbedFS(fs embed.FS, path string) (image.Image, error) {
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	img, _, err := image.Decode(strings.NewReader(string(data)))
+	if err != nil {
+		return nil, err
+	}
+
+	return img, nil
+}
+
+// loadImageFromFile loads an image from the local filesystem
+func loadImageFromFile(path string) *canvas.Image {
+	img := canvas.NewImageFromFile(path)
+	img.FillMode = canvas.ImageFillContain
+	img.SetMinSize(fyne.NewSize(200, 150)) // Default size, adjust as needed
+	return img
+}
+
+// createMarkdownContentWithImages creates a Fyne container from markdown with images
+// If embedFS is nil, images are loaded from the local filesystem
+func createMarkdownContentWithImages(markdown string, embedFS *embed.FS) fyne.CanvasObject {
+	segments := parseMarkdownWithImages(markdown)
+
+	var objects []fyne.CanvasObject
+
+	for _, seg := range segments {
+		if seg.IsImage {
+			var img *canvas.Image
+
+			if embedFS != nil {
+				// Load from embedded filesystem
+				loadedImg, err := loadImageFromEmbedFS(*embedFS, seg.Content)
+				if err != nil {
+					// Show error placeholder
+					errorLabel := widget.NewLabel("[Image not found: " + seg.Content + "]")
+					objects = append(objects, errorLabel)
+					continue
+				}
+				img = canvas.NewImageFromImage(loadedImg)
+			} else {
+				// Load from local filesystem
+				img = canvas.NewImageFromFile(seg.Content)
+			}
+
+			img.FillMode = canvas.ImageFillContain
+			img.SetMinSize(fyne.NewSize(300, 200)) // Adjust size as needed
+
+			// Wrap image in a container with optional caption
+			if seg.AltText != "" {
+				caption := widget.NewLabelWithStyle(seg.AltText, fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
+				imgWithCaption := container.NewVBox(img, caption)
+				objects = append(objects, imgWithCaption)
+			} else {
+				objects = append(objects, img)
+			}
+		} else {
+			// Render text as markdown using Fyne's RichText
+			richText := widget.NewRichTextFromMarkdown(seg.Content)
+			richText.Wrapping = fyne.TextWrapWord
+			objects = append(objects, richText)
+		}
+	}
+
+	// Arrange all objects vertically
+	content := container.NewVBox(objects...)
+
+	return content
+}
+
+// ShowMarkdownDialogWithImages displays a dialog with markdown content including images
+func ShowMarkdownDialogWithImages(title, markdown string, embedFS *embed.FS, parent fyne.Window) {
+	content := createMarkdownContentWithImages(markdown, embedFS)
+
+	// Wrap in a scroll container for long content
+	scroll := container.NewVScroll(content)
+	scroll.SetMinSize(fyne.NewSize(500, 400))
+
+	dialog.ShowCustom(title, "Close", scroll, parent)
+}
+
+// Example usage - uncomment and modify for your use case:
+/*
+//go:embed help_images/*
+var helpImages embed.FS
+
+func showHelpDialog(w fyne.Window) {
+	helpText := `# Getting Started
+
+Welcome to the application! Here's how to use it:
+
+## Loading Data
+
+Click the **File** menu and select **Open** to load your data file.
+
+![Loading data](help_images/load_data.png)
+
+## Viewing Results
+
+After loading, your data will be displayed in the main plot area.
+
+![Plot view](help_images/plot_view.png)
+
+## Tips
+
+- Use the mouse wheel to zoom
+- Click and drag to pan
+- Double-click to reset the view
+`
+	ShowMarkdownDialogWithImages("Help", helpText, &helpImages, w)
+}
+*/
+
+// For testing without embedded images (uses local filesystem):
+func showExampleMarkdownDialog(w fyne.Window) {
+	exampleMarkdown := `# Example Dialog with Images
+
+This demonstrates **markdown** with inline images.
+
+## Section 1
+
+Here is some text with *italic* and **bold** formatting.
+
+![Example Image](example.png)
+
+## Section 2
+
+You can include multiple images:
+
+![Another Image](another.png)
+
+And continue with more text after the images.
+
+### Features
+
+- Bullet points work
+- As do other markdown features
+- Images are displayed inline
+
+That's all for this example!
+`
+	// Pass nil for embedFS to load images from local filesystem
+	ShowMarkdownDialogWithImages("Example", exampleMarkdown, nil, w)
+}

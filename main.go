@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"embed"
 	"fmt"
 	"image/color"
 	"os"
@@ -25,8 +26,11 @@ import (
 	"github.com/pconstantinou/savitzkygolay"
 )
 
+//go:embed BobTest.md
+var bobTestMarkdown embed.FS
+
 // Version information
-const Version = "1.0.43"
+const Version = "1.0.44"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -371,12 +375,34 @@ func main() {
 					"4. Points are averaged in groups, with partial blocks at ends ignored\n\n"+
 					"Note: Reload the CSV to restore original data.", w)
 		}),
+		fyne.NewMenuItem("Bob Test", func() {
+			content, err := bobTestMarkdown.ReadFile("BobTest.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load BobTest.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Bob Test", string(content), &bobTestMarkdown, w)
+		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About", func() {
-			dialog.ShowInformation("About GoPyOTE",
-				fmt.Sprintf("GoPyOTE Version %s\n\n"+
-					"A Go desktop application for astronomical\n"+
-					"occultation timing and analysis.", Version), w)
+			aboutMarkdown := fmt.Sprintf(`# GoPyOTE
+
+**Version %s**
+
+A Go desktop application for astronomical occultation timing and analysis.
+
+## Features
+
+- **Light curve visualization** - Interactive plotting with zoom and pan
+- **Timing analysis** - Automatic detection of cadence errors and dropped frames
+- **Normalization** - Correct for atmospheric effects using reference stars
+- **Block integration** - Reduce noise by averaging consecutive readings
+
+## Credits
+
+Developed for the occultation astronomy community.
+`, Version)
+			ShowMarkdownDialogWithImages("About GoPyOTE", aboutMarkdown, nil, w)
 		}),
 	)
 	mainMenu := fyne.NewMainMenu(helpMenu)
