@@ -22,7 +22,7 @@ import (
 // //go:embed images/*
 // var embeddedImages embed.FS
 
-// MarkdownSegment represents a piece of the markdown content
+// MarkdownSegment represents a piece of the Markdown content
 type MarkdownSegment struct {
 	IsImage bool
 	Content string  // Text content or image path
@@ -32,12 +32,12 @@ type MarkdownSegment struct {
 }
 
 // imageRegex matches Markdown image syntax: ![alt text](image_path) or ![alt text](image_path =WxH)
-var imageRegex = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+var imageRegex = regexp.MustCompile(`!\[([^]]*)]\(([^)]+)\)`)
 
-// imageSizeRegex extracts size from image path: "image.png =600x400" or "image.png =600"
+// imageSizeRegex extracts size from an image path: "image.png =600x400" or "image.png =600"
 var imageSizeRegex = regexp.MustCompile(`^(.+?)\s*=(\d+)(?:x(\d+))?$`)
 
-// parseMarkdownWithImages parses markdown text and separates text from image references
+// parseMarkdownWithImages parses Markdown text and separates text from image references
 func parseMarkdownWithImages(markdown string) []MarkdownSegment {
 	var segments []MarkdownSegment
 
@@ -70,7 +70,7 @@ func parseMarkdownWithImages(markdown string) []MarkdownSegment {
 		altText := markdown[match[2]:match[3]]
 		imagePath := markdown[match[4]:match[5]]
 
-		// Parse optional size from image path: "image.png =600x400" or "image.png =600"
+		// Parse optional size from an image path: "image.png =600x400" or "image.png =600"
 		var width, height float32
 		sizeMatch := imageSizeRegex.FindStringSubmatch(imagePath)
 		if sizeMatch != nil {
@@ -125,15 +125,7 @@ func loadImageFromEmbedFS(fs embed.FS, path string) (image.Image, error) {
 	return img, nil
 }
 
-// loadImageFromFile loads an image from the local filesystem
-func loadImageFromFile(path string) *canvas.Image {
-	img := canvas.NewImageFromFile(path)
-	img.FillMode = canvas.ImageFillContain
-	img.SetMinSize(fyne.NewSize(200, 150)) // Default size, adjust as needed
-	return img
-}
-
-// createMarkdownContentWithImages creates a Fyne container from markdown with images
+// createMarkdownContentWithImages creates a Fyne container from Markdown with images
 // If embedFS is nil, images are loaded from the local filesystem
 func createMarkdownContentWithImages(markdown string, embedFS *embed.FS) fyne.CanvasObject {
 	segments := parseMarkdownWithImages(markdown)
@@ -169,12 +161,12 @@ func createMarkdownContentWithImages(markdown string, embedFS *embed.FS) fyne.Ca
 			if seg.Height > 0 {
 				imgHeight = seg.Height
 			} else if seg.Width > 0 {
-				// If only width specified, maintain aspect ratio (use 2:3 ratio as default)
+				// If only width specified, maintain the aspect ratio (use 2:3 ratio as default)
 				imgHeight = seg.Width * 2 / 3
 			}
 			img.SetMinSize(fyne.NewSize(imgWidth, imgHeight))
 
-			// Wrap image in a container with optional caption
+			// Wrap the image in a container with an optional caption
 			if seg.AltText != "" {
 				caption := widget.NewLabelWithStyle(seg.AltText, fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 				imgWithCaption := container.NewVBox(img, caption)
@@ -183,7 +175,7 @@ func createMarkdownContentWithImages(markdown string, embedFS *embed.FS) fyne.Ca
 				objects = append(objects, img)
 			}
 		} else {
-			// Render text as markdown using Fyne's RichText
+			// Render text as Markdown using Fyne's RichText
 			richText := widget.NewRichTextFromMarkdown(seg.Content)
 			richText.Wrapping = fyne.TextWrapWord
 			objects = append(objects, richText)
@@ -196,7 +188,7 @@ func createMarkdownContentWithImages(markdown string, embedFS *embed.FS) fyne.Ca
 	return content
 }
 
-// ShowMarkdownDialogWithImages displays a resizable window with markdown content including images
+// ShowMarkdownDialogWithImages displays a resizable window with Markdown content including images
 func ShowMarkdownDialogWithImages(title, markdown string, embedFS *embed.FS, parent fyne.Window) {
 	content := createMarkdownContentWithImages(markdown, embedFS)
 
@@ -208,7 +200,7 @@ func ShowMarkdownDialogWithImages(title, markdown string, embedFS *embed.FS, par
 	helpWindow.SetContent(scroll)
 	helpWindow.Resize(fyne.NewSize(750, 500))
 
-	// Center the window relative to parent if possible
+	// Center the window relative to the parent if possible
 	if parent != nil {
 		// Position near the parent window
 		parentPos := parent.Canvas().Size()
@@ -252,35 +244,3 @@ After loading, your data will be displayed in the main plot area.
 	ShowMarkdownDialogWithImages("Help", helpText, &helpImages, w)
 }
 */
-
-// For testing without embedded images (uses local filesystem):
-func showExampleMarkdownDialog(w fyne.Window) {
-	exampleMarkdown := `# Example Dialog with Images
-
-This demonstrates **markdown** with inline images.
-
-## Section 1
-
-Here is some text with *italic* and **bold** formatting.
-
-![Example Image](example.png)
-
-## Section 2
-
-You can include multiple images:
-
-![Another Image](another.png)
-
-And continue with more text after the images.
-
-### Features
-
-- Bullet points work
-- As do other markdown features
-- Images are displayed inline
-
-That's all for this example!
-`
-	// Pass nil for embedFS to load images from local filesystem
-	ShowMarkdownDialogWithImages("Example", exampleMarkdown, nil, w)
-}

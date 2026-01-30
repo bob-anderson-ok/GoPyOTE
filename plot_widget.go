@@ -634,7 +634,7 @@ func (r *lightCurvePlotRenderer) Refresh() {
 
 		// Create scatter points for interpolated points (dark gray with red circle outline)
 		if len(interpolatedPts) > 0 {
-			// First draw a larger red circle as the outline
+			// First, draw a larger red circle as the outline
 			redOutline, err := plotter.NewScatter(interpolatedPts)
 			if err != nil {
 				fmt.Printf("Error creating interpolated outline scatter: %v\n", err)
@@ -659,7 +659,7 @@ func (r *lightCurvePlotRenderer) Refresh() {
 
 		// Create scatter points for negative delta points (series color with black circle outline)
 		if len(negativeDeltaPts) > 0 {
-			// First draw a larger black circle as the outline
+			// First, draw a larger black circle as the outline
 			blackOutline, err := plotter.NewScatter(negativeDeltaPts)
 			if err != nil {
 				fmt.Printf("Error creating negative delta outline scatter: %v\n", err)

@@ -30,7 +30,7 @@ import (
 var bobTestMarkdown embed.FS
 
 // Version information
-const Version = "1.0.45"
+const Version = "1.0.46"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string

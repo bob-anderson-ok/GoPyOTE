@@ -77,7 +77,7 @@ func analyzeTimingErrors(timeValues []float64) *TimingAnalysisResult {
 		}
 	}
 
-	// Second pass: identify dropped frames, but skip steps that follow a negative delta
+	// Second pass: identify dropped frames but skip steps that follow a negative delta
 	// (those appear artificially large due to the bad timestamp)
 	for i, step := range timeSteps {
 		if negativeIndices[i] {
@@ -103,7 +103,7 @@ func analyzeTimingErrors(timeValues []float64) *TimingAnalysisResult {
 		}
 	}
 
-	// Calculate average time step using only valid frames
+	// Calculate an average time step using only valid frames
 	// Exclude: dropped frames, negative deltas, and steps following a negative delta
 	var validStepSum float64
 	var validStepCount int
@@ -129,7 +129,7 @@ func analyzeTimingErrors(timeValues []float64) *TimingAnalysisResult {
 	// Second pass: identify cadence errors using average as reference
 	for i, step := range timeSteps {
 		if droppedIndices[i] || negativeIndices[i] {
-			continue // Already identified as dropped frame or negative delta
+			continue // Already identified as a dropped frame or negative delta
 		}
 		ratio := step / result.AverageTimeStep
 
@@ -150,7 +150,7 @@ func analyzeTimingErrors(timeValues []float64) *TimingAnalysisResult {
 
 // fixNegativeDeltaTimestamps fixes timestamps that have negative deltas by replacing
 // them with: previous timestamp + average time step. Only the specific frame with the
-// negative delta is fixed, not subsequent frames. Returns the number of timestamps fixed.
+// negative delta is fixed, not later frames. Returns the number of timestamps fixed.
 func fixNegativeDeltaTimestamps(data *LightCurveData, negativeDeltaErrors []TimingError, averageTimeStep float64) int {
 	if len(negativeDeltaErrors) == 0 || data == nil || len(data.TimeValues) < 2 {
 		return 0

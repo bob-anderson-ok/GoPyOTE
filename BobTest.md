@@ -1,6 +1,6 @@
 # Bob's Test Document
 
-This is a **test** of the embedded markdown dialog system.
+This is a **test** of the embedded Markdown dialog system.
 
 ## Features Demonstrated
 
@@ -10,7 +10,7 @@ This is a **test** of the embedded markdown dialog system.
 
 ## How It Works
 
-1. The markdown file is embedded using Go's `embed` package
+1. The Markdown file is embedded using Go's `embed` package
 2. Content is parsed to separate text from image references
 3. Text is rendered using Fyne's `RichTextFromMarkdown`
 4. Images (if any) are loaded and displayed inline
