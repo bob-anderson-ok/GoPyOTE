@@ -26,7 +26,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.41"
+const Version = "1.0.42"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -780,10 +780,12 @@ func main() {
 					xVal = frameNum
 				}
 				points = append(points, PlotPoint{
-					X:      xVal,
-					Y:      val,
-					Index:  i,
-					Series: len(allSeries),
+					X:            xVal,
+					Y:            val,
+					Index:        i,
+					Series:       len(allSeries),
+					Interpolated: isInterpolatedIndex(i),
+					OCRError:     isOCRErrorIndex(i),
 				})
 			}
 
@@ -827,10 +829,12 @@ func main() {
 					xVal = frameNum
 				}
 				smoothPoints = append(smoothPoints, PlotPoint{
-					X:      xVal,
-					Y:      pt.Y,
-					Index:  pt.Index,
-					Series: len(allSeries),
+					X:            xVal,
+					Y:            pt.Y,
+					Index:        pt.Index,
+					Series:       len(allSeries),
+					Interpolated: isInterpolatedIndex(pt.Index),
+					OCRError:     isOCRErrorIndex(pt.Index),
 				})
 			}
 			if len(smoothPoints) > 0 {
@@ -1194,6 +1198,30 @@ func main() {
 			}
 			if timestampsEmpty && len(data.TimeValues) > 0 {
 				dialog.ShowInformation("Warning", "Manual timestamping is required.", w)
+			}
+
+			// Analyze timing errors if timestamps are available
+			resetInterpolatedIndices() // Clear any previous interpolated indices
+			resetOCRErrorIndices()     // Clear any previous OCR error indices
+			if !timestampsEmpty && len(data.TimeValues) > 1 {
+				timingResult := analyzeTimingErrors(data.TimeValues)
+				if timingResult != nil && (len(timingResult.CadenceErrors) > 0 || len(timingResult.DroppedFrameErrors) > 0 || len(timingResult.OCRErrors) > 0) {
+					// Fix OCR timestamp errors first (before dropped frame interpolation)
+					if len(timingResult.OCRErrors) > 0 {
+						timingResult.OCRFixedCount = fixOCRTimestampErrors(data, timingResult.OCRErrors, timingResult.MedianTimeStep)
+						logAction(fmt.Sprintf("Fixed %d OCR timestamp errors", timingResult.OCRFixedCount))
+					}
+					// Interpolate dropped frames
+					if len(timingResult.DroppedFrameErrors) > 0 {
+						timingResult.InterpolatedCount = interpolateDroppedFrames(data, timingResult.DroppedFrameErrors)
+						logAction(fmt.Sprintf("Interpolated %d dropped frames", timingResult.InterpolatedCount))
+					}
+					// Show timing error report dialog
+					report := formatTimingReport(timingResult)
+					logAction(fmt.Sprintf("Timing analysis: %d OCR errors, %d cadence errors, %d dropped frame gaps",
+						len(timingResult.OCRErrors), len(timingResult.CadenceErrors), len(timingResult.DroppedFrameErrors)))
+					dialog.ShowInformation("Timing Analysis", report, w)
+				}
 			}
 
 			// Clear displayed curves and reset the plot

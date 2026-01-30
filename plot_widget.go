@@ -589,7 +589,20 @@ func (r *lightCurvePlotRenderer) Refresh() {
 
 	// Add each series
 	for s, series := range p.series {
-		// Create XY data for line and scatter
+		// Separate regular, interpolated, and OCR error points
+		var regularPts, interpolatedPts, ocrErrorPts plotter.XYs
+		for _, pt := range series.Points {
+			xy := plotter.XY{X: pt.X, Y: pt.Y}
+			if pt.Interpolated {
+				interpolatedPts = append(interpolatedPts, xy)
+			} else if pt.OCRError {
+				ocrErrorPts = append(ocrErrorPts, xy)
+			} else {
+				regularPts = append(regularPts, xy)
+			}
+		}
+
+		// Create XY data for line (includes all points for continuity)
 		pts := make(plotter.XYs, len(series.Points))
 		for i, pt := range series.Points {
 			pts[i].X = pt.X
@@ -606,18 +619,68 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		line.Width = vg.Points(2)
 		plt.Add(line)
 
-		// Create scatter points
-		scatter, err := plotter.NewScatter(pts)
-		if err != nil {
-			fmt.Printf("Error creating scatter plot: %v\n", err)
-			continue
+		// Create scatter points for regular (non-interpolated, non-OCR-error) points
+		if len(regularPts) > 0 {
+			scatter, err := plotter.NewScatter(regularPts)
+			if err != nil {
+				fmt.Printf("Error creating scatter plot: %v\n", err)
+			} else {
+				scatter.Color = series.Color
+				scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+				scatter.GlyphStyle.Radius = vg.Points(4)
+				plt.Add(scatter)
+			}
 		}
-		scatter.Color = series.Color
-		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
-		scatter.GlyphStyle.Radius = vg.Points(4)
 
-		// Draw regular scatter points
-		plt.Add(scatter)
+		// Create scatter points for OCR error points (series color with black circle outline)
+		if len(ocrErrorPts) > 0 {
+			// First draw a larger black circle as the outline
+			blackOutline, err := plotter.NewScatter(ocrErrorPts)
+			if err != nil {
+				fmt.Printf("Error creating OCR error outline scatter: %v\n", err)
+			} else {
+				blackOutline.Color = color.RGBA{R: 0, G: 0, B: 0, A: 255} // Black
+				blackOutline.GlyphStyle.Shape = draw.CircleGlyph{}
+				blackOutline.GlyphStyle.Radius = vg.Points(6) // Larger for outline effect
+				plt.Add(blackOutline)
+			}
+
+			// Then draw the series-colored circle on top
+			ocrScatter, err := plotter.NewScatter(ocrErrorPts)
+			if err != nil {
+				fmt.Printf("Error creating OCR error scatter plot: %v\n", err)
+			} else {
+				ocrScatter.Color = series.Color // Same color as regular points
+				ocrScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+				ocrScatter.GlyphStyle.Radius = vg.Points(4) // Same size as regular points
+				plt.Add(ocrScatter)
+			}
+		}
+
+		// Create scatter points for interpolated points (dark gray with red circle outline)
+		if len(interpolatedPts) > 0 {
+			// First draw a larger red circle as the outline
+			redOutline, err := plotter.NewScatter(interpolatedPts)
+			if err != nil {
+				fmt.Printf("Error creating interpolated outline scatter: %v\n", err)
+			} else {
+				redOutline.Color = color.RGBA{R: 255, G: 0, B: 0, A: 255} // Red
+				redOutline.GlyphStyle.Shape = draw.CircleGlyph{}
+				redOutline.GlyphStyle.Radius = vg.Points(6) // Larger for outline effect
+				plt.Add(redOutline)
+			}
+
+			// Then draw the dark gray circle on top
+			interpScatter, err := plotter.NewScatter(interpolatedPts)
+			if err != nil {
+				fmt.Printf("Error creating interpolated scatter plot: %v\n", err)
+			} else {
+				interpScatter.Color = color.RGBA{R: 100, G: 100, B: 100, A: 255} // Dark gray
+				interpScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+				interpScatter.GlyphStyle.Radius = vg.Points(4) // Same size as regular points
+				plt.Add(interpScatter)
+			}
+		}
 
 		// Highlight selected point 1 (red)
 		if s == p.selectedSeries && p.selectedIndex >= 0 && p.selectedIndex < len(series.Points) {
@@ -651,8 +714,16 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			}
 		}
 
-		// Add to legend
-		plt.Legend.Add(series.Name, line, scatter)
+		// Add to legend (create a dummy scatter for legend entry)
+		legendScatter, _ := plotter.NewScatter(pts)
+		if legendScatter != nil {
+			legendScatter.Color = series.Color
+			legendScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+			legendScatter.GlyphStyle.Radius = vg.Points(4)
+			plt.Legend.Add(series.Name, line, legendScatter)
+		} else {
+			plt.Legend.Add(series.Name, line)
+		}
 	}
 
 	// Set axis ranges
