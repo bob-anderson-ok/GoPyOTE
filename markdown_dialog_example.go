@@ -4,12 +4,12 @@ import (
 	"embed"
 	"image"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
 	// Import image decoders
@@ -25,12 +25,17 @@ import (
 // MarkdownSegment represents a piece of the markdown content
 type MarkdownSegment struct {
 	IsImage bool
-	Content string // Text content or image path
-	AltText string // Alt text for images
+	Content string  // Text content or image path
+	AltText string  // Alt text for images
+	Width   float32 // Image width (0 = use default)
+	Height  float32 // Image height (0 = use default)
 }
 
-// imageRegex matches Markdown image syntax: ![alt text](image_path)
+// imageRegex matches Markdown image syntax: ![alt text](image_path) or ![alt text](image_path =WxH)
 var imageRegex = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+
+// imageSizeRegex extracts size from image path: "image.png =600x400" or "image.png =600"
+var imageSizeRegex = regexp.MustCompile(`^(.+?)\s*=(\d+)(?:x(\d+))?$`)
 
 // parseMarkdownWithImages parses markdown text and separates text from image references
 func parseMarkdownWithImages(markdown string) []MarkdownSegment {
@@ -64,10 +69,28 @@ func parseMarkdownWithImages(markdown string) []MarkdownSegment {
 		// Add the image segment
 		altText := markdown[match[2]:match[3]]
 		imagePath := markdown[match[4]:match[5]]
+
+		// Parse optional size from image path: "image.png =600x400" or "image.png =600"
+		var width, height float32
+		sizeMatch := imageSizeRegex.FindStringSubmatch(imagePath)
+		if sizeMatch != nil {
+			imagePath = strings.TrimSpace(sizeMatch[1])
+			if w, err := strconv.ParseFloat(sizeMatch[2], 32); err == nil {
+				width = float32(w)
+			}
+			if len(sizeMatch) > 3 && sizeMatch[3] != "" {
+				if h, err := strconv.ParseFloat(sizeMatch[3], 32); err == nil {
+					height = float32(h)
+				}
+			}
+		}
+
 		segments = append(segments, MarkdownSegment{
 			IsImage: true,
 			Content: imagePath,
 			AltText: altText,
+			Width:   width,
+			Height:  height,
 		})
 
 		lastEnd = match[1]
@@ -137,7 +160,19 @@ func createMarkdownContentWithImages(markdown string, embedFS *embed.FS) fyne.Ca
 			}
 
 			img.FillMode = canvas.ImageFillContain
-			img.SetMinSize(fyne.NewSize(300, 200)) // Adjust size as needed
+			// Use specified size or default to 600x400
+			imgWidth := float32(600)
+			imgHeight := float32(400)
+			if seg.Width > 0 {
+				imgWidth = seg.Width
+			}
+			if seg.Height > 0 {
+				imgHeight = seg.Height
+			} else if seg.Width > 0 {
+				// If only width specified, maintain aspect ratio (use 2:3 ratio as default)
+				imgHeight = seg.Width * 2 / 3
+			}
+			img.SetMinSize(fyne.NewSize(imgWidth, imgHeight))
 
 			// Wrap image in a container with optional caption
 			if seg.AltText != "" {
@@ -161,15 +196,29 @@ func createMarkdownContentWithImages(markdown string, embedFS *embed.FS) fyne.Ca
 	return content
 }
 
-// ShowMarkdownDialogWithImages displays a dialog with markdown content including images
+// ShowMarkdownDialogWithImages displays a resizable window with markdown content including images
 func ShowMarkdownDialogWithImages(title, markdown string, embedFS *embed.FS, parent fyne.Window) {
 	content := createMarkdownContentWithImages(markdown, embedFS)
 
 	// Wrap in a scroll container for long content
 	scroll := container.NewVScroll(content)
-	scroll.SetMinSize(fyne.NewSize(500, 400))
 
-	dialog.ShowCustom(title, "Close", scroll, parent)
+	// Create a new resizable window instead of a dialog
+	helpWindow := fyne.CurrentApp().NewWindow(title)
+	helpWindow.SetContent(scroll)
+	helpWindow.Resize(fyne.NewSize(750, 500))
+
+	// Center the window relative to parent if possible
+	if parent != nil {
+		// Position near the parent window
+		parentPos := parent.Canvas().Size()
+		helpWindow.Resize(fyne.NewSize(
+			min(750, parentPos.Width*0.8),
+			min(500, parentPos.Height*0.8),
+		))
+	}
+
+	helpWindow.Show()
 }
 
 // Example usage - uncomment and modify for your use case:

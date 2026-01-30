@@ -26,11 +26,11 @@ import (
 	"github.com/pconstantinou/savitzkygolay"
 )
 
-//go:embed BobTest.md
+//go:embed BobTest.md diffractionImage8bit.png
 var bobTestMarkdown embed.FS
 
 // Version information
-const Version = "1.0.44"
+const Version = "1.0.45"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -335,6 +335,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 func main() {
 	a := app.NewWithID("com.gopyote.app")
 	w := a.NewWindow("GoPyOTE Version: " + Version)
+	w.SetMaster() // Closing this window will quit the app and close all other windows
 
 	// Load saved window geometry
 	prefs := a.Preferences()
