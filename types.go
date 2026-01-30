@@ -56,7 +56,6 @@ type PlotPoint struct {
 	Index        int     // Point index for identification
 	Series       int     // Which series this point belongs to
 	Interpolated bool    // True if this point was interpolated (e.g., dropped frame)
-	OCRError     bool    // True if this point had an OCR timestamp error (corrected)
 }
 
 // PlotSeries represents a single light curve series

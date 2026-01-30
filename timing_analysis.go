@@ -9,7 +9,7 @@ import (
 // TimingError represents a timing anomaly in the light curve data
 type TimingError struct {
 	Index        int     // Index in the data where the error occurs (after the time step)
-	ErrorType    string  // "cadence", "dropped", or "ocr"
+	ErrorType    string  // "cadence" or "dropped"
 	TimeStep     float64 // Actual time step observed
 	ExpectedStep float64 // Expected (median) time step
 	Ratio        float64 // Ratio of actual to expected
@@ -18,12 +18,13 @@ type TimingError struct {
 
 // TimingAnalysisResult contains the results of timing analysis
 type TimingAnalysisResult struct {
-	MedianTimeStep     float64
-	CadenceErrors      []TimingError
-	DroppedFrameErrors []TimingError
-	OCRErrors          []TimingError // Negative time deltas not due to midnight (OCR misread)
-	InterpolatedCount  int           // Number of points interpolated
-	OCRFixedCount      int           // Number of timestamps fixed due to OCR errors
+	MedianTimeStep      float64
+	AverageTimeStep     float64 // Average of valid (non-dropped) time steps
+	CadenceErrors       []TimingError
+	DroppedFrameErrors  []TimingError
+	NegativeDeltaErrors []TimingError // Negative time deltas (not midnight crossing)
+	InterpolatedCount   int           // Number of points interpolated
+	NegativeDeltaFixed  int           // Number of negative delta timestamps fixed
 }
 
 // analyzeTimingErrors examines time values and detects cadence and dropped frame errors
@@ -58,22 +59,36 @@ func analyzeTimingErrors(timeValues []float64) *TimingAnalysisResult {
 		return result
 	}
 
-	// Analyze each time step for errors
+	// First pass: identify negative deltas
+	droppedIndices := make(map[int]bool)
+	negativeIndices := make(map[int]bool)
 	for i, step := range timeSteps {
-		ratio := step / result.MedianTimeStep
-
-		// OCR error: negative time delta that's not a midnight crossing,
-		// which would be a large negative jump (handled in decodeTimestamp),
-		// Small negative jumps indicate OCR misread of the timestamp
 		if step < 0 {
-			result.OCRErrors = append(result.OCRErrors, TimingError{
-				Index:        i + 1, // Index of the point with the bad timestamp
-				ErrorType:    "ocr",
+			// Negative time delta (not a midnight crossing - those are handled in decodeTimestamp)
+			ratio := step / result.MedianTimeStep
+			result.NegativeDeltaErrors = append(result.NegativeDeltaErrors, TimingError{
+				Index:        i + 1, // Index of the frame with the bad timestamp
+				ErrorType:    "negative",
 				TimeStep:     step,
 				ExpectedStep: result.MedianTimeStep,
 				Ratio:        ratio,
 			})
-		} else if ratio >= 1.8 {
+			negativeIndices[i] = true
+		}
+	}
+
+	// Second pass: identify dropped frames, but skip steps that follow a negative delta
+	// (those appear artificially large due to the bad timestamp)
+	for i, step := range timeSteps {
+		if negativeIndices[i] {
+			continue // Skip negative deltas
+		}
+		// Skip if the previous step was a negative delta - the large gap is artificial
+		if i > 0 && negativeIndices[i-1] {
+			continue
+		}
+		ratio := step / result.MedianTimeStep
+		if ratio >= 1.8 {
 			// Dropped frame error: ratio >= 1.8 (could be multiple dropped frames)
 			droppedCount := int(math.Round(ratio)) - 1 // Number of frames that were dropped
 			result.DroppedFrameErrors = append(result.DroppedFrameErrors, TimingError{
@@ -84,19 +99,76 @@ func analyzeTimingErrors(timeValues []float64) *TimingAnalysisResult {
 				Ratio:        ratio,
 				DroppedCount: droppedCount,
 			})
-		} else if ratio >= 1.3 || ratio <= 0.7 {
+			droppedIndices[i] = true
+		}
+	}
+
+	// Calculate average time step using only valid frames
+	// Exclude: dropped frames, negative deltas, and steps following a negative delta
+	var validStepSum float64
+	var validStepCount int
+	for i, step := range timeSteps {
+		if droppedIndices[i] || negativeIndices[i] {
+			continue
+		}
+		// Also exclude the step following a negative delta (artificially large)
+		if i > 0 && negativeIndices[i-1] {
+			continue
+		}
+		if step > 0 {
+			validStepSum += step
+			validStepCount++
+		}
+	}
+	if validStepCount > 0 {
+		result.AverageTimeStep = validStepSum / float64(validStepCount)
+	} else {
+		result.AverageTimeStep = result.MedianTimeStep // Fallback to median if no valid steps
+	}
+
+	// Second pass: identify cadence errors using average as reference
+	for i, step := range timeSteps {
+		if droppedIndices[i] || negativeIndices[i] {
+			continue // Already identified as dropped frame or negative delta
+		}
+		ratio := step / result.AverageTimeStep
+
+		if ratio >= 1.3 || ratio <= 0.7 {
 			// Cadence error: ratio is 1.3x or 0.7x normal
 			result.CadenceErrors = append(result.CadenceErrors, TimingError{
 				Index:        i + 1,
 				ErrorType:    "cadence",
 				TimeStep:     step,
-				ExpectedStep: result.MedianTimeStep,
+				ExpectedStep: result.AverageTimeStep,
 				Ratio:        ratio,
 			})
 		}
 	}
 
 	return result
+}
+
+// fixNegativeDeltaTimestamps fixes timestamps that have negative deltas by replacing
+// them with: previous timestamp + average time step. Only the specific frame with the
+// negative delta is fixed, not subsequent frames. Returns the number of timestamps fixed.
+func fixNegativeDeltaTimestamps(data *LightCurveData, negativeDeltaErrors []TimingError, averageTimeStep float64) int {
+	if len(negativeDeltaErrors) == 0 || data == nil || len(data.TimeValues) < 2 {
+		return 0
+	}
+
+	fixed := 0
+	for _, err := range negativeDeltaErrors {
+		idx := err.Index
+		if idx < 1 || idx >= len(data.TimeValues) {
+			continue
+		}
+
+		// Replace the timestamp with: previous timestamp + average time step
+		data.TimeValues[idx] = data.TimeValues[idx-1] + averageTimeStep
+		fixed++
+	}
+
+	return fixed
 }
 
 // interpolateDroppedFrames modifies the LightCurveData in place to insert interpolated
@@ -218,17 +290,9 @@ func insertFloat64Slice(slice []float64, pos int, values []float64) []float64 {
 // Global map to track interpolated indices
 var interpolatedIndices map[int]bool
 
-// Global map to track OCR error indices
-var ocrErrorIndices map[int]bool
-
 // resetInterpolatedIndices clears the interpolated indices map
 func resetInterpolatedIndices() {
 	interpolatedIndices = make(map[int]bool)
-}
-
-// resetOCRErrorIndices clears the OCR error indices map
-func resetOCRErrorIndices() {
-	ocrErrorIndices = make(map[int]bool)
 }
 
 // isInterpolatedIndex checks if a given index was interpolated
@@ -239,43 +303,28 @@ func isInterpolatedIndex(idx int) bool {
 	return interpolatedIndices[idx]
 }
 
-// isOCRErrorIndex checks if a given index had an OCR timestamp error
-func isOCRErrorIndex(idx int) bool {
-	if ocrErrorIndices == nil {
-		return false
-	}
-	return ocrErrorIndices[idx]
+// Global map to track negative delta indices
+var negativeDeltaIndices map[int]bool
+
+// resetNegativeDeltaIndices clears the negative delta indices map
+func resetNegativeDeltaIndices() {
+	negativeDeltaIndices = make(map[int]bool)
 }
 
-// fixOCRTimestampErrors fixes timestamps that have OCR errors (negative time deltas)
-// by substituting the expected timestamp (previous time + median step).
-// The data values are kept as-is since only the timestamp was misread.
-// Returns the number of timestamps fixed.
-func fixOCRTimestampErrors(data *LightCurveData, ocrErrors []TimingError, medianTimeStep float64) int {
-	if len(ocrErrors) == 0 || data == nil || len(data.TimeValues) < 2 {
-		return 0
+// markNegativeDeltaIndex marks an index as having a negative delta
+func markNegativeDeltaIndex(idx int) {
+	if negativeDeltaIndices == nil {
+		negativeDeltaIndices = make(map[int]bool)
 	}
+	negativeDeltaIndices[idx] = true
+}
 
-	fixed := 0
-	for _, err := range ocrErrors {
-		idx := err.Index
-		if idx < 1 || idx >= len(data.TimeValues) {
-			continue
-		}
-
-		// Calculate expected timestamp: previous time + median step
-		expectedTime := data.TimeValues[idx-1] + medianTimeStep
-
-		// Fix the timestamp
-		data.TimeValues[idx] = expectedTime
-
-		// Mark this index as having an OCR error (for display purposes)
-		ocrErrorIndices[idx] = true
-
-		fixed++
+// isNegativeDeltaIndex checks if a given index had a negative delta
+func isNegativeDeltaIndex(idx int) bool {
+	if negativeDeltaIndices == nil {
+		return false
 	}
-
-	return fixed
+	return negativeDeltaIndices[idx]
 }
 
 // formatTimingReport creates a human-readable report of timing errors
@@ -286,31 +335,31 @@ func formatTimingReport(result *TimingAnalysisResult) string {
 
 	var report string
 
-	report += fmt.Sprintf("Median time step: %.4f seconds\n\n", result.MedianTimeStep)
+	report += fmt.Sprintf("Median time step: %.4f seconds\n", result.MedianTimeStep)
+	report += fmt.Sprintf("Average time step (valid frames): %.4f seconds\n\n", result.AverageTimeStep)
 
-	if len(result.CadenceErrors) == 0 && len(result.DroppedFrameErrors) == 0 && len(result.OCRErrors) == 0 {
+	if len(result.CadenceErrors) == 0 && len(result.DroppedFrameErrors) == 0 && len(result.NegativeDeltaErrors) == 0 {
 		report += "No timing errors detected."
 		return report
 	}
 
-	if len(result.OCRErrors) > 0 {
-		report += fmt.Sprintf("OCR TIMESTAMP ERRORS (%d found):\n", len(result.OCRErrors))
-		for i, err := range result.OCRErrors {
+	if len(result.NegativeDeltaErrors) > 0 {
+		report += fmt.Sprintf("NEGATIVE DELTA ERRORS (%d found):\n", len(result.NegativeDeltaErrors))
+		for i, err := range result.NegativeDeltaErrors {
 			if i >= 10 {
-				report += fmt.Sprintf("  ... and %d more\n", len(result.OCRErrors)-10)
+				report += fmt.Sprintf("  ... and %d more\n", len(result.NegativeDeltaErrors)-10)
 				break
 			}
-			report += fmt.Sprintf("  At index %d: negative step=%.4fs\n",
-				err.Index, err.TimeStep)
+			report += fmt.Sprintf("  At index %d: step=%.4fs\n", err.Index, err.TimeStep)
 		}
-		if result.OCRFixedCount > 0 {
-			report += fmt.Sprintf("  %d timestamps corrected (marked with black circles).\n", result.OCRFixedCount)
+		if result.NegativeDeltaFixed > 0 {
+			report += fmt.Sprintf("\n%d timestamps corrected.\n", result.NegativeDeltaFixed)
 		}
 		report += "\n"
 	}
 
 	if len(result.CadenceErrors) > 0 {
-		report += fmt.Sprintf("CADENCE ERRORS (%d found):\n", len(result.CadenceErrors))
+		report += fmt.Sprintf("CADENCE OR OCR ERRORS (%d found):\n", len(result.CadenceErrors))
 		for i, err := range result.CadenceErrors {
 			if i >= 10 {
 				report += fmt.Sprintf("  ... and %d more\n", len(result.CadenceErrors)-10)

@@ -26,7 +26,7 @@ import (
 )
 
 // Version information
-const Version = "1.0.42"
+const Version = "1.0.43"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -785,7 +785,6 @@ func main() {
 					Index:        i,
 					Series:       len(allSeries),
 					Interpolated: isInterpolatedIndex(i),
-					OCRError:     isOCRErrorIndex(i),
 				})
 			}
 
@@ -834,7 +833,6 @@ func main() {
 					Index:        pt.Index,
 					Series:       len(allSeries),
 					Interpolated: isInterpolatedIndex(pt.Index),
-					OCRError:     isOCRErrorIndex(pt.Index),
 				})
 			}
 			if len(smoothPoints) > 0 {
@@ -1201,25 +1199,38 @@ func main() {
 			}
 
 			// Analyze timing errors if timestamps are available
-			resetInterpolatedIndices() // Clear any previous interpolated indices
-			resetOCRErrorIndices()     // Clear any previous OCR error indices
+			resetInterpolatedIndices()  // Clear any previous interpolated indices
+			resetNegativeDeltaIndices() // Clear any previous negative delta indices
 			if !timestampsEmpty && len(data.TimeValues) > 1 {
 				timingResult := analyzeTimingErrors(data.TimeValues)
-				if timingResult != nil && (len(timingResult.CadenceErrors) > 0 || len(timingResult.DroppedFrameErrors) > 0 || len(timingResult.OCRErrors) > 0) {
-					// Fix OCR timestamp errors first (before dropped frame interpolation)
-					if len(timingResult.OCRErrors) > 0 {
-						timingResult.OCRFixedCount = fixOCRTimestampErrors(data, timingResult.OCRErrors, timingResult.MedianTimeStep)
-						logAction(fmt.Sprintf("Fixed %d OCR timestamp errors", timingResult.OCRFixedCount))
+				if timingResult != nil && (len(timingResult.CadenceErrors) > 0 || len(timingResult.DroppedFrameErrors) > 0 || len(timingResult.NegativeDeltaErrors) > 0) {
+					// Fix negative delta timestamps first (before interpolation)
+					if len(timingResult.NegativeDeltaErrors) > 0 {
+						timingResult.NegativeDeltaFixed = fixNegativeDeltaTimestamps(data, timingResult.NegativeDeltaErrors, timingResult.AverageTimeStep)
+						logAction(fmt.Sprintf("Fixed %d negative delta timestamps", timingResult.NegativeDeltaFixed))
 					}
 					// Interpolate dropped frames
 					if len(timingResult.DroppedFrameErrors) > 0 {
 						timingResult.InterpolatedCount = interpolateDroppedFrames(data, timingResult.DroppedFrameErrors)
 						logAction(fmt.Sprintf("Interpolated %d dropped frames", timingResult.InterpolatedCount))
 					}
+					// Mark negative delta indices AFTER interpolation, adjusting for inserted points
+					if len(timingResult.NegativeDeltaErrors) > 0 {
+						for _, negErr := range timingResult.NegativeDeltaErrors {
+							// Calculate how many interpolated points were inserted before this index
+							offset := 0
+							for _, dropErr := range timingResult.DroppedFrameErrors {
+								if dropErr.Index <= negErr.Index {
+									offset += dropErr.DroppedCount
+								}
+							}
+							markNegativeDeltaIndex(negErr.Index + offset)
+						}
+					}
 					// Show timing error report dialog
 					report := formatTimingReport(timingResult)
-					logAction(fmt.Sprintf("Timing analysis: %d OCR errors, %d cadence errors, %d dropped frame gaps",
-						len(timingResult.OCRErrors), len(timingResult.CadenceErrors), len(timingResult.DroppedFrameErrors)))
+					logAction(fmt.Sprintf("Timing analysis: %d cadence errors, %d dropped frame gaps, %d negative deltas",
+						len(timingResult.CadenceErrors), len(timingResult.DroppedFrameErrors), len(timingResult.NegativeDeltaErrors)))
 					dialog.ShowInformation("Timing Analysis", report, w)
 				}
 			}

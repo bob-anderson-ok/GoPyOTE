@@ -589,14 +589,14 @@ func (r *lightCurvePlotRenderer) Refresh() {
 
 	// Add each series
 	for s, series := range p.series {
-		// Separate regular, interpolated, and OCR error points
-		var regularPts, interpolatedPts, ocrErrorPts plotter.XYs
+		// Separate regular, interpolated, and negative delta points
+		var regularPts, interpolatedPts, negativeDeltaPts plotter.XYs
 		for _, pt := range series.Points {
 			xy := plotter.XY{X: pt.X, Y: pt.Y}
 			if pt.Interpolated {
 				interpolatedPts = append(interpolatedPts, xy)
-			} else if pt.OCRError {
-				ocrErrorPts = append(ocrErrorPts, xy)
+			} else if isNegativeDeltaIndex(pt.Index) {
+				negativeDeltaPts = append(negativeDeltaPts, xy)
 			} else {
 				regularPts = append(regularPts, xy)
 			}
@@ -619,7 +619,7 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		line.Width = vg.Points(2)
 		plt.Add(line)
 
-		// Create scatter points for regular (non-interpolated, non-OCR-error) points
+		// Create scatter points for regular (non-interpolated) points
 		if len(regularPts) > 0 {
 			scatter, err := plotter.NewScatter(regularPts)
 			if err != nil {
@@ -629,31 +629,6 @@ func (r *lightCurvePlotRenderer) Refresh() {
 				scatter.GlyphStyle.Shape = draw.CircleGlyph{}
 				scatter.GlyphStyle.Radius = vg.Points(4)
 				plt.Add(scatter)
-			}
-		}
-
-		// Create scatter points for OCR error points (series color with black circle outline)
-		if len(ocrErrorPts) > 0 {
-			// First draw a larger black circle as the outline
-			blackOutline, err := plotter.NewScatter(ocrErrorPts)
-			if err != nil {
-				fmt.Printf("Error creating OCR error outline scatter: %v\n", err)
-			} else {
-				blackOutline.Color = color.RGBA{R: 0, G: 0, B: 0, A: 255} // Black
-				blackOutline.GlyphStyle.Shape = draw.CircleGlyph{}
-				blackOutline.GlyphStyle.Radius = vg.Points(6) // Larger for outline effect
-				plt.Add(blackOutline)
-			}
-
-			// Then draw the series-colored circle on top
-			ocrScatter, err := plotter.NewScatter(ocrErrorPts)
-			if err != nil {
-				fmt.Printf("Error creating OCR error scatter plot: %v\n", err)
-			} else {
-				ocrScatter.Color = series.Color // Same color as regular points
-				ocrScatter.GlyphStyle.Shape = draw.CircleGlyph{}
-				ocrScatter.GlyphStyle.Radius = vg.Points(4) // Same size as regular points
-				plt.Add(ocrScatter)
 			}
 		}
 
@@ -679,6 +654,31 @@ func (r *lightCurvePlotRenderer) Refresh() {
 				interpScatter.GlyphStyle.Shape = draw.CircleGlyph{}
 				interpScatter.GlyphStyle.Radius = vg.Points(4) // Same size as regular points
 				plt.Add(interpScatter)
+			}
+		}
+
+		// Create scatter points for negative delta points (series color with black circle outline)
+		if len(negativeDeltaPts) > 0 {
+			// First draw a larger black circle as the outline
+			blackOutline, err := plotter.NewScatter(negativeDeltaPts)
+			if err != nil {
+				fmt.Printf("Error creating negative delta outline scatter: %v\n", err)
+			} else {
+				blackOutline.Color = color.RGBA{R: 0, G: 0, B: 0, A: 255} // Black
+				blackOutline.GlyphStyle.Shape = draw.CircleGlyph{}
+				blackOutline.GlyphStyle.Radius = vg.Points(6) // Larger for outline effect
+				plt.Add(blackOutline)
+			}
+
+			// Then draw the series-colored circle on top
+			negDeltaScatter, err := plotter.NewScatter(negativeDeltaPts)
+			if err != nil {
+				fmt.Printf("Error creating negative delta scatter plot: %v\n", err)
+			} else {
+				negDeltaScatter.Color = series.Color
+				negDeltaScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+				negDeltaScatter.GlyphStyle.Radius = vg.Points(4) // Same size as regular points
+				plt.Add(negDeltaScatter)
 			}
 		}
 
