@@ -3,12 +3,11 @@
 GoPyOTE automatically analyzes timestamps when a CSV file
 is loaded to detect timing anomalies that will affect occultation timing accuracy.
 ###
-
 ### Dropped Frames
 When video frames are lost during recording, there will be gaps in the 
 timestamp sequence. GoPyOTE detects these by looking for 
 time steps that are 1.8x or greater than the median 
-time step. For example, if your camera runs at 29.997 fps
+time step. For example, if your camera runs at 29.97 fps
 (0.033367 seconds per frame), a gap of 0.0660 seconds or more indicates at least one dropped frame.
 
 **How it's handled:** The valid points at the beginning and end of the dropped frame sequence are used
@@ -18,10 +17,11 @@ to calculate good guesses for the missing points by linear interpolation.
 ###
 ### OCR Errors (Negative Time Deltas)
 When timestamps are read via OCR from video frames, 
-occasionally a digit will be misread. If that digit change causes the timestamp
-to be calulated as earlier in time than the previous frame,
+occasionally a digit will be misread. If that digit change causes a timestamp
+to be calculated as earlier in time than the previous frame,
 a negative time delta will 
-result - time appears to go backward. If this is an isolated event, it is correctable.
+result. 
+If this is an isolated event (only one frame affected and neighbors are correct), it is correctable.
 
 **How it's handled:** The erroneous timestamp is replaced with the expected value (previous timestamp + average time step).
 
@@ -57,7 +57,7 @@ The image below shows how dropped frames and OCR errors appear on a light curve:
 ## Limitations
 
 - **Consecutive OCR errors:** The algorithm cannot reliably fix OCR errors on consecutive frames, as there's no valid reference point between them. See the example plot below to see what happens in this case.
-- **Forward time jumps from OCR:** If an OCR error causes time to jump forward (rather than backward), it looks identical to dropped frames and cannot be distinguished automatically.
+- **Forward time jumps from OCR:** If an OCR error causes time to jump forward, the jump size may be so large as to be equivalent to dropped frames. This situation cannot be distinguished automatically.
 
 ##
 ## Consecutive OCR error example

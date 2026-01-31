@@ -20,13 +20,12 @@ This is a **test** of the embedded Markdown dialog system.
 You can include code references like `functionName()` inline.
 
 ## Next Steps
+##
 
-To add an image, use the syntax:
-
-```
-![Alt text](path/to/image.png)
-```
+---
+##
 ![Camera Response](help_images/diffractionImage8bit.png =800x800)
 ---
+##
 
 *This test file confirms the embed system is working correctly.*
