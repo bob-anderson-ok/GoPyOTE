@@ -33,7 +33,7 @@ var bobTestMarkdown embed.FS
 var timestampAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.47"
+const Version = "1.0.48"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -754,7 +754,6 @@ Developed for the occultation astronomy community.
 	var lightCurveListData []string       // Will be populated when CSV is loaded (filtered by prefixes)
 	var listIndexToColumnIndex []int      // Maps list index to actual column index in data
 	displayedCurves := make(map[int]bool) // Track which curves are currently displayed (uses actual column indices)
-	checkedCurveIndex := -1               // Track which single curve is checked (-1 = none, uses list index)
 	var lightCurveList *widget.List
 
 	// Color palette for multiple light curves
@@ -933,32 +932,14 @@ Developed for the occultation astronomy community.
 	lightCurveList = widget.NewList(
 		func() int { return len(lightCurveListData) },
 		func() fyne.CanvasObject {
-			check := NewHoverableCheck("", nil, "Checking this box enables this light curve to be used as the normalization reference (used for treating cloud effects)", w)
 			label := widget.NewLabel("Light Curve Name")
-			return container.NewHBox(check, label)
+			return label
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			box := obj.(*fyne.Container)
-			check := box.Objects[0].(*HoverableCheck)
-			label := box.Objects[1].(*widget.Label)
+			label := obj.(*widget.Label)
 
 			name := lightCurveListData[id]
 			label.SetText(name)
-
-			// Set the checkbox state based on whether this is the checked curve
-			check.SetChecked(id == checkedCurveIndex)
-
-			// Handle checkbox changes - only one can be checked at a time
-			check.OnChanged = func(checked bool) {
-				if checked {
-					checkedCurveIndex = id
-					logAction(fmt.Sprintf("Checked normalization reference: %s", name))
-				} else if checkedCurveIndex == id {
-					checkedCurveIndex = -1
-					logAction(fmt.Sprintf("Unchecked normalization reference: %s", name))
-				}
-				lightCurveList.Refresh() // Refresh to update other checkboxes
-			}
 
 			// Map list index to actual column index for checking display status
 			colIdx := -1
@@ -997,7 +978,6 @@ Developed for the occultation astronomy community.
 		// Re-filter the light curve list
 		lightCurveListData = nil
 		listIndexToColumnIndex = nil
-		checkedCurveIndex = -1
 
 		for i, col := range loadedLightCurveData.Columns {
 			// If "any name" is checked, include all columns
@@ -1291,7 +1271,6 @@ Developed for the occultation astronomy community.
 			// Update the list with column names, filtered by selected prefixes
 			lightCurveListData = nil
 			listIndexToColumnIndex = nil
-			checkedCurveIndex = -1 // Reset checked curve
 			for i, col := range data.Columns {
 				// If "any name" is checked, include all columns
 				if acceptAnyName {
@@ -1877,7 +1856,7 @@ Developed for the occultation astronomy community.
 	tab7Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 200, B: 230, A: 255})
 
 	// Status label for smoothing
-	smoothStatusLabel := widget.NewLabel("Select two points to define window size, check a reference curve")
+	smoothStatusLabel := widget.NewLabel("Click on a point to select the reference curve, then click another point to define window size")
 
 	// Clear smooth button
 	clearSmoothButton := widget.NewButton("Clear Smooth", func() {
@@ -1898,12 +1877,6 @@ Developed for the occultation astronomy community.
 			return
 		}
 
-		// Check if a reference curve is checked
-		if checkedCurveIndex < 0 {
-			dialog.ShowError(fmt.Errorf("no reference curve selected - check the box next to a light curve in the list"), w)
-			return
-		}
-
 		// Check if two points are selected
 		if lightCurvePlot.selectedSeries < 0 || lightCurvePlot.selectedIndex < 0 {
 			dialog.ShowError(fmt.Errorf("point 1 not selected - click on a point to select it"), w)
@@ -1914,16 +1887,24 @@ Developed for the occultation astronomy community.
 			return
 		}
 
-		// Get the column index of the checked curve
-		if checkedCurveIndex >= len(listIndexToColumnIndex) {
-			dialog.ShowError(fmt.Errorf("invalid reference curve index"), w)
+		// Use the clicked curve (from the first selected point) as the reference
+		series := lightCurvePlot.series[lightCurvePlot.selectedSeries]
+		refCurveName := series.Name
+
+		// Find the column in loadedLightCurveData that matches the clicked curve name
+		var refColumn *LightCurveColumn
+		for i := range loadedLightCurveData.Columns {
+			if loadedLightCurveData.Columns[i].Name == refCurveName {
+				refColumn = &loadedLightCurveData.Columns[i]
+				break
+			}
+		}
+		if refColumn == nil {
+			dialog.ShowError(fmt.Errorf("could not find reference column for curve: %s", refCurveName), w)
 			return
 		}
-		refColIdx := listIndexToColumnIndex[checkedCurveIndex]
-		refColumn := loadedLightCurveData.Columns[refColIdx]
 
 		// Get the indices of the two selected points to determine window size
-		series := lightCurvePlot.series[lightCurvePlot.selectedSeries]
 		idx1 := series.Points[lightCurvePlot.selectedIndex].Index
 		series2 := lightCurvePlot.series[lightCurvePlot.selectedSeries2]
 		idx2 := series2.Points[lightCurvePlot.selectedIndex2].Index
@@ -1935,9 +1916,18 @@ Developed for the occultation astronomy community.
 		}
 		windowSize++ // inclusive
 
-		// Make window size odd if needed
+		// Get Y values for the reference column
+		ys := refColumn.Values
+		numPoints := len(ys)
+
+		// Make window size odd if needed (Savitzky-Golay requires an odd window)
 		if windowSize%2 == 0 {
-			windowSize++
+			// Prefer adding 1, but subtract 1 if that would exceed available data
+			if windowSize+1 <= numPoints {
+				windowSize++
+			} else {
+				windowSize--
+			}
 		}
 
 		// Minimum window size check
@@ -1946,10 +1936,6 @@ Developed for the occultation astronomy community.
 		}
 
 		logAction(fmt.Sprintf("Savitzky-Golay smoothing: window size = %d, reference curve = %s", windowSize, refColumn.Name))
-
-		// Get Y values for the reference column
-		ys := refColumn.Values
-		numPoints := len(ys)
 
 		if numPoints < windowSize {
 			dialog.ShowError(fmt.Errorf("not enough data points (%d) for window size %d", numPoints, windowSize), w)
@@ -2018,7 +2004,7 @@ Developed for the occultation astronomy community.
 
 		// Check if a smoothed curve exists
 		if smoothedSeries == nil {
-			dialog.ShowError(fmt.Errorf("no smoothed reference curve - click 'Smooth' first"), w)
+			dialog.ShowError(fmt.Errorf("choose a reference curve and smoothing window size by clicking two points on the desired reference curve"), w)
 			return
 		}
 
@@ -2064,31 +2050,146 @@ Developed for the occultation astronomy community.
 		// Restore Y bounds
 		lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 
+		// Clear selected points on the reference curve
+		lightCurvePlot.selectedSeries = -1
+		lightCurvePlot.selectedIndex = -1
+		lightCurvePlot.selectedSeries2 = -1
+		lightCurvePlot.selectedIndex2 = -1
+		lightCurvePlot.selectedSeriesName = ""
+		lightCurvePlot.selectedSeriesName2 = ""
+		lightCurvePlot.Refresh()
+
 		// Update status
 		statusMsg := fmt.Sprintf("Normalized all light curves (reference mean = %.4f)", meanSmooth)
 		smoothStatusLabel.SetText(statusMsg)
 		logAction(statusMsg)
 
 		dialog.ShowInformation("Normalization Complete",
-			fmt.Sprintf("All light curves have been normalized.\n\nReference mean: %.4f\n\nNote: Reload the CSV to restore original data.", meanSmooth), w)
+			fmt.Sprintf("All light curves have been normalized.\n\nReference mean: %.4f\n\nClick 'Undo' to restore original data.", meanSmooth), w)
+	})
+
+	// Undo button - reloads the original CSV file to restore original data
+	undoNormalizeButton := widget.NewButton("Undo", func() {
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		if loadedLightCurveData.SourceFilePath == "" {
+			dialog.ShowError(fmt.Errorf("no source file path available"), w)
+			return
+		}
+
+		sourcePath := loadedLightCurveData.SourceFilePath
+
+		// Save the currently displayed curves before reloading
+		savedDisplayedCurves := make(map[int]bool)
+		for k, v := range displayedCurves {
+			savedDisplayedCurves[k] = v
+		}
+
+		// Re-read the original file
+		data, err := parseLightCurveCSV(sourcePath)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to reload CSV: %w", err), w)
+			return
+		}
+
+		loadedLightCurveData = data
+		normalizationApplied = false
+		smoothedSeries = nil
+
+		// Reset interpolated/negative delta indices
+		resetInterpolatedIndices()
+		resetNegativeDeltaIndices()
+
+		// Run timing analysis (same as initial load)
+		timestampsEmpty := true
+		for _, t := range data.TimeValues {
+			if t != 0 {
+				timestampsEmpty = false
+				break
+			}
+		}
+		if !timestampsEmpty && len(data.TimeValues) > 1 {
+			timingResult := analyzeTimingErrors(data.TimeValues)
+			if timingResult != nil && (len(timingResult.CadenceErrors) > 0 || len(timingResult.DroppedFrameErrors) > 0 || len(timingResult.NegativeDeltaErrors) > 0) {
+				if len(timingResult.NegativeDeltaErrors) > 0 {
+					timingResult.NegativeDeltaFixed = fixNegativeDeltaTimestamps(data, timingResult.NegativeDeltaErrors, timingResult.AverageTimeStep)
+				}
+				if len(timingResult.DroppedFrameErrors) > 0 {
+					timingResult.InterpolatedCount = interpolateDroppedFrames(data, timingResult.DroppedFrameErrors)
+				}
+				if len(timingResult.NegativeDeltaErrors) > 0 {
+					for _, negErr := range timingResult.NegativeDeltaErrors {
+						offset := 0
+						for _, dropErr := range timingResult.DroppedFrameErrors {
+							if dropErr.Index <= negErr.Index {
+								offset += dropErr.DroppedCount
+							}
+						}
+						markNegativeDeltaIndex(negErr.Index + offset)
+					}
+				}
+			}
+		}
+
+		// Clear displayed curves
+		for k := range displayedCurves {
+			delete(displayedCurves, k)
+		}
+		lightCurvePlot.SetSeries(nil)
+
+		// Clear selected points
+		lightCurvePlot.selectedSeries = -1
+		lightCurvePlot.selectedIndex = -1
+		lightCurvePlot.selectedSeries2 = -1
+		lightCurvePlot.selectedIndex2 = -1
+		lightCurvePlot.selectedPointDataIndex = -1
+		lightCurvePlot.selectedPointDataIndex2 = -1
+		lightCurvePlot.selectedSeriesName = ""
+		lightCurvePlot.selectedSeriesName2 = ""
+		lightCurvePlot.SelectedPoint1Valid = false
+		lightCurvePlot.SelectedPoint2Valid = false
+
+		// Update frame range
+		if len(data.FrameNumbers) > 0 {
+			minFrameNum = data.FrameNumbers[0]
+			maxFrameNum = data.FrameNumbers[len(data.FrameNumbers)-1]
+			frameRangeStart = minFrameNum
+			frameRangeEnd = maxFrameNum
+			startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
+			endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
+		}
+
+		// Restore the previously displayed curves
+		for colIdx := range savedDisplayedCurves {
+			if colIdx < len(data.Columns) {
+				toggleLightCurve(colIdx)
+			}
+		}
+
+		lightCurvePlot.Refresh()
+		smoothStatusLabel.SetText("Original data restored from file")
+		logAction(fmt.Sprintf("Undo: Reloaded original data from %s", sourcePath))
 	})
 
 	tab7Content := container.NewStack(tab7Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Savitzky-Golay Smoothing & Normalization"),
 		widget.NewSeparator(),
 		widget.NewLabel("Smoothing Instructions:"),
-		widget.NewLabel("1. Check the box next to a light curve to use as reference"),
-		widget.NewLabel("2. Click on a point to select point 1"),
-		widget.NewLabel("3. Click on another point to define window size"),
-		widget.NewLabel("4. Click 'Smooth' to apply Savitzky-Golay filter"),
+		widget.NewLabel("1. Click on a point on the reference curve to select point 1"),
+		widget.NewLabel("2. Click on another point to define window size"),
+		widget.NewLabel("3. Click 'Smooth' to apply Savitzky-Golay filter"),
+		widget.NewLabel("   (The curve of the first clicked point is used as reference)"),
 		widget.NewSeparator(),
 		container.NewHBox(smoothButton, clearSmoothButton),
 		widget.NewSeparator(),
 		widget.NewLabel("Normalization (after smoothing):"),
-		widget.NewLabel("5. Click 'Normalize' to apply smoothed reference to all curves"),
+		widget.NewLabel("4. Click 'Normalize' to apply smoothed reference to all curves"),
 		widget.NewLabel("Formula: y_norm[i] = (mean_ref * y[i]) / smooth_ref[i]"),
 		widget.NewSeparator(),
-		normalizeButton,
+		container.NewHBox(normalizeButton, undoNormalizeButton),
 		widget.NewSeparator(),
 		smoothStatusLabel,
 	)))
