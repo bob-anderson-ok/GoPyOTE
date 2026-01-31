@@ -26,11 +26,14 @@ import (
 	"github.com/pconstantinou/savitzkygolay"
 )
 
-//go:embed BobTest.md diffractionImage8bit.png
+//go:embed BobTest.md help_images/diffractionImage8bit.png
 var bobTestMarkdown embed.FS
 
+//go:embed timestampAnalysis.md help_images/droppedFrameDemoPlot.png help_images/consecutiveOCRerrorDemo.png
+var timestampAnalysisMarkdown embed.FS
+
 // Version information
-const Version = "1.0.46"
+const Version = "1.0.47"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -383,6 +386,14 @@ func main() {
 				return
 			}
 			ShowMarkdownDialogWithImages("Bob Test", string(content), &bobTestMarkdown, w)
+		}),
+		fyne.NewMenuItem("Dropped frame and OCR detection", func() {
+			content, err := timestampAnalysisMarkdown.ReadFile("timestampAnalysis.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load timestampAnalysis.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Dropped frame and OCR detection", string(content), &timestampAnalysisMarkdown, w)
 		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About", func() {
