@@ -35,8 +35,11 @@ var timestampAnalysisMarkdown embed.FS
 //go:embed help_markdown/blockIntegration.md
 var blockIntegrationMarkdown embed.FS
 
+//go:embed help_markdown/about.md
+var aboutMarkdown embed.FS
+
 // Version information
-const Version = "1.0.51"
+const Version = "1.0.52"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -389,25 +392,13 @@ func main() {
 			ShowMarkdownDialogWithImages("Dropped frames and OCR issues", string(content), &timestampAnalysisMarkdown, w)
 		}),
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("About", func() {
-			aboutMarkdown := fmt.Sprintf(`# GoPyOTE
-
-**Version %s**
-
-A Go desktop application for astronomical occultation timing and analysis.
-
-## Features
-
-- **Light curve visualization** - Interactive plotting with zoom and pan
-- **Timing analysis** - Automatic detection of cadence errors and dropped frames
-- **Normalization** - Correct for atmospheric effects using reference stars
-- **Block integration** - Reduce noise by averaging consecutive readings
-
-## Credits
-
-Developed for the occultation astronomy community.
-`, Version)
-			ShowMarkdownDialogWithImages("About GoPyOTE", aboutMarkdown, nil, w)
+		fyne.NewMenuItem("About GoPyOTE", func() {
+			content, err := aboutMarkdown.ReadFile("help_markdown/about.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load about.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("About GoPyOTE", string(content), &aboutMarkdown, w)
 		}),
 	)
 	mainMenu := fyne.NewMainMenu(helpMenu)
