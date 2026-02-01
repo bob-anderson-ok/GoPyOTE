@@ -26,14 +26,17 @@ import (
 	"github.com/pconstantinou/savitzkygolay"
 )
 
-//go:embed help_markdown/SmoothingAndNormalization.md help_images/SmoothingFig1.png help_images/SmoothingFig2.png help_images/SmoothingFig3.png help_images/SmoothingFig4.png
+//go:embed help_markdown/smoothingAndNormalization.md help_images/SmoothingFig1.png help_images/SmoothingFig2.png help_images/SmoothingFig3.png help_images/SmoothingFig4.png
 var smoothingMarkdown embed.FS
 
 //go:embed help_markdown/timestampAnalysis.md help_images/droppedFrameDemoPlot.png help_images/consecutiveOCRerrorDemo.png
 var timestampAnalysisMarkdown embed.FS
 
+//go:embed help_markdown/blockIntegration.md
+var blockIntegrationMarkdown embed.FS
+
 // Version information
-const Version = "1.0.50"
+const Version = "1.0.51"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -361,20 +364,18 @@ func main() {
 
 	// Create a menu
 	helpMenu := fyne.NewMenu("Help Topics",
-		fyne.NewMenuItem("Block integration", func() {
-			dialog.ShowInformation("Block Integration",
-				"Block integration averages consecutive data points to reduce noise.\n\n"+
-					"To use:\n"+
-					"1. Click on a point to select the start of a block\n"+
-					"2. Click on another point in the same light curve to define block size\n"+
-					"3. Go to the BlockInt tab and click 'Block Integrate'\n"+
-					"4. Points are averaged in groups, with partial blocks at ends ignored\n\n"+
-					"Note: Reload the CSV to restore original data.", w)
+		fyne.NewMenuItem("Block Integration", func() {
+			content, err := blockIntegrationMarkdown.ReadFile("help_markdown/blockIntegration.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load blockIntegration.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Block Integration", string(content), &blockIntegrationMarkdown, w)
 		}),
 		fyne.NewMenuItem("Smoothing and Normalization", func() {
-			content, err := smoothingMarkdown.ReadFile("help_markdown/SmoothingAndNormalization.md")
+			content, err := smoothingMarkdown.ReadFile("help_markdown/smoothingAndNormalization.md")
 			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load SmoothingAndNormalization.md: %w", err), w)
+				dialog.ShowError(fmt.Errorf("failed to load smoothingAndNormalization.md: %w", err), w)
 				return
 			}
 			ShowMarkdownDialogWithImages("Smoothing and Normalization", string(content), &smoothingMarkdown, w)
@@ -1515,19 +1516,124 @@ Developed for the occultation astronomy community.
 		logAction(statusMsg)
 
 		dialog.ShowInformation("Block Integration Complete",
-			fmt.Sprintf("Original: %d points\nBlock size: %d\nResult: %d averaged blocks\n\nNote: Reload the CSV to restore original data.", numPoints, blockSize, numBlocks), w)
+			fmt.Sprintf("Original: %d points\nBlock size: %d\nResult: %d averaged blocks\n\nClick 'Undo' to restore original data.", numPoints, blockSize, numBlocks), w)
+	})
+
+	// Undo button - reloads the original CSV file to restore original data
+	undoBlockIntButton := widget.NewButton("Undo", func() {
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		if loadedLightCurveData.SourceFilePath == "" {
+			dialog.ShowError(fmt.Errorf("no source file path available"), w)
+			return
+		}
+
+		sourcePath := loadedLightCurveData.SourceFilePath
+
+		// Save the currently displayed curves before reloading
+		savedDisplayedCurves := make(map[int]bool)
+		for k, v := range displayedCurves {
+			savedDisplayedCurves[k] = v
+		}
+
+		// Re-read the original file
+		data, err := parseLightCurveCSV(sourcePath)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to reload CSV: %w", err), w)
+			return
+		}
+
+		loadedLightCurveData = data
+		normalizationApplied = false
+		smoothedSeries = nil
+
+		// Reset interpolated/negative delta indices
+		resetInterpolatedIndices()
+		resetNegativeDeltaIndices()
+
+		// Run timing analysis (same as initial load)
+		timestampsEmpty := true
+		for _, t := range data.TimeValues {
+			if t != 0 {
+				timestampsEmpty = false
+				break
+			}
+		}
+		if !timestampsEmpty && len(data.TimeValues) > 1 {
+			timingResult := analyzeTimingErrors(data.TimeValues)
+			if timingResult != nil && (len(timingResult.CadenceErrors) > 0 || len(timingResult.DroppedFrameErrors) > 0 || len(timingResult.NegativeDeltaErrors) > 0) {
+				if len(timingResult.NegativeDeltaErrors) > 0 {
+					timingResult.NegativeDeltaFixed = fixNegativeDeltaTimestamps(data, timingResult.NegativeDeltaErrors, timingResult.AverageTimeStep)
+				}
+				if len(timingResult.DroppedFrameErrors) > 0 {
+					timingResult.InterpolatedCount = interpolateDroppedFrames(data, timingResult.DroppedFrameErrors)
+				}
+				if len(timingResult.NegativeDeltaErrors) > 0 {
+					for _, negErr := range timingResult.NegativeDeltaErrors {
+						offset := 0
+						for _, dropErr := range timingResult.DroppedFrameErrors {
+							if dropErr.Index <= negErr.Index {
+								offset += dropErr.DroppedCount
+							}
+						}
+						markNegativeDeltaIndex(negErr.Index + offset)
+					}
+				}
+			}
+		}
+
+		// Clear displayed curves
+		for k := range displayedCurves {
+			delete(displayedCurves, k)
+		}
+		lightCurvePlot.SetSeries(nil)
+
+		// Clear selected points
+		lightCurvePlot.selectedSeries = -1
+		lightCurvePlot.selectedIndex = -1
+		lightCurvePlot.selectedSeries2 = -1
+		lightCurvePlot.selectedIndex2 = -1
+		lightCurvePlot.selectedPointDataIndex = -1
+		lightCurvePlot.selectedPointDataIndex2 = -1
+		lightCurvePlot.selectedSeriesName = ""
+		lightCurvePlot.selectedSeriesName2 = ""
+		lightCurvePlot.SelectedPoint1Valid = false
+		lightCurvePlot.SelectedPoint2Valid = false
+
+		// Update frame range
+		if len(data.FrameNumbers) > 0 {
+			minFrameNum = data.FrameNumbers[0]
+			maxFrameNum = data.FrameNumbers[len(data.FrameNumbers)-1]
+			frameRangeStart = minFrameNum
+			frameRangeEnd = maxFrameNum
+			startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
+			endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
+		}
+
+		// Restore the previously displayed curves
+		for colIdx := range savedDisplayedCurves {
+			if colIdx < len(data.Columns) {
+				toggleLightCurve(colIdx)
+			}
+		}
+
+		lightCurvePlot.Refresh()
+		blockIntStatusLabel.SetText("Original data restored from file")
+		logAction(fmt.Sprintf("Undo: Reloaded original data from %s", sourcePath))
 	})
 
 	tab5Content := container.NewStack(tab5Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Block Integration"),
 		widget.NewSeparator(),
 		widget.NewLabel("Instructions:"),
-		widget.NewLabel("1. Click on a point to select point 1"),
-		widget.NewLabel("2. Click on another point in the same light curve"),
-		widget.NewLabel("3. The two points define the block size"),
-		widget.NewLabel("4. Click 'Block Integrate' to apply"),
+		widget.NewLabel("1. Click on the first point of a 'block'"),
+		widget.NewLabel("2. Click on the last point in that 'block'"),
+		widget.NewLabel("3. Click the Block Integrate button"),
 		widget.NewSeparator(),
-		blockIntegrateButton,
+		container.NewHBox(blockIntegrateButton, undoBlockIntButton),
 		widget.NewSeparator(),
 		blockIntStatusLabel,
 	)))

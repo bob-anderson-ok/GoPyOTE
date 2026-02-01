@@ -28,8 +28,6 @@ What we do is calculate a smooth curve through the tracking star lightcurve usin
 
 ## 
 
-
-
 ![Figure 2: Selection of smoothing window on tracking star light curve](help_images/SmoothingFig2.png =800x600)
 
 ## 
