@@ -198,18 +198,18 @@ func ShowMarkdownDialogWithImages(title, markdown string, embedFS *embed.FS, par
 	// Create a new resizable window instead of a dialog
 	helpWindow := fyne.CurrentApp().NewWindow(title)
 	helpWindow.SetContent(scroll)
-	helpWindow.Resize(fyne.NewSize(750, 500))
+	helpWindow.Resize(fyne.NewSize(900, 500))
 
-	// Center the window relative to the parent if possible
+	// Resize relative to the parent if possible
 	if parent != nil {
-		// Position near the parent window
 		parentPos := parent.Canvas().Size()
 		helpWindow.Resize(fyne.NewSize(
-			min(750, parentPos.Width*0.8),
+			min(900, parentPos.Width*0.8),
 			min(500, parentPos.Height*0.8),
 		))
 	}
 
+	helpWindow.CenterOnScreen()
 	helpWindow.Show()
 }
 

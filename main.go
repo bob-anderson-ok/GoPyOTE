@@ -26,14 +26,14 @@ import (
 	"github.com/pconstantinou/savitzkygolay"
 )
 
-//go:embed BobTest.md help_images/diffractionImage8bit.png
-var bobTestMarkdown embed.FS
+//go:embed help_markdown/SmoothingAndNormalization.md help_images/SmoothingFig1.png help_images/SmoothingFig2.png help_images/SmoothingFig3.png help_images/SmoothingFig4.png
+var smoothingMarkdown embed.FS
 
 //go:embed help_markdown/timestampAnalysis.md help_images/droppedFrameDemoPlot.png help_images/consecutiveOCRerrorDemo.png
 var timestampAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.49"
+const Version = "1.0.50"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -361,14 +361,6 @@ func main() {
 
 	// Create a menu
 	helpMenu := fyne.NewMenu("Help Topics",
-		fyne.NewMenuItem("Light curve normalization", func() {
-			dialog.ShowInformation("Light Curve Normalization",
-				"Light curve normalization helps correct for atmospheric effects like clouds.\n\n"+
-					"To use:\n"+
-					"1. Load a CSV file with multiple light curves\n"+
-					"2. Check the box next to a comparison star to use as reference\n"+
-					"3. The target star's brightness will be divided by the reference", w)
-		}),
 		fyne.NewMenuItem("Block integration", func() {
 			dialog.ShowInformation("Block Integration",
 				"Block integration averages consecutive data points to reduce noise.\n\n"+
@@ -379,13 +371,13 @@ func main() {
 					"4. Points are averaged in groups, with partial blocks at ends ignored\n\n"+
 					"Note: Reload the CSV to restore original data.", w)
 		}),
-		fyne.NewMenuItem("Bob Test", func() {
-			content, err := bobTestMarkdown.ReadFile("BobTest.md")
+		fyne.NewMenuItem("Smoothing and Normalization", func() {
+			content, err := smoothingMarkdown.ReadFile("help_markdown/SmoothingAndNormalization.md")
 			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load BobTest.md: %w", err), w)
+				dialog.ShowError(fmt.Errorf("failed to load SmoothingAndNormalization.md: %w", err), w)
 				return
 			}
-			ShowMarkdownDialogWithImages("Bob Test", string(content), &bobTestMarkdown, w)
+			ShowMarkdownDialogWithImages("Smoothing and Normalization", string(content), &smoothingMarkdown, w)
 		}),
 		fyne.NewMenuItem("Dropped frames and OCR issues", func() {
 			content, err := timestampAnalysisMarkdown.ReadFile("help_markdown/timestampAnalysis.md")
