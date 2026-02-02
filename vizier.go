@@ -625,6 +625,10 @@ func zipDatFiles(w fyne.Window, outputFolder string, statusLabel *widget.Label) 
 	dialog.ShowInformation("Zip Complete",
 		fmt.Sprintf("Successfully zipped %d .dat file(s) to:\n\n%s\n\n%d .dat file(s) deleted.", filesAdded, zipFilePath, filesDeleted), w)
 	logAction(fmt.Sprintf("Zipped %d .dat files to: %s, deleted %d files", filesAdded, zipFilePath, filesDeleted))
+
+	// Reminder to email the zip file
+	dialog.ShowInformation("Email Reminder",
+		fmt.Sprintf("Please email the zip file to:\n\nHeraldDR@bigpond.com\n\nFile: %s", zipFileName), w)
 }
 
 // addFileToZip adds a single file to a zip archive
