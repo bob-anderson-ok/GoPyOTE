@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -144,7 +145,7 @@ func NewVizieRTab() *VizieRTab {
 	vt.StatusLabel.Wrapping = fyne.TextWrapWord
 
 	// Generate button (callback set later via SetGenerateCallback)
-	vt.GenerateBtn = widget.NewButton("Generate VizieR file", func() {})
+	vt.GenerateBtn = widget.NewButton("Generate VizieR .dat file", func() {})
 
 	// Clear inputs button
 	clearBtn := widget.NewButton("Clear inputs", func() {
@@ -537,7 +538,7 @@ func zipDatFiles(w fyne.Window, outputFolder string, statusLabel *widget.Label) 
 		destDir = filepath.Join(homeDir, "Documents", "VizieR")
 	}
 
-	// Check if directory exists
+	// Check if a directory exists
 	if _, err := os.Stat(destDir); os.IsNotExist(err) {
 		dialog.ShowError(fmt.Errorf("output directory does not exist: %s", destDir), w)
 		return
@@ -557,8 +558,9 @@ func zipDatFiles(w fyne.Window, outputFolder string, statusLabel *widget.Label) 
 		return
 	}
 
-	// Create zip file name with timestamp
-	zipFileName := "VizieR_dat_files.zip"
+	// Create a zip file name with timestamp
+	timestamp := time.Now().Format("20060102_150405")
+	zipFileName := fmt.Sprintf("VizieR_dat_files_%s.zip", timestamp)
 	zipFilePath := filepath.Join(destDir, zipFileName)
 
 	// Create the zip file
@@ -567,10 +569,21 @@ func zipDatFiles(w fyne.Window, outputFolder string, statusLabel *widget.Label) 
 		dialog.ShowError(fmt.Errorf("could not create zip file: %v", err), w)
 		return
 	}
-	defer zipFile.Close()
+
+	// Use the success flag to handle deferred closes properly
+	success := false
+	defer func() {
+		if !success {
+			_ = zipFile.Close()
+		}
+	}()
 
 	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
+	defer func() {
+		if !success {
+			_ = zipWriter.Close()
+		}
+	}()
 
 	// Add each .dat file to the zip
 	filesAdded := 0
@@ -589,10 +602,29 @@ func zipDatFiles(w fyne.Window, outputFolder string, statusLabel *widget.Label) 
 		return
 	}
 
-	statusLabel.SetText(fmt.Sprintf("Zipped %d .dat files to:\n%s", filesAdded, zipFilePath))
+	// Close the underlying file
+	if err := zipFile.Close(); err != nil {
+		dialog.ShowError(fmt.Errorf("error closing zip file: %v", err), w)
+		return
+	}
+
+	// Mark success so defers don't close again
+	success = true
+
+	// Delete the .dat files after successful zip
+	filesDeleted := 0
+	for _, datFilePath := range datFiles {
+		if err := os.Remove(datFilePath); err != nil {
+			dialog.ShowError(fmt.Errorf("error deleting %s: %v", filepath.Base(datFilePath), err), w)
+		} else {
+			filesDeleted++
+		}
+	}
+
+	statusLabel.SetText(fmt.Sprintf("Zipped %d .dat files to:\n%s\n(%d files deleted)", filesAdded, zipFilePath, filesDeleted))
 	dialog.ShowInformation("Zip Complete",
-		fmt.Sprintf("Successfully zipped %d .dat file(s) to:\n\n%s", filesAdded, zipFilePath), w)
-	logAction(fmt.Sprintf("Zipped %d .dat files to: %s", filesAdded, zipFilePath))
+		fmt.Sprintf("Successfully zipped %d .dat file(s) to:\n\n%s\n\n%d .dat file(s) deleted.", filesAdded, zipFilePath, filesDeleted), w)
+	logAction(fmt.Sprintf("Zipped %d .dat files to: %s, deleted %d files", filesAdded, zipFilePath, filesDeleted))
 }
 
 // addFileToZip adds a single file to a zip archive
@@ -601,7 +633,14 @@ func addFileToZip(zipWriter *zip.Writer, filePath string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+
+	// Use the success flag to handle deferred close properly
+	success := false
+	defer func() {
+		if !success {
+			_ = file.Close()
+		}
+	}()
 
 	// Get file info for the header
 	info, err := file.Stat()
@@ -619,7 +658,7 @@ func addFileToZip(zipWriter *zip.Writer, filePath string) error {
 	header.Name = filepath.Base(filePath)
 	header.Method = zip.Deflate
 
-	// Create writer for this file in the zip
+	// Create a writer for this file in the zip
 	writer, err := zipWriter.CreateHeader(header)
 	if err != nil {
 		return err
@@ -627,5 +666,15 @@ func addFileToZip(zipWriter *zip.Writer, filePath string) error {
 
 	// Copy file contents to zip
 	_, err = io.Copy(writer, file)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Explicitly close and check for error
+	if err := file.Close(); err != nil {
+		return err
+	}
+
+	success = true
+	return nil
 }
