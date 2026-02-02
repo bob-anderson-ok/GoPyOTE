@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,7 +17,9 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
+	"github.com/xuri/excelize/v2"
 )
 
 // VizieRTab holds all the widgets for the VizieR export tab
@@ -59,6 +62,9 @@ type VizieRTab struct {
 
 	// Zip button for zipping .dat files
 	ZipBtn *widget.Button
+
+	// Load from the NA spreadsheet button
+	LoadXlsxBtn *widget.Button
 }
 
 // NewVizieRTab creates a new VizieR export tab with all its widgets
@@ -155,6 +161,9 @@ func NewVizieRTab() *VizieRTab {
 	// Zip button (callback set below, needs access to vt)
 	vt.ZipBtn = widget.NewButton("Zip *.dat files for sending", func() {})
 
+	// Load from the NA spreadsheet button (callback set below, needs access to window)
+	vt.LoadXlsxBtn = widget.NewButton("Load from NA spreadsheet", func() {})
+
 	// Build the tab content
 	tabContent := container.NewStack(tabBg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("VizieR Export"),
@@ -176,7 +185,7 @@ func NewVizieRTab() *VizieRTab {
 		widget.NewSeparator(),
 		container.NewHBox(widget.NewLabel("Output folder:"), outputFolderContainer),
 		widget.NewSeparator(),
-		container.NewHBox(vt.GenerateBtn, clearBtn, vt.ZipBtn),
+		container.NewHBox(vt.GenerateBtn, clearBtn, vt.ZipBtn, vt.LoadXlsxBtn),
 		widget.NewSeparator(),
 		vt.StatusLabel,
 	)))
@@ -927,7 +936,7 @@ func (vt *VizieRTab) FillFromAdvHeaders(headers []string) {
 				if len(occParts) >= 1 {
 					// Parse asteroid number and name from "(123) AsteroidName"
 					asteroidPart := strings.TrimSpace(occParts[0])
-					// Find closing parenthesis to extract number
+					// Find closing parenthesis to extract a number
 					if idx := strings.Index(asteroidPart, ")"); idx > 0 {
 						// Extract number between "(" and ")"
 						if startIdx := strings.Index(asteroidPart, "("); startIdx >= 0 && startIdx < idx {
@@ -959,4 +968,151 @@ func (vt *VizieRTab) FillFromAdvHeaders(headers []string) {
 			continue
 		}
 	}
+}
+
+// FillFromNASpreadsheet opens a file dialog to select an NA Asteroid Occultation Report Form
+// and populates the VizieR tab fields from the spreadsheet
+func (vt *VizieRTab) FillFromNASpreadsheet(w fyne.Window) {
+	fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if reader == nil {
+			return // User cancelled
+		}
+		filePath := reader.URI().Path()
+		if cerr := reader.Close(); cerr != nil {
+			dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+		}
+
+		// Open the Excel file
+		f, err := excelize.OpenFile(filePath)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to open xlsx file: %w", err), w)
+			return
+		}
+		success := false
+		defer func() {
+			if !success {
+				_ = f.Close()
+			}
+		}()
+
+		// Validate that this is an Asteroid Occultation Report Form
+		headerVal, err := f.GetCellValue("DATA", "G1")
+		if err != nil || headerVal != "Asteroid Occultation Report Form" {
+			dialog.ShowError(fmt.Errorf("the xlsx file selected does not appear to be an Asteroid Occultation Report Form"), w)
+			return
+		}
+
+		// Clear existing fields first
+		vt.ClearInputs()
+
+		// Read Year (D5)
+		if year, err := f.GetCellValue("DATA", "D5"); err == nil && year != "" {
+			vt.DateYearEntry.SetText(year)
+		}
+
+		// Read Month (K5) - need to convert month name to number
+		if monthStr, err := f.GetCellValue("DATA", "K5"); err == nil && monthStr != "" {
+			months := []string{"January", "February", "March", "April", "May", "June",
+				"July", "August", "September", "October", "November", "December"}
+			for i, m := range months {
+				if monthStr == m {
+					vt.DateMonthEntry.SetText(fmt.Sprintf("%d", i+1))
+					break
+				}
+			}
+		}
+
+		// Read Day (P5)
+		if day, err := f.GetCellValue("DATA", "P5"); err == nil && day != "" {
+			vt.DateDayEntry.SetText(day)
+		}
+
+		// Read Longitude (N18) and direction (R18)
+		if longStr, err := f.GetCellValue("DATA", "N18"); err == nil && longStr != "" {
+			longEW, _ := f.GetCellValue("DATA", "R18")
+			longParts := strings.Split(longStr, " ")
+			if len(longParts) >= 3 {
+				if longEW == "W" {
+					vt.SiteLongDegEntry.SetText("-" + longParts[0])
+				} else {
+					vt.SiteLongDegEntry.SetText("+" + longParts[0])
+				}
+				vt.SiteLongMinEntry.SetText(longParts[1])
+				vt.SiteLongSecsEntry.SetText(longParts[2])
+			}
+		}
+
+		// Read Latitude (E18) and direction (J18)
+		if latStr, err := f.GetCellValue("DATA", "E18"); err == nil && latStr != "" {
+			latNS, _ := f.GetCellValue("DATA", "J18")
+			latParts := strings.Split(latStr, " ")
+			if len(latParts) >= 3 {
+				if latNS == "S" {
+					vt.SiteLatDegEntry.SetText("-" + latParts[0])
+				} else {
+					vt.SiteLatDegEntry.SetText("+" + latParts[0])
+				}
+				vt.SiteLatMinEntry.SetText(latParts[1])
+				vt.SiteLatSecsEntry.SetText(latParts[2])
+			}
+		}
+
+		// Read Altitude (V18) and units (W18)
+		if altStr, err := f.GetCellValue("DATA", "V18"); err == nil && altStr != "" {
+			altUnits, _ := f.GetCellValue("DATA", "W18")
+			if altVal, err := strconv.ParseFloat(altStr, 64); err == nil {
+				if altUnits == "m" {
+					vt.SiteAltitudeEntry.SetText(fmt.Sprintf("%.0f", altVal))
+				} else {
+					// Convert feet to meters
+					vt.SiteAltitudeEntry.SetText(fmt.Sprintf("%.0f", math.Round(altVal*0.3048)))
+				}
+			}
+		}
+
+		// Read Observer (D9)
+		if observer, err := f.GetCellValue("DATA", "D9"); err == nil && observer != "" {
+			vt.ObserverNameEntry.SetText(observer)
+		}
+
+		// Read Star Type (S7) and Number (X7)
+		if starType, err := f.GetCellValue("DATA", "S7"); err == nil && starType != "" {
+			starNumber, _ := f.GetCellValue("DATA", "X7")
+			if starNumber != "" {
+				if strings.HasPrefix(starType, "TYC") {
+					vt.StarTycho2Entry.SetText(starNumber)
+				} else if strings.HasPrefix(starType, "HIP") {
+					vt.StarHipparcosEntry.SetText(starNumber)
+				} else if strings.HasPrefix(starType, "UCAC4") {
+					vt.StarUCAC4Entry.SetText(starNumber)
+				}
+			}
+		}
+
+		// Read Asteroid Number (E7) and Name (K7)
+		if asteroidNumber, err := f.GetCellValue("DATA", "E7"); err == nil && asteroidNumber != "" {
+			vt.AsteroidNumberEntry.SetText(asteroidNumber)
+		}
+		if asteroidName, err := f.GetCellValue("DATA", "K7"); err == nil && asteroidName != "" {
+			vt.AsteroidNameEntry.SetText(asteroidName)
+		}
+
+		if err := f.Close(); err != nil {
+			dialog.ShowError(fmt.Errorf("error closing xlsx file: %v", err), w)
+			return
+		}
+		success = true
+
+		vt.StatusLabel.SetText("NA spreadsheet data loaded successfully")
+		dialog.ShowInformation("Success", "Excel spreadsheet Asteroid Report Form entries extracted successfully.", w)
+
+	}, w)
+
+	fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".xlsx"}))
+	fileDialog.Resize(fyne.NewSize(800, 600))
+	fileDialog.Show()
 }
