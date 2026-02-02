@@ -337,9 +337,11 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 	// Find the indices corresponding to the frame range
 	startIdx := 0
 	endIdx := len(data.FrameNumbers) - 1
+	foundStart := false
 	for i, frameNum := range data.FrameNumbers {
-		if int(frameNum) >= rangeStart && startIdx == 0 {
+		if int(frameNum) >= rangeStart && !foundStart {
 			startIdx = i
+			foundStart = true
 		}
 		if int(frameNum) <= rangeEnd {
 			endIdx = i
@@ -391,14 +393,11 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 		return
 	}
 
-	// Extract values in range
-	vizierY := valueColumn[startIdx : endIdx+1]
-
-	// Find max value for scaling (ignoring negative zeros which represent dropped frames)
+	// Find max value for scaling (ignoring dropped/interpolated frames)
 	maxValue := 0.0
-	for _, val := range vizierY {
-		if val > maxValue {
-			maxValue = val
+	for i := startIdx; i <= endIdx; i++ {
+		if !isInterpolatedIndex(i) && valueColumn[i] > maxValue {
+			maxValue = valueColumn[i]
 		}
 	}
 
@@ -410,12 +409,12 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 
 	// Build values string
 	valuesText := "Values"
-	for _, value := range vizierY {
-		// Check for negative zero (dropped reading marker)
-		if value == 0 && 1.0/value < 0 {
+	for i := startIdx; i <= endIdx; i++ {
+		// Check for dropped/interpolated frame
+		if isInterpolatedIndex(i) {
 			valuesText += ": "
 		} else {
-			scaledValue := int(value * scaleFactor)
+			scaledValue := int(valueColumn[i] * scaleFactor)
 			valuesText += fmt.Sprintf(":%d", scaledValue)
 		}
 	}

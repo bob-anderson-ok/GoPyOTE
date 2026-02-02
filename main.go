@@ -2307,25 +2307,28 @@ func main() {
 		hipparcos, tycho2, ucac4 := vizierTab.GetFormattedStarIDs()
 		longDeg, longMin, longSecs, latDeg, latMin, latSecs, altitude := vizierTab.GetFormattedLocation()
 
+		// Get min/max frame numbers directly from loaded data
+		dataMinFrame := loadedLightCurveData.FrameNumbers[0]
+		dataMaxFrame := loadedLightCurveData.FrameNumbers[len(loadedLightCurveData.FrameNumbers)-1]
+
 		// Check if we need to use a frame range
 		rangeStart := int(frameRangeStart)
 		rangeEnd := int(frameRangeEnd)
 		if rangeStart == 0 {
-			rangeStart = int(minFrameNum)
+			rangeStart = int(dataMinFrame)
 		}
 		if rangeEnd == 0 {
-			rangeEnd = int(maxFrameNum)
+			rangeEnd = int(dataMaxFrame)
 		}
 
 		// Check if data is not trimmed and warn the user
-		if rangeStart == int(minFrameNum) && rangeEnd == int(maxFrameNum) {
-			dialog.ShowConfirm("Have you forgotten to trim the lightcurve?",
-				"The lightcurve has not been trimmed.\n\n"+
-					"Only the occultation event and enough points on either side\n"+
+		if rangeStart == int(dataMinFrame) && rangeEnd == int(dataMaxFrame) {
+			dialog.ShowConfirm("Have you trimmed the light curve?",
+				"Only the occultation event and enough points on either side\n"+
 					"of the event to allow baseline noise to be well represented\n"+
-					"is needed. Typically around a hundred points on either side\n"+
+					"are needed. Typically around a hundred points on either side\n"+
 					"will be sufficient.\n\n"+
-					"Do you wish to continue without trimming?",
+					"Do you wish to write the light curve as is?",
 				func(proceed bool) {
 					if !proceed {
 						return
