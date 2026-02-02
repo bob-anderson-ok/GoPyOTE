@@ -39,7 +39,7 @@ var blockIntegrationMarkdown embed.FS
 var aboutMarkdown embed.FS
 
 // Version information
-const Version = "1.0.53"
+const Version = "1.0.55"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2353,6 +2353,11 @@ func main() {
 			vizierTab.AsteroidNumberEntry.Text, vizierTab.AsteroidNameEntry.Text,
 			rangeStart, rangeEnd,
 			vizierTab.OutputFolderEntry.Text, vizierTab.StatusLabel)
+	}
+
+	// Set up Zip button callback
+	vizierTab.ZipBtn.OnTapped = func() {
+		zipDatFiles(w, vizierTab.OutputFolderEntry.Text, vizierTab.StatusLabel)
 	}
 
 	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, vizierTab.TabItem, tab4)

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/zip"
 	"fmt"
 	"image/color"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -53,6 +55,9 @@ type VizieRTab struct {
 
 	// Generate button (exposed so the callback can be set from main)
 	GenerateBtn *widget.Button
+
+	// Zip button for zipping .dat files
+	ZipBtn *widget.Button
 }
 
 // NewVizieRTab creates a new VizieR export tab with all its widgets
@@ -146,6 +151,9 @@ func NewVizieRTab() *VizieRTab {
 		vt.ClearInputs()
 	})
 
+	// Zip button (callback set below, needs access to vt)
+	vt.ZipBtn = widget.NewButton("Zip *.dat files for sending", func() {})
+
 	// Build the tab content
 	tabContent := container.NewStack(tabBg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("VizieR Export"),
@@ -167,7 +175,7 @@ func NewVizieRTab() *VizieRTab {
 		widget.NewSeparator(),
 		container.NewHBox(widget.NewLabel("Output folder:"), outputFolderContainer),
 		widget.NewSeparator(),
-		container.NewHBox(vt.GenerateBtn, clearBtn),
+		container.NewHBox(vt.GenerateBtn, clearBtn, vt.ZipBtn),
 		widget.NewSeparator(),
 		vt.StatusLabel,
 	)))
@@ -514,4 +522,110 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 	dialog.ShowInformation("VizieR Export Complete",
 		fmt.Sprintf("Your VizieR lightcurve file was written to:\n\n%s", vizierFilePath), w)
 	logAction(fmt.Sprintf("Generated VizieR file: %s with %d readings", vizierFilePath, numReadings))
+}
+
+// zipDatFiles zips all .dat files in the specified directory
+func zipDatFiles(w fyne.Window, outputFolder string, statusLabel *widget.Label) {
+	// Determine the directory to zip
+	destDir := outputFolder
+	if destDir == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("could not determine home directory: %v", err), w)
+			return
+		}
+		destDir = filepath.Join(homeDir, "Documents", "VizieR")
+	}
+
+	// Check if directory exists
+	if _, err := os.Stat(destDir); os.IsNotExist(err) {
+		dialog.ShowError(fmt.Errorf("output directory does not exist: %s", destDir), w)
+		return
+	}
+
+	// Find all .dat files in the directory
+	pattern := filepath.Join(destDir, "*.dat")
+	datFiles, err := filepath.Glob(pattern)
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("error searching for .dat files: %v", err), w)
+		return
+	}
+
+	if len(datFiles) == 0 {
+		dialog.ShowInformation("No Files Found",
+			fmt.Sprintf("No .dat files found in:\n%s", destDir), w)
+		return
+	}
+
+	// Create zip file name with timestamp
+	zipFileName := "VizieR_dat_files.zip"
+	zipFilePath := filepath.Join(destDir, zipFileName)
+
+	// Create the zip file
+	zipFile, err := os.Create(zipFilePath)
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("could not create zip file: %v", err), w)
+		return
+	}
+	defer zipFile.Close()
+
+	zipWriter := zip.NewWriter(zipFile)
+	defer zipWriter.Close()
+
+	// Add each .dat file to the zip
+	filesAdded := 0
+	for _, datFilePath := range datFiles {
+		err := addFileToZip(zipWriter, datFilePath)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("error adding %s to zip: %v", filepath.Base(datFilePath), err), w)
+			return
+		}
+		filesAdded++
+	}
+
+	// Close the zip writer to flush all data
+	if err := zipWriter.Close(); err != nil {
+		dialog.ShowError(fmt.Errorf("error finalizing zip file: %v", err), w)
+		return
+	}
+
+	statusLabel.SetText(fmt.Sprintf("Zipped %d .dat files to:\n%s", filesAdded, zipFilePath))
+	dialog.ShowInformation("Zip Complete",
+		fmt.Sprintf("Successfully zipped %d .dat file(s) to:\n\n%s", filesAdded, zipFilePath), w)
+	logAction(fmt.Sprintf("Zipped %d .dat files to: %s", filesAdded, zipFilePath))
+}
+
+// addFileToZip adds a single file to a zip archive
+func addFileToZip(zipWriter *zip.Writer, filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Get file info for the header
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+
+	// Create zip header
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+
+	// Use only the base name (not the full path)
+	header.Name = filepath.Base(filePath)
+	header.Method = zip.Deflate
+
+	// Create writer for this file in the zip
+	writer, err := zipWriter.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+
+	// Copy file contents to zip
+	_, err = io.Copy(writer, file)
+	return err
 }
