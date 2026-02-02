@@ -39,7 +39,7 @@ var blockIntegrationMarkdown embed.FS
 var aboutMarkdown embed.FS
 
 // Version information
-const Version = "1.0.52"
+const Version = "1.0.53"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -341,6 +341,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 	customDialog.Resize(fyne.NewSize(840, 750))
 	customDialog.Show()
 }
+
 func main() {
 	a := app.NewWithID("com.gopyote.app")
 	w := a.NewWindow("GoPyOTE Version: " + Version)
@@ -2284,7 +2285,74 @@ func main() {
 	)))
 	tab7 := container.NewTabItem("Smooth", tab7Content)
 
-	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, tab4)
+	// Tab 8: VizieR export (defined in vizier.go)
+	vizierTab := NewVizieRTab()
+
+	// Set up a Generate button callback (needs access to local variables)
+	vizierTab.GenerateBtn.OnTapped = func() {
+		// Validate inputs
+		year, month, day, err := vizierTab.ValidateInputs(w)
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+
+		// Check for loaded data
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		// Get formatted values
+		hipparcos, tycho2, ucac4 := vizierTab.GetFormattedStarIDs()
+		longDeg, longMin, longSecs, latDeg, latMin, latSecs, altitude := vizierTab.GetFormattedLocation()
+
+		// Check if we need to use a frame range
+		rangeStart := int(frameRangeStart)
+		rangeEnd := int(frameRangeEnd)
+		if rangeStart == 0 {
+			rangeStart = int(minFrameNum)
+		}
+		if rangeEnd == 0 {
+			rangeEnd = int(maxFrameNum)
+		}
+
+		// Check if data is not trimmed and warn the user
+		if rangeStart == int(minFrameNum) && rangeEnd == int(maxFrameNum) {
+			dialog.ShowConfirm("Have you forgotten to trim the lightcurve?",
+				"The lightcurve has not been trimmed.\n\n"+
+					"Only the occultation event and enough points on either side\n"+
+					"of the event to allow baseline noise to be well represented\n"+
+					"is needed. Typically around a hundred points on either side\n"+
+					"will be sufficient.\n\n"+
+					"Do you wish to continue without trimming?",
+				func(proceed bool) {
+					if !proceed {
+						return
+					}
+					generateVizieRFile(w, loadedLightCurveData, year, month, day,
+						hipparcos, tycho2, ucac4,
+						longDeg, longMin, longSecs,
+						latDeg, latMin, latSecs,
+						altitude, vizierTab.ObserverNameEntry.Text,
+						vizierTab.AsteroidNumberEntry.Text, vizierTab.AsteroidNameEntry.Text,
+						rangeStart, rangeEnd,
+						vizierTab.OutputFolderEntry.Text, vizierTab.StatusLabel)
+				}, w)
+			return
+		}
+
+		generateVizieRFile(w, loadedLightCurveData, year, month, day,
+			hipparcos, tycho2, ucac4,
+			longDeg, longMin, longSecs,
+			latDeg, latMin, latSecs,
+			altitude, vizierTab.ObserverNameEntry.Text,
+			vizierTab.AsteroidNumberEntry.Text, vizierTab.AsteroidNameEntry.Text,
+			rangeStart, rangeEnd,
+			vizierTab.OutputFolderEntry.Text, vizierTab.StatusLabel)
+	}
+
+	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, vizierTab.TabItem, tab4)
 
 	// Handle tab selection events
 	tabs.OnSelected = func(tab *container.TabItem) {
@@ -2302,6 +2370,15 @@ func main() {
 			lightCurvePlot.Refresh()
 		} else {
 			lightCurvePlot.SingleSelectMode = false
+		}
+
+		// VizieR tab: check that exactly one light curve is selected
+		if tab == vizierTab.TabItem {
+			numDisplayed := len(displayedCurves)
+			if numDisplayed != 1 {
+				dialog.ShowError(fmt.Errorf("a single light curve must be selected for use by the VizieR export function.\n\nCurrently %d curves are selected.\n\nBe sure to set the Start Frame and End Frame values so as to trim the data points sent to VizieR to be no more than about 100 points surrounding the event (if possible).", numDisplayed), w)
+				tabs.Select(tab3) // Switch to the.csv ops tab
+			}
 		}
 	}
 
