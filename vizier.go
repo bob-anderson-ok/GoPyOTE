@@ -682,3 +682,152 @@ func addFileToZip(zipWriter *zip.Writer, filePath string) error {
 	success = true
 	return nil
 }
+
+// decimalToDMS converts a decimal degree value to degrees, minutes, seconds strings
+func decimalToDMS(decimal float64) (deg, minutes, sec string) {
+	negative := decimal < 0
+	if negative {
+		decimal = -decimal
+	}
+
+	degrees := int(decimal)
+	remainder := (decimal - float64(degrees)) * 60
+	mins := int(remainder)
+	seconds := (remainder - float64(mins)) * 60
+
+	if negative {
+		deg = fmt.Sprintf("-%d", degrees)
+	} else {
+		deg = fmt.Sprintf("%d", degrees)
+	}
+	minutes = fmt.Sprintf("%d", mins)
+	sec = fmt.Sprintf("%.2f", seconds)
+
+	return deg, minutes, sec
+}
+
+// isRavfSource checks if the CSV headers indicate the source was a RAVF file
+// by looking for the "#Instrument: Astrid" header line (case-insensitive)
+func isRavfSource(headers []string) bool {
+	for _, header := range headers {
+		upperHeader := strings.ToUpper(header)
+		if strings.HasPrefix(upperHeader, "#INSTRUMENT:") {
+			if strings.Contains(upperHeader, "ASTRID") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// FillFromRavfHeaders populates VizieR tab fields from RAVF CSV headers
+func (vt *VizieRTab) FillFromRavfHeaders(headers []string) {
+	if !isRavfSource(headers) {
+		return
+	}
+
+	for _, header := range headers {
+		// Date at frame
+		if strings.HasPrefix(header, "# date at frame") {
+			parts := strings.SplitN(header, ":", 2)
+			if len(parts) >= 2 {
+				dateParts := strings.Split(strings.TrimSpace(parts[1]), "-")
+				if len(dateParts) >= 3 {
+					vt.DateYearEntry.SetText(strings.TrimSpace(dateParts[0]))
+					vt.DateMonthEntry.SetText(strings.TrimSpace(dateParts[1]))
+					vt.DateDayEntry.SetText(strings.TrimSpace(dateParts[2]))
+				}
+			}
+			continue
+		}
+
+		// Observer
+		if strings.HasPrefix(header, "#OBSERVER:") {
+			parts := strings.SplitN(header, ":", 2)
+			if len(parts) >= 2 {
+				vt.ObserverNameEntry.SetText(strings.TrimSpace(parts[1]))
+			}
+			continue
+		}
+
+		// Latitude
+		if strings.HasPrefix(header, "#LATITUDE:") {
+			parts := strings.SplitN(header, ":", 2)
+			if len(parts) >= 2 {
+				latVal, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+				if err == nil {
+					deg, minutes, sec := decimalToDMS(latVal)
+					vt.SiteLatDegEntry.SetText(deg)
+					vt.SiteLatMinEntry.SetText(minutes)
+					vt.SiteLatSecsEntry.SetText(sec)
+				}
+			}
+			continue
+		}
+
+		// Longitude
+		if strings.HasPrefix(header, "#LONGITUDE:") {
+			parts := strings.SplitN(header, ":", 2)
+			if len(parts) >= 2 {
+				lonVal, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+				if err == nil {
+					deg, minutes, sec := decimalToDMS(lonVal)
+					vt.SiteLongDegEntry.SetText(deg)
+					vt.SiteLongMinEntry.SetText(minutes)
+					vt.SiteLongSecsEntry.SetText(sec)
+				}
+			}
+			continue
+		}
+
+		// Altitude
+		if strings.HasPrefix(header, "#ALTITUDE:") {
+			parts := strings.SplitN(header, ":", 2)
+			if len(parts) >= 2 {
+				altVal, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+				if err == nil {
+					vt.SiteAltitudeEntry.SetText(fmt.Sprintf("%.0f", altVal))
+				}
+			}
+			continue
+		}
+
+		// Asteroid number
+		if strings.HasPrefix(header, "#OCCULTATION-OBJECT-NUMBER:") {
+			parts := strings.SplitN(header, ":", 2)
+			if len(parts) >= 2 {
+				vt.AsteroidNumberEntry.SetText(strings.TrimSpace(parts[1]))
+			}
+			continue
+		}
+
+		// Asteroid name
+		if strings.HasPrefix(header, "#OCCULTATION-OBJECT-NAME:") {
+			parts := strings.SplitN(header, ":", 2)
+			if len(parts) >= 2 {
+				vt.AsteroidNameEntry.SetText(strings.TrimSpace(parts[1]))
+			}
+			continue
+		}
+
+		// Star catalog
+		if strings.HasPrefix(header, "#OCCULTATION-STAR") {
+			parts := strings.SplitN(header, ":", 2)
+			if len(parts) >= 2 {
+				starParts := strings.Fields(strings.TrimSpace(parts[1]))
+				if len(starParts) >= 2 {
+					catalog := strings.ToUpper(starParts[0])
+					starID := starParts[1]
+					if strings.HasPrefix(catalog, "U") {
+						vt.StarUCAC4Entry.SetText(starID)
+					} else if strings.HasPrefix(catalog, "T") {
+						vt.StarTycho2Entry.SetText(starID)
+					} else if strings.HasPrefix(catalog, "H") {
+						vt.StarHipparcosEntry.SetText(starID)
+					}
+				}
+			}
+			continue
+		}
+	}
+}

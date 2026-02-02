@@ -39,7 +39,7 @@ var blockIntegrationMarkdown embed.FS
 var aboutMarkdown embed.FS
 
 // Version information
-const Version = "1.0.57"
+const Version = "1.0.58"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1092,6 +1092,12 @@ func main() {
 		// Account for margins
 		plotAreaWidth := plotSize.Width - lightCurvePlot.marginLeft - lightCurvePlot.marginRight
 		relX := float64((position.X - lightCurvePlot.marginLeft) / plotAreaWidth)
+
+		// Track if the mouse is at/beyond the edges of the plot area
+		// Use a small threshold (5%) to make it easier to anchor at edges
+		mouseLeftOfPlot := relX <= 0.05
+		mouseRightOfPlot := relX >= 0.95
+
 		if relX < 0 {
 			relX = 0
 		}
@@ -1127,20 +1133,40 @@ func main() {
 			newRange = fullRange
 		}
 
-		// Calculate a new start and end, keeping frameUnderCursor at the same relative position
-		newStart := frameUnderCursor - relX*newRange
-		newEnd := frameUnderCursor + (1-relX)*newRange
+		var newStart, newEnd float64
 
-		// Clamp to valid bounds
-		if newStart < minFrameNum {
-			newStart = minFrameNum
-			newEnd = newStart + newRange
-		}
-		if newEnd > maxFrameNum {
-			newEnd = maxFrameNum
-			newStart = newEnd - newRange
+		if mouseLeftOfPlot {
+			// Mouse is to the left of the plot - anchor at the start, only adjust the end
+			newStart = frameRangeStart
+			newEnd = frameRangeStart + newRange
+			// Clamp end only, keep the start anchored
+			if newEnd > maxFrameNum {
+				newEnd = maxFrameNum
+			}
+		} else if mouseRightOfPlot {
+			// Mouse is to the right of the plot - anchor at the end, only adjust start
+			newEnd = frameRangeEnd
+			newStart = frameRangeEnd - newRange
+			// Clamp start only, keep the end anchored
 			if newStart < minFrameNum {
 				newStart = minFrameNum
+			}
+		} else {
+			// Mouse is within the plot - keep frameUnderCursor at the same relative position
+			newStart = frameUnderCursor - relX*newRange
+			newEnd = frameUnderCursor + (1-relX)*newRange
+
+			// Clamp to valid bounds
+			if newStart < minFrameNum {
+				newStart = minFrameNum
+				newEnd = newStart + newRange
+			}
+			if newEnd > maxFrameNum {
+				newEnd = maxFrameNum
+				newStart = newEnd - newRange
+				if newStart < minFrameNum {
+					newStart = minFrameNum
+				}
 			}
 		}
 
@@ -1158,6 +1184,9 @@ func main() {
 			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 		}
 	})
+
+	// Create VizieR tab early so it can be populated from RAVF headers during a file load
+	vizierTab := NewVizieRTab()
 
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
@@ -1295,7 +1324,11 @@ func main() {
 			}
 
 			plotStatusLabel.SetText(fmt.Sprintf("Loaded %d light curves (%d shown) with %d data points. Click to toggle display.",
-				len(data.Columns), len(lightCurveListData), len(data.TimeValues)))
+				len(data.Columns), len(displayedCurves), len(data.TimeValues)))
+
+			// Clear VizieR fields, then populate from RAVF headers if applicable
+			vizierTab.ClearInputs()
+			vizierTab.FillFromRavfHeaders(data.SkippedLines)
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".csv"}))
 		fileDialog.Resize(fyne.NewSize(1200, 800))
@@ -2285,10 +2318,8 @@ func main() {
 	)))
 	tab7 := container.NewTabItem("Smooth", tab7Content)
 
-	// Tab 8: VizieR export (defined in vizier.go)
-	vizierTab := NewVizieRTab()
-
-	// Set up a Generate button callback (needs access to local variables)
+	// Tab 8: VizieR export - vizierTab was created earlier to allow RAVF header parsing during file load
+	// Set up Generate button callback (needs access to local variables)
 	vizierTab.GenerateBtn.OnTapped = func() {
 		// Validate inputs
 		year, month, day, err := vizierTab.ValidateInputs(w)
