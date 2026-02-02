@@ -39,7 +39,7 @@ var blockIntegrationMarkdown embed.FS
 var aboutMarkdown embed.FS
 
 // Version information
-const Version = "1.0.59"
+const Version = "1.0.60"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1326,9 +1326,10 @@ func main() {
 			plotStatusLabel.SetText(fmt.Sprintf("Loaded %d light curves (%d shown) with %d data points. Click to toggle display.",
 				len(data.Columns), len(displayedCurves), len(data.TimeValues)))
 
-			// Clear VizieR fields, then populate from RAVF headers if applicable
+			// Clear VizieR fields, then populate from RAVF or ADV headers if applicable
 			vizierTab.ClearInputs()
 			vizierTab.FillFromRavfHeaders(data.SkippedLines)
+			vizierTab.FillFromAdvHeaders(data.SkippedLines)
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".csv"}))
 		fileDialog.Resize(fyne.NewSize(1200, 800))
