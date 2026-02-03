@@ -42,7 +42,7 @@ var aboutMarkdown embed.FS
 var vizierExportMarkdown embed.FS
 
 // Version information
-const Version = "1.0.64"
+const Version = "1.0.65"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1395,18 +1395,6 @@ func main() {
 	)))
 	tab3 := container.NewTabItem(".csv ops", tab3Content)
 
-	// Tab 4: Reports
-	tab4Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 200, B: 220, A: 255})
-	radioGroup := widget.NewRadioGroup([]string{
-		"Option 1", "Option 2", "Option 3", "Option 4", "Option 5", "Option 6",
-	}, func(selected string) {})
-	radioGroup.SetSelected("Option 1")
-	tab4Content := container.NewStack(tab4Bg, container.NewPadded(container.NewVBox(
-		widget.NewLabel("Reports page content"),
-		radioGroup,
-	)))
-	tab4 := container.NewTabItem("Reports", tab4Content)
-
 	// Tab 5: Block integration
 	tab5Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 220, B: 200, A: 255})
 
@@ -2411,7 +2399,15 @@ func main() {
 		vizierTab.FillFromNASpreadsheet(w)
 	}
 
-	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, vizierTab.TabItem, tab4)
+	// Tab 9: Single Point
+	tab9Bg := canvas.NewRectangle(color.RGBA{R: 220, G: 210, B: 230, A: 255})
+	tab9Content := container.NewStack(tab9Bg, container.NewPadded(container.NewVBox(
+		widget.NewLabel("Single Point Analysis"),
+		widget.NewSeparator(),
+	)))
+	tab9 := container.NewTabItem("Single Point", tab9Content)
+
+	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, vizierTab.TabItem, tab9)
 
 	// Handle tab selection events
 	tabs.OnSelected = func(tab *container.TabItem) {
@@ -2577,7 +2573,7 @@ func main() {
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
-	splitOffset := prefs.FloatWithFallback("splitOffset", 0.6)
+	splitOffset := prefs.FloatWithFallback("splitOffset", 0.35)
 	split.SetOffset(splitOffset)
 
 	content := container.NewBorder(nil, buttons, nil, nil, split)

@@ -185,7 +185,8 @@ func NewVizieRTab() *VizieRTab {
 		widget.NewSeparator(),
 		container.NewHBox(widget.NewLabel("Output folder:"), outputFolderContainer),
 		widget.NewSeparator(),
-		container.NewHBox(vt.GenerateBtn, clearBtn, vt.ZipBtn, vt.LoadXlsxBtn),
+		container.NewHBox(vt.GenerateBtn, vt.ZipBtn),
+		container.NewHBox(clearBtn, vt.LoadXlsxBtn),
 		widget.NewSeparator(),
 		vt.StatusLabel,
 	)))

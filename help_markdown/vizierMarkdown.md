@@ -117,7 +117,7 @@ Dropped frames are represented as empty values in the output (a single space is 
 
 ## 
 
-1. Fill in all required fields (or use auto-fill)
+1. Fill in all required fields (or use autofill)
 2. Click **Generate VizieR .dat file**
 3. Repeat for additional observations if needed
 4. Click **Zip *.dat files for sending** to create a zip archive
