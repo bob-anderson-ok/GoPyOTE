@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"image/color"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,8 +42,11 @@ var aboutMarkdown embed.FS
 //go:embed help_markdown/vizierMarkdown.md
 var vizierExportMarkdown embed.FS
 
+//go:embed help_markdown/singlePointAnalysis.md
+var singlePointAnalysisMarkdown embed.FS
+
 // Version information
-const Version = "1.0.65"
+const Version = "1.0.66"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -403,6 +407,14 @@ func main() {
 			}
 			ShowMarkdownDialogWithImages("VizieR export", string(content), &vizierExportMarkdown, w)
 		}),
+		fyne.NewMenuItem("Single point analysis", func() {
+			content, err := singlePointAnalysisMarkdown.ReadFile("help_markdown/singlePointAnalysis.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load singlePointAnalysis.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Single point analysis", string(content), &singlePointAnalysisMarkdown, w)
+		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About GoPyOTE", func() {
 			content, err := aboutMarkdown.ReadFile("help_markdown/about.md")
@@ -536,6 +548,10 @@ func main() {
 	// Track the current x-axis label for click callback
 	currentXAxisLabel := "Time"
 
+	// Callback for single point analysis (assigned later when tab9 is defined)
+	var onSinglePointAnalysis func()
+	var onSinglePointDropCalc func()
+
 	// Create the plot with an empty series (will be populated when CSV is loaded)
 	var lightCurvePlot *LightCurvePlot
 	lightCurvePlot = NewLightCurvePlot(nil, func(point PlotPoint) {
@@ -562,6 +578,16 @@ func main() {
 			seriesName, frameNum, currentXAxisLabel, xValueStr, point.Y))
 		logAction(fmt.Sprintf("Clicked point: %s Frame %d, %s=%s, Value=%.4f",
 			seriesName, frameNum, currentXAxisLabel, xValueStr, point.Y))
+
+		// Trigger single point analysis if both points are selected
+		if onSinglePointAnalysis != nil && lightCurvePlot.SelectedPoint1Valid && lightCurvePlot.SelectedPoint2Valid {
+			onSinglePointAnalysis()
+		}
+
+		// Trigger single point drop calculation if in a single select mode with one point
+		if onSinglePointDropCalc != nil && lightCurvePlot.SingleSelectMode && lightCurvePlot.SelectedPoint1Valid && !lightCurvePlot.SelectedPoint2Valid {
+			onSinglePointDropCalc()
+		}
 	})
 
 	// Create X and Y axis range spinners (start empty, filled when the first curve selected)
@@ -2401,16 +2427,411 @@ func main() {
 
 	// Tab 9: Single Point
 	tab9Bg := canvas.NewRectangle(color.RGBA{R: 220, G: 210, B: 230, A: 255})
+	singlePointStatusLabel := widget.NewLabel("Select two points on the light curve to define a baseline region")
+	singlePointStatusLabel.Wrapping = fyne.TextWrapWord
+
+	// State for single point analysis
+	var singlePointAnalysisReady bool
+	var singlePointPolyCoeffs []float64 // Polynomial coefficients [a0, a1, a2, a3]
+	var singlePointStartIdx, singlePointEndIdx int
+	var singlePointStdDev, singlePointMeanY float64
+	var singlePointNumPoints int
+	var singlePointFrame1, singlePointFrame2 float64
+
+	// Function to calculate a drop for a single selected point
+	var calculateSinglePointDrop func()
+
+	// Function to perform single point analysis when two points are selected
+	performSinglePointAnalysis := func() {
+		// Check that both points are valid and on the same series
+		if !lightCurvePlot.SelectedPoint1Valid || !lightCurvePlot.SelectedPoint2Valid {
+			return
+		}
+		if lightCurvePlot.selectedSeriesName != lightCurvePlot.selectedSeriesName2 {
+			singlePointStatusLabel.SetText("Both points must be on the same light curve")
+			return
+		}
+		if loadedLightCurveData == nil {
+			singlePointStatusLabel.SetText("No light curve data loaded")
+			return
+		}
+
+		// Get the data indices for the selected points
+		idx1 := lightCurvePlot.selectedPointDataIndex
+		idx2 := lightCurvePlot.selectedPointDataIndex2
+
+		// Ensure idx1 < idx2
+		if idx1 > idx2 {
+			idx1, idx2 = idx2, idx1
+		}
+
+		if idx1 < 0 || idx2 < 0 || idx1 >= idx2 {
+			singlePointStatusLabel.SetText("Invalid point selection")
+			return
+		}
+
+		// Find the column that matches the selected series
+		var refColumn *LightCurveColumn
+		for i := range loadedLightCurveData.Columns {
+			if loadedLightCurveData.Columns[i].Name == lightCurvePlot.selectedSeriesName {
+				refColumn = &loadedLightCurveData.Columns[i]
+				break
+			}
+		}
+		if refColumn == nil {
+			singlePointStatusLabel.SetText("Could not find data for selected series")
+			return
+		}
+
+		// Use the data indices directly
+		startIdx := idx1
+		endIdx := idx2
+
+		// Get actual frame numbers for display
+		frame1 := loadedLightCurveData.FrameNumbers[startIdx]
+		frame2 := loadedLightCurveData.FrameNumbers[endIdx]
+
+		// Extract Y values for the range
+		ys := refColumn.Values[startIdx : endIdx+1]
+		numPoints := len(ys)
+
+		if numPoints < 4 {
+			singlePointStatusLabel.SetText(fmt.Sprintf("Need at least 4 points for 3rd order polynomial (have %d)", numPoints))
+			return
+		}
+
+		// Create X values (normalized to 0-1 range for numerical stability)
+		xs := make([]float64, numPoints)
+		for i := range xs {
+			xs[i] = float64(i) / float64(numPoints-1)
+		}
+
+		// Fit 3rd order polynomial using the least squares technique
+		// y = a0 + a1*x + a2*x^2 + a3*x^3
+		// Build normal equations: (X'X)a = X'y
+		degree := 3
+		n := numPoints
+
+		// Build X'X matrix (4x4 for degree 3)
+		xtx := make([][]float64, degree+1)
+		for i := range xtx {
+			xtx[i] = make([]float64, degree+1)
+		}
+
+		// Build X'y vector
+		xty := make([]float64, degree+1)
+
+		for i := 0; i < n; i++ {
+			xi := xs[i]
+			yi := ys[i]
+			xpow := 1.0
+			for j := 0; j <= degree; j++ {
+				xty[j] += xpow * yi
+				xpow2 := 1.0
+				for k := 0; k <= degree; k++ {
+					xtx[j][k] += xpow * xpow2
+					xpow2 *= xi
+				}
+				xpow *= xi
+			}
+		}
+
+		// Solve using Gaussian elimination with partial pivoting
+		coeffs := make([]float64, degree+1)
+		aug := make([][]float64, degree+1)
+		for i := range aug {
+			aug[i] = make([]float64, degree+2)
+			copy(aug[i], xtx[i])
+			aug[i][degree+1] = xty[i]
+		}
+
+		for col := 0; col <= degree; col++ {
+			// Find pivot
+			maxRow := col
+			for row := col + 1; row <= degree; row++ {
+				if math.Abs(aug[row][col]) > math.Abs(aug[maxRow][col]) {
+					maxRow = row
+				}
+			}
+			aug[col], aug[maxRow] = aug[maxRow], aug[col]
+
+			// Eliminate
+			for row := col + 1; row <= degree; row++ {
+				if aug[col][col] != 0 {
+					factor := aug[row][col] / aug[col][col]
+					for j := col; j <= degree+1; j++ {
+						aug[row][j] -= factor * aug[col][j]
+					}
+				}
+			}
+		}
+
+		// Back substitution
+		for i := degree; i >= 0; i-- {
+			coeffs[i] = aug[i][degree+1]
+			for j := i + 1; j <= degree; j++ {
+				coeffs[i] -= aug[i][j] * coeffs[j]
+			}
+			if aug[i][i] != 0 {
+				coeffs[i] /= aug[i][i]
+			}
+		}
+
+		// Calculate fitted values, residuals, and mean
+		fittedYs := make([]float64, numPoints)
+		var sumSqResiduals float64
+		var sumY float64
+		for i := 0; i < numPoints; i++ {
+			xi := xs[i]
+			fitted := coeffs[0] + coeffs[1]*xi + coeffs[2]*xi*xi + coeffs[3]*xi*xi*xi
+			fittedYs[i] = fitted
+			residual := ys[i] - fitted
+			sumSqResiduals += residual * residual
+			sumY += ys[i]
+		}
+		stdDev := math.Sqrt(sumSqResiduals / float64(numPoints))
+		meanY := sumY / float64(numPoints)
+
+		// Store analysis state for single point drop calculation
+		singlePointPolyCoeffs = coeffs
+		singlePointStartIdx = startIdx
+		singlePointEndIdx = endIdx
+		singlePointStdDev = stdDev
+		singlePointMeanY = meanY
+		singlePointNumPoints = numPoints
+		singlePointFrame1 = frame1
+		singlePointFrame2 = frame2
+		singlePointAnalysisReady = true
+
+		// Create polynomial fit series for display (only for the selected range)
+		var polyPoints []PlotPoint
+		for i, y := range fittedYs {
+			polyPoints = append(polyPoints, PlotPoint{
+				X:     0, // Will be set in rebuildPlot based on frame numbers or timestamps
+				Y:     y,
+				Index: startIdx + i, // Map to original data index
+			})
+		}
+
+		smoothedSeries = &PlotSeries{
+			Points: polyPoints,
+			Color:  color.RGBA{R: 255, G: 0, B: 255, A: 255}, // Magenta for polynomial curve
+			Name:   "3rd Order Poly",
+		}
+
+		// Clear selections and switch to single select mode
+		lightCurvePlot.selectedSeries = -1
+		lightCurvePlot.selectedIndex = -1
+		lightCurvePlot.selectedPointDataIndex = -1
+		lightCurvePlot.selectedSeriesName = ""
+		lightCurvePlot.SelectedPoint1Valid = false
+		lightCurvePlot.SelectedPoint1Frame = 0
+		lightCurvePlot.SelectedPoint1Value = 0
+		lightCurvePlot.selectedSeries2 = -1
+		lightCurvePlot.selectedIndex2 = -1
+		lightCurvePlot.selectedPointDataIndex2 = -1
+		lightCurvePlot.selectedSeriesName2 = ""
+		lightCurvePlot.SelectedPoint2Valid = false
+		lightCurvePlot.SelectedPoint2Frame = 0
+		lightCurvePlot.SelectedPoint2Value = 0
+		lightCurvePlot.SingleSelectMode = true
+
+		// Save Y bounds and rebuild the plot to show the polynomial curve
+		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+		rebuildPlot()
+		lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+
+		// Display results
+		singlePointStatusLabel.SetText(fmt.Sprintf(
+			"Baseline Analysis Complete:\n\n"+
+				"Frame range: %.0f to %.0f\n"+
+				"Number of points: %d\n"+
+				"Mean value: %.4f\n"+
+				"Standard deviation: %.4f\n\n"+
+				"Now click on a point to measure its drop.",
+			frame1, frame2, numPoints, meanY, stdDev))
+
+		logAction(fmt.Sprintf("Single Point Analysis: frames %.0f-%.0f, %d points, 3rd order poly, mean %.4f, stdDev %.4f",
+			frame1, frame2, numPoints, meanY, stdDev))
+	}
+
+	// Function to calculate a drop for a single selected point
+	calculateSinglePointDrop = func() {
+		if !singlePointAnalysisReady {
+			return
+		}
+		if !lightCurvePlot.SelectedPoint1Valid {
+			return
+		}
+
+		// Get the selected point's data index
+		pointIdx := lightCurvePlot.selectedPointDataIndex
+		if pointIdx < 0 || loadedLightCurveData == nil {
+			return
+		}
+
+		// Get the actual Y value of the selected point
+		var actualY float64
+		for _, col := range loadedLightCurveData.Columns {
+			if col.Name == lightCurvePlot.selectedSeriesName {
+				if pointIdx < len(col.Values) {
+					actualY = col.Values[pointIdx]
+				}
+				break
+			}
+		}
+
+		// Check if the point is within the baseline range
+		if pointIdx < singlePointStartIdx || pointIdx > singlePointEndIdx {
+			// Point is outside the baseline range - reject selection
+			// Clear the selection
+			lightCurvePlot.selectedSeries = -1
+			lightCurvePlot.selectedIndex = -1
+			lightCurvePlot.selectedPointDataIndex = -1
+			lightCurvePlot.selectedSeriesName = ""
+			lightCurvePlot.SelectedPoint1Valid = false
+			lightCurvePlot.SelectedPoint1Frame = 0
+			lightCurvePlot.SelectedPoint1Value = 0
+			lightCurvePlot.Refresh()
+
+			// Show guidance message
+			dialog.ShowInformation("Outside Baseline Region",
+				fmt.Sprintf("Please select a point within the baseline region (frames %.0f to %.0f).\n\n"+
+					"Click Reset to define a new baseline region.",
+					singlePointFrame1, singlePointFrame2), w)
+			return
+		}
+
+		// Calculate the normalized x position for the polynomial
+		// It was fit with x normalized to [0, 1] over the range
+		normalizedX := float64(pointIdx-singlePointStartIdx) / float64(singlePointNumPoints-1)
+		referenceY := singlePointPolyCoeffs[0] +
+			singlePointPolyCoeffs[1]*normalizedX +
+			singlePointPolyCoeffs[2]*normalizedX*normalizedX +
+			singlePointPolyCoeffs[3]*normalizedX*normalizedX*normalizedX
+
+		// Calculate drop (reference - actual, so positive = drop below reference)
+		drop := referenceY - actualY
+		dropRatio := drop / singlePointStdDev
+
+		// Get frame number for display
+		frameNum := loadedLightCurveData.FrameNumbers[pointIdx]
+
+		// Display results
+		singlePointStatusLabel.SetText(fmt.Sprintf(
+			"Baseline (frames %.0f to %.0f):\n"+
+				"  Mean: %.4f, Std Dev: %.4f\n\n"+
+				"Selected Point (frame %.0f):\n"+
+				"  Actual value: %.4f\n"+
+				"  Reference value: %.4f\n"+
+				"  Drop: %.4f\n"+
+				"  Drop / Std Dev: %.2f",
+			singlePointFrame1, singlePointFrame2, singlePointMeanY, singlePointStdDev,
+			frameNum, actualY, referenceY, drop, dropRatio))
+
+		logAction(fmt.Sprintf("Single Point Drop: frame %.0f, actual %.4f, reference %.4f, drop %.4f, ratio %.2f",
+			frameNum, actualY, referenceY, drop, dropRatio))
+	}
+
+	// Reset button for single point analysis
+	singlePointResetBtn := widget.NewButton("Reset", func() {
+		// Clear analysis state
+		singlePointAnalysisReady = false
+		singlePointPolyCoeffs = nil
+
+		// Clear selected points
+		lightCurvePlot.selectedSeries = -1
+		lightCurvePlot.selectedIndex = -1
+		lightCurvePlot.selectedPointDataIndex = -1
+		lightCurvePlot.selectedSeriesName = ""
+		lightCurvePlot.SelectedPoint1Valid = false
+		lightCurvePlot.SelectedPoint1Frame = 0
+		lightCurvePlot.SelectedPoint1Value = 0
+		lightCurvePlot.selectedSeries2 = -1
+		lightCurvePlot.selectedIndex2 = -1
+		lightCurvePlot.selectedPointDataIndex2 = -1
+		lightCurvePlot.selectedSeriesName2 = ""
+		lightCurvePlot.SelectedPoint2Valid = false
+		lightCurvePlot.SelectedPoint2Frame = 0
+		lightCurvePlot.SelectedPoint2Value = 0
+
+		// Switch back to two-point selection mode
+		lightCurvePlot.SingleSelectMode = false
+
+		// Clear the smoothed curve
+		smoothedSeries = nil
+
+		// Rebuild plot
+		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+		rebuildPlot()
+		lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+
+		// Reset status label
+		singlePointStatusLabel.SetText("Select two points on the light curve to define a baseline region")
+
+		logAction("Single Point Analysis reset")
+	})
+
 	tab9Content := container.NewStack(tab9Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Single Point Analysis"),
 		widget.NewSeparator(),
+		widget.NewLabel("Instructions:"),
+		widget.NewLabel("1. Select two points to define a baseline region"),
+		widget.NewLabel("2. A 3rd order polynomial is fit and std dev calculated"),
+		widget.NewLabel("3. Click on any point to measure its drop from baseline"),
+		widget.NewSeparator(),
+		singlePointResetBtn,
+		widget.NewSeparator(),
+		singlePointStatusLabel,
 	)))
 	tab9 := container.NewTabItem("Single Point", tab9Content)
 
+	// Assign the single point analysis callbacks
+	onSinglePointAnalysis = performSinglePointAnalysis
+	onSinglePointDropCalc = calculateSinglePointDrop
+
 	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, vizierTab.TabItem, tab9)
+
+	// Track the previously selected tab for cleanup
+	var previousTab *container.TabItem
 
 	// Handle tab selection events
 	tabs.OnSelected = func(tab *container.TabItem) {
+		// Clean up Single Point analysis when leaving tab9
+		if previousTab == tab9 && tab != tab9 {
+			// Clear analysis state
+			singlePointAnalysisReady = false
+			singlePointPolyCoeffs = nil
+
+			// Clear selected points
+			lightCurvePlot.selectedSeries = -1
+			lightCurvePlot.selectedIndex = -1
+			lightCurvePlot.selectedPointDataIndex = -1
+			lightCurvePlot.selectedSeriesName = ""
+			lightCurvePlot.SelectedPoint1Valid = false
+			lightCurvePlot.SelectedPoint1Frame = 0
+			lightCurvePlot.SelectedPoint1Value = 0
+			lightCurvePlot.selectedSeries2 = -1
+			lightCurvePlot.selectedIndex2 = -1
+			lightCurvePlot.selectedPointDataIndex2 = -1
+			lightCurvePlot.selectedSeriesName2 = ""
+			lightCurvePlot.SelectedPoint2Valid = false
+			lightCurvePlot.SelectedPoint2Frame = 0
+			lightCurvePlot.SelectedPoint2Value = 0
+
+			// Clear the smoothed curve
+			smoothedSeries = nil
+
+			// Reset status label
+			singlePointStatusLabel.SetText("Select two points on the light curve to define a baseline region")
+
+			// Rebuild plot
+			savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+			rebuildPlot()
+			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		}
+		previousTab = tab
+
 		if tab == tab6 {
 			// Flash tags tab: enable single select mode
 			lightCurvePlot.SingleSelectMode = true
