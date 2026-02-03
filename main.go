@@ -38,8 +38,11 @@ var blockIntegrationMarkdown embed.FS
 //go:embed help_markdown/about.md
 var aboutMarkdown embed.FS
 
+//go:embed help_markdown/vizierMarkdown.md
+var vizierExportMarkdown embed.FS
+
 // Version information
-const Version = "1.0.63"
+const Version = "1.0.64"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -391,6 +394,14 @@ func main() {
 				return
 			}
 			ShowMarkdownDialogWithImages("Dropped frames and OCR issues", string(content), &timestampAnalysisMarkdown, w)
+		}),
+		fyne.NewMenuItem("VizieR export", func() {
+			content, err := vizierExportMarkdown.ReadFile("help_markdown/vizierMarkdown.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load vizierMarkdown.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("VizieR export", string(content), &vizierExportMarkdown, w)
 		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About GoPyOTE", func() {
