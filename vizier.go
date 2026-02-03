@@ -531,7 +531,26 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 	statusLabel.SetText(fmt.Sprintf("VizieR file written to:\n%s", vizierFilePath))
 	dialog.ShowInformation("VizieR Export Complete",
 		fmt.Sprintf("Your VizieR lightcurve file was written to:\n\n%s", vizierFilePath), w)
-	logAction(fmt.Sprintf("Generated VizieR file: %s with %d readings", vizierFilePath, numReadings))
+
+	// Log VizieR page entries
+	logAction(fmt.Sprintf("Generated VizieR file: %s", vizierFilePath))
+	logAction(fmt.Sprintf("  Date: %d-%02d-%02d", year, month, day))
+	logAction(fmt.Sprintf("  Timestamp: %s, Delta: %.2f sec, Readings: %d", vizierTimestamp, deltaTime, numReadings))
+	logAction(fmt.Sprintf("  Frame range: %d to %d", rangeStart, rangeEnd))
+	if hipparcos != "" {
+		logAction(fmt.Sprintf("  Hipparcos: %s", hipparcos))
+	}
+	if tycho2 != "" {
+		logAction(fmt.Sprintf("  Tycho-2: %s", tycho2))
+	}
+	if ucac4 != "" {
+		logAction(fmt.Sprintf("  UCAC4: %s", ucac4))
+	}
+	logAction(fmt.Sprintf("  Longitude: %s° %s' %s\"", longDeg, longMin, longSecs))
+	logAction(fmt.Sprintf("  Latitude: %s° %s' %s\"", latDeg, latMin, latSecs))
+	logAction(fmt.Sprintf("  Altitude: %s m", altitude))
+	logAction(fmt.Sprintf("  Observer: %s", observer))
+	logAction(fmt.Sprintf("  Asteroid: (%s) %s", asteroidNumber, asteroidName))
 }
 
 // zipDatFiles zips all .dat files in the specified directory
@@ -839,6 +858,36 @@ func (vt *VizieRTab) FillFromRavfHeaders(headers []string) {
 			continue
 		}
 	}
+
+	// Log the fields that were filled from RAVF headers
+	logAction("VizieR fields filled from RAVF headers:")
+	if vt.DateYearEntry.Text != "" {
+		logAction(fmt.Sprintf("  Date: %s-%s-%s", vt.DateYearEntry.Text, vt.DateMonthEntry.Text, vt.DateDayEntry.Text))
+	}
+	if vt.ObserverNameEntry.Text != "" {
+		logAction(fmt.Sprintf("  Observer: %s", vt.ObserverNameEntry.Text))
+	}
+	if vt.SiteLatDegEntry.Text != "" {
+		logAction(fmt.Sprintf("  Latitude: %s° %s' %s\"", vt.SiteLatDegEntry.Text, vt.SiteLatMinEntry.Text, vt.SiteLatSecsEntry.Text))
+	}
+	if vt.SiteLongDegEntry.Text != "" {
+		logAction(fmt.Sprintf("  Longitude: %s° %s' %s\"", vt.SiteLongDegEntry.Text, vt.SiteLongMinEntry.Text, vt.SiteLongSecsEntry.Text))
+	}
+	if vt.SiteAltitudeEntry.Text != "" {
+		logAction(fmt.Sprintf("  Altitude: %s m", vt.SiteAltitudeEntry.Text))
+	}
+	if vt.AsteroidNumberEntry.Text != "" || vt.AsteroidNameEntry.Text != "" {
+		logAction(fmt.Sprintf("  Asteroid: (%s) %s", vt.AsteroidNumberEntry.Text, vt.AsteroidNameEntry.Text))
+	}
+	if vt.StarUCAC4Entry.Text != "" {
+		logAction(fmt.Sprintf("  UCAC4: %s", vt.StarUCAC4Entry.Text))
+	}
+	if vt.StarTycho2Entry.Text != "" {
+		logAction(fmt.Sprintf("  Tycho-2: %s", vt.StarTycho2Entry.Text))
+	}
+	if vt.StarHipparcosEntry.Text != "" {
+		logAction(fmt.Sprintf("  Hipparcos: %s", vt.StarHipparcosEntry.Text))
+	}
 }
 
 // isAdvSource checks if the CSV headers indicate the source was an ADV file
@@ -967,6 +1016,36 @@ func (vt *VizieRTab) FillFromAdvHeaders(headers []string) {
 			}
 			continue
 		}
+	}
+
+	// Log the fields that were filled from ADV headers
+	logAction("VizieR fields filled from ADV headers:")
+	if vt.DateYearEntry.Text != "" {
+		logAction(fmt.Sprintf("  Date: %s-%s-%s", vt.DateYearEntry.Text, vt.DateMonthEntry.Text, vt.DateDayEntry.Text))
+	}
+	if vt.ObserverNameEntry.Text != "" {
+		logAction(fmt.Sprintf("  Observer: %s", vt.ObserverNameEntry.Text))
+	}
+	if vt.SiteLatDegEntry.Text != "" {
+		logAction(fmt.Sprintf("  Latitude: %s° %s' %s\"", vt.SiteLatDegEntry.Text, vt.SiteLatMinEntry.Text, vt.SiteLatSecsEntry.Text))
+	}
+	if vt.SiteLongDegEntry.Text != "" {
+		logAction(fmt.Sprintf("  Longitude: %s° %s' %s\"", vt.SiteLongDegEntry.Text, vt.SiteLongMinEntry.Text, vt.SiteLongSecsEntry.Text))
+	}
+	if vt.SiteAltitudeEntry.Text != "" {
+		logAction(fmt.Sprintf("  Altitude: %s m", vt.SiteAltitudeEntry.Text))
+	}
+	if vt.AsteroidNumberEntry.Text != "" || vt.AsteroidNameEntry.Text != "" {
+		logAction(fmt.Sprintf("  Asteroid: (%s) %s", vt.AsteroidNumberEntry.Text, vt.AsteroidNameEntry.Text))
+	}
+	if vt.StarUCAC4Entry.Text != "" {
+		logAction(fmt.Sprintf("  UCAC4: %s", vt.StarUCAC4Entry.Text))
+	}
+	if vt.StarTycho2Entry.Text != "" {
+		logAction(fmt.Sprintf("  Tycho-2: %s", vt.StarTycho2Entry.Text))
+	}
+	if vt.StarHipparcosEntry.Text != "" {
+		logAction(fmt.Sprintf("  Hipparcos: %s", vt.StarHipparcosEntry.Text))
 	}
 }
 
@@ -1106,6 +1185,36 @@ func (vt *VizieRTab) FillFromNASpreadsheet(w fyne.Window) {
 			return
 		}
 		success = true
+
+		// Log the fields that were filled from the NA spreadsheet
+		logAction(fmt.Sprintf("VizieR fields filled from NA spreadsheet: %s", filePath))
+		if vt.DateYearEntry.Text != "" {
+			logAction(fmt.Sprintf("  Date: %s-%s-%s", vt.DateYearEntry.Text, vt.DateMonthEntry.Text, vt.DateDayEntry.Text))
+		}
+		if vt.ObserverNameEntry.Text != "" {
+			logAction(fmt.Sprintf("  Observer: %s", vt.ObserverNameEntry.Text))
+		}
+		if vt.SiteLatDegEntry.Text != "" {
+			logAction(fmt.Sprintf("  Latitude: %s° %s' %s\"", vt.SiteLatDegEntry.Text, vt.SiteLatMinEntry.Text, vt.SiteLatSecsEntry.Text))
+		}
+		if vt.SiteLongDegEntry.Text != "" {
+			logAction(fmt.Sprintf("  Longitude: %s° %s' %s\"", vt.SiteLongDegEntry.Text, vt.SiteLongMinEntry.Text, vt.SiteLongSecsEntry.Text))
+		}
+		if vt.SiteAltitudeEntry.Text != "" {
+			logAction(fmt.Sprintf("  Altitude: %s m", vt.SiteAltitudeEntry.Text))
+		}
+		if vt.AsteroidNumberEntry.Text != "" || vt.AsteroidNameEntry.Text != "" {
+			logAction(fmt.Sprintf("  Asteroid: (%s) %s", vt.AsteroidNumberEntry.Text, vt.AsteroidNameEntry.Text))
+		}
+		if vt.StarUCAC4Entry.Text != "" {
+			logAction(fmt.Sprintf("  UCAC4: %s", vt.StarUCAC4Entry.Text))
+		}
+		if vt.StarTycho2Entry.Text != "" {
+			logAction(fmt.Sprintf("  Tycho-2: %s", vt.StarTycho2Entry.Text))
+		}
+		if vt.StarHipparcosEntry.Text != "" {
+			logAction(fmt.Sprintf("  Hipparcos: %s", vt.StarHipparcosEntry.Text))
+		}
 
 		vt.StatusLabel.SetText("NA spreadsheet data loaded successfully")
 		dialog.ShowInformation("Success", "Excel spreadsheet Asteroid Report Form entries extracted successfully.", w)

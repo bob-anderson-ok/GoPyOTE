@@ -39,7 +39,7 @@ var blockIntegrationMarkdown embed.FS
 var aboutMarkdown embed.FS
 
 // Version information
-const Version = "1.0.61"
+const Version = "1.0.62"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
