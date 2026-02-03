@@ -39,7 +39,7 @@ var blockIntegrationMarkdown embed.FS
 var aboutMarkdown embed.FS
 
 // Version information
-const Version = "1.0.62"
+const Version = "1.0.63"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -479,7 +479,7 @@ func main() {
 			refreshLightCurveFilter()
 		}
 	})
-	anyNameCheck := widget.NewCheck("any name", func(checked bool) {
+	anyNameCheck := widget.NewCheck("any name (use for Tangra)", func(checked bool) {
 		acceptAnyName = checked
 		if refreshLightCurveFilter != nil {
 			refreshLightCurveFilter()
@@ -1187,6 +1187,9 @@ func main() {
 
 	// Create VizieR tab early so it can be populated from RAVF headers during a file load
 	vizierTab := NewVizieRTab()
+
+	// Track if csv ops tab has been opened for the first time
+	csvOpsTabFirstOpen := true
 
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
@@ -2415,6 +2418,12 @@ func main() {
 			lightCurvePlot.Refresh()
 		} else {
 			lightCurvePlot.SingleSelectMode = false
+		}
+
+		// csv ops tab: open the file dialog on the first visit
+		if tab == tab3 && csvOpsTabFirstOpen {
+			csvOpsTabFirstOpen = false
+			openCSVDialog()
 		}
 
 		// VizieR tab: check that exactly one light curve is selected

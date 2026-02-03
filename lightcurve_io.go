@@ -34,12 +34,12 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 	var headerLine string
 	var skippedLines []string
 
-	// Read lines, accumulating header lines until we find a line starting with "FrameNum,"
+	// Read lines, accumulating header lines until we find a line starting with "FrameNum," or "FrameNo"
 	foundHeader := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !foundHeader {
-			if strings.HasPrefix(line, "FrameNum,") {
+			if strings.HasPrefix(line, "FrameNum,") || strings.HasPrefix(line, "FrameNo") {
 				headerLine = line
 				foundHeader = true
 			} else {
@@ -55,7 +55,7 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 	}
 
 	if headerLine == "" {
-		return nil, fmt.Errorf("no header line starting with 'FrameNum,' found")
+		return nil, fmt.Errorf("no header line starting with 'FrameNum,' or 'FrameNo' found")
 	}
 
 	// Parse header to get column names
