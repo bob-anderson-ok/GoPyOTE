@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"GoPyOTE/lightcurve"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
@@ -46,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.69"
+const Version = "1.0.70"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3263,7 +3265,53 @@ func main() {
 	btnOccultParams := widget.NewButton("Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
 	})
-	buttons := container.NewHBox(btnIOTA, btnOccultParams)
+	btnTestLightCurve := widget.NewButton("Test ExtractAndPlotLightCurve()", func() {
+		// Parameters for the test
+		fundamentalPlaneWidthKm := 40.0
+		fundamentalPlaneWidthPts := 2000
+
+		lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
+			a,                          // Fyne app for displaying windows
+			5.074,                      // dxKmPerSec: Shadow velocity X component
+			-0.904,                     // dyKmPerSec: Shadow velocity Y component
+			-1.18,                      // pathOffsetFromCenterKm: Perpendicular offset from the center
+			fundamentalPlaneWidthKm,    // fundamentalPlaneWidthKm: Width of fundamental plane in km
+			fundamentalPlaneWidthPts,   // fundamentalPlaneWidthPts: Width of fundamental plane in pixels
+			"occultImage16bit.png",     // Path to the 16-bit diffraction image
+			"geometricShadow.png",      // Path to geometric shadow image
+			"diffractionImage8bit.png", // Path to 8-bit display image for path overlay
+		)
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+
+		// Convert lightcurve.Point data to PlotSeries for display in the main plot area
+		points := make([]PlotPoint, len(lcData))
+		for i, pt := range lcData {
+			points[i] = PlotPoint{
+				X:      pt.Distance,
+				Y:      pt.Intensity,
+				Index:  i,
+				Series: 0,
+			}
+		}
+		series := []PlotSeries{{
+			Points: points,
+			Color:  color.RGBA{R: 0, G: 0, B: 255, A: 255},
+			Name:   "Diffraction Light Curve",
+		}}
+		lightCurvePlot.SetSeries(series)
+
+		// Convert edge positions from pixels to km and display as vertical lines
+		distancePerPoint := fundamentalPlaneWidthKm / float64(fundamentalPlaneWidthPts)
+		edgesKm := make([]float64, len(edges))
+		for i, edge := range edges {
+			edgesKm[i] = edge * distancePerPoint
+		}
+		lightCurvePlot.SetVerticalLines(edgesKm, true)
+	})
+	buttons := container.NewHBox(btnIOTA, btnOccultParams, btnTestLightCurve)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)

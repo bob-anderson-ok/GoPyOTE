@@ -59,6 +59,10 @@ type LightCurvePlot struct {
 	BaselineValue    float64 // Y value for the baseline horizontal line
 	ShowBaselineLine bool    // Whether to draw the baseline line
 
+	// Vertical edge lines (for diffraction analysis)
+	VerticalLines     []float64 // X values for vertical lines
+	ShowVerticalLines bool      // Whether to draw the vertical lines
+
 	// Plot bounds for coordinate conversion
 	minX, maxX, minY, maxY float64
 	// Plot area margins (in pixels) - approximate values for gonum/plot
@@ -145,6 +149,13 @@ func (p *LightCurvePlot) SetOnScroll(callback func(position fyne.Position, scrol
 // SetOnWarning sets the callback for warning messages
 func (p *LightCurvePlot) SetOnWarning(callback func(message string)) {
 	p.onWarning = callback
+}
+
+// SetVerticalLines sets the X positions for vertical edge lines
+func (p *LightCurvePlot) SetVerticalLines(xValues []float64, show bool) {
+	p.VerticalLines = xValues
+	p.ShowVerticalLines = show
+	p.Refresh()
 }
 
 // Scrolled handles scroll wheel events
@@ -876,6 +887,24 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			baselineLine.Width = vg.Points(2)
 			baselineLine.Dashes = []vg.Length{vg.Points(5), vg.Points(3)} // Dashed line
 			plt.Add(baselineLine)
+		}
+	}
+
+	// Draw vertical edge lines if enabled
+	if p.ShowVerticalLines {
+		for _, xVal := range p.VerticalLines {
+			vlinePts := make(plotter.XYs, 2)
+			vlinePts[0].X = xVal
+			vlinePts[0].Y = p.minY
+			vlinePts[1].X = xVal
+			vlinePts[1].Y = p.maxY
+			vline, err := plotter.NewLine(vlinePts)
+			if err == nil {
+				vline.Color = color.RGBA{R: 255, G: 0, B: 0, A: 255} // Red
+				vline.Width = vg.Points(2)
+				vline.Dashes = []vg.Length{vg.Points(6), vg.Points(4)} // Dashed line
+				plt.Add(vline)
+			}
 		}
 	}
 

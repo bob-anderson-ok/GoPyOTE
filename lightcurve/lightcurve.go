@@ -414,8 +414,20 @@ func FindEdgesInGeometricShadow(geometricMatrix [][]float64, path *ObservationPa
 		path.ComputeSamplePoints()
 	}
 
+	if len(path.SamplePoints) == 0 {
+		return nil
+	}
+
 	var edges []float64
-	colorAtNextEdge := 1.0
+
+	// Initialize based on the first sample point's value to avoid false edge at the start
+	firstPt := path.SamplePoints[0]
+	firstValue := interpolate(geometricMatrix, firstPt.X, firstPt.Y)
+	if firstValue > 0.0 {
+		firstValue = 1.0
+	}
+	// We're looking for transitions, so set the next edge color to the opposite of current
+	colorAtNextEdge := 1.0 - firstValue
 
 	for _, pt := range path.SamplePoints {
 		pixelValue := interpolate(geometricMatrix, pt.X, pt.Y)
