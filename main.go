@@ -46,10 +46,142 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.67"
+const Version = "1.0.68"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
+
+// Maximum number of recent folders to keep
+const maxRecentFolders = 6
+
+// getRecentFolders retrieves the list of recent folders from preferences
+func getRecentFolders(prefs fyne.Preferences) []string {
+	var folders []string
+	for i := 0; i < maxRecentFolders; i++ {
+		folder := prefs.String(fmt.Sprintf("recentFolder%d", i))
+		if folder != "" {
+			folders = append(folders, folder)
+		}
+	}
+	return folders
+}
+
+// saveRecentFolders saves the list of recent folders to preferences
+func saveRecentFolders(prefs fyne.Preferences, folders []string) {
+	for i := 0; i < maxRecentFolders; i++ {
+		if i < len(folders) {
+			prefs.SetString(fmt.Sprintf("recentFolder%d", i), folders[i])
+		} else {
+			prefs.SetString(fmt.Sprintf("recentFolder%d", i), "")
+		}
+	}
+}
+
+// addRecentFolder adds a folder to the recent list (pushdown stack behavior)
+func addRecentFolder(prefs fyne.Preferences, folderPath string) {
+	folders := getRecentFolders(prefs)
+
+	// Remove if already exists (to move it to the top)
+	newFolders := []string{folderPath}
+	for _, f := range folders {
+		if f != folderPath {
+			newFolders = append(newFolders, f)
+		}
+	}
+
+	// Limit to max size
+	if len(newFolders) > maxRecentFolders {
+		newFolders = newFolders[:maxRecentFolders]
+	}
+
+	saveRecentFolders(prefs, newFolders)
+}
+
+// showFileOpenWithRecents shows a dialog with recent folders, then opens the file dialog
+func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string, filter storage.FileFilter, callback func(fyne.URIReadCloser, error)) {
+	folders := getRecentFolders(prefs)
+
+	// If no recent folders, show the file dialog directly
+	if len(folders) == 0 {
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if reader != nil && err == nil {
+				// Add the parent folder to recents
+				folderPath := filepath.Dir(reader.URI().Path())
+				addRecentFolder(prefs, folderPath)
+			}
+			callback(reader, err)
+		}, w)
+		if filter != nil {
+			fileDialog.SetFilter(filter)
+		}
+		fileDialog.Resize(fyne.NewSize(1200, 800))
+		fileDialog.Show()
+		return
+	}
+
+	// Create buttons for each recent folder
+	var buttons []fyne.CanvasObject
+	var customDialog *dialog.CustomDialog
+
+	// Helper to open the file dialog at a specific location
+	openAtLocation := func(folderPath string) {
+		customDialog.Hide()
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if reader != nil && err == nil {
+				// Add the parent folder to recents
+				newFolderPath := filepath.Dir(reader.URI().Path())
+				addRecentFolder(prefs, newFolderPath)
+			}
+			callback(reader, err)
+		}, w)
+		if filter != nil {
+			fileDialog.SetFilter(filter)
+		}
+		fileDialog.Resize(fyne.NewSize(1200, 800))
+
+		// Set starting location if folder exists
+		if folderPath != "" {
+			folderURI := storage.NewFileURI(folderPath)
+			listableURI, err := storage.ListerForURI(folderURI)
+			if err == nil {
+				fileDialog.SetLocation(listableURI)
+			}
+		}
+		fileDialog.Show()
+	}
+
+	// Add the "Browse..." button at the top
+	browseBtn := widget.NewButton("Browse default location...", func() {
+		openAtLocation("")
+	})
+	buttons = append(buttons, browseBtn)
+
+	// Add separator
+	buttons = append(buttons, widget.NewSeparator())
+
+	// Add label for recent folders
+	buttons = append(buttons, widget.NewLabel("Recent folders:"))
+
+	// Add a button for each recent folder
+	for _, folder := range folders {
+		folderCopy := folder // Capture for closure
+		// Show an abbreviated path for display
+		displayName := folder
+		if len(displayName) > 135 {
+			displayName = "..." + displayName[len(displayName)-132:]
+		}
+		btn := widget.NewButton(displayName, func() {
+			openAtLocation(folderCopy)
+		})
+		btn.Importance = widget.LowImportance
+		buttons = append(buttons, btn)
+	}
+
+	content := container.NewVBox(buttons...)
+	customDialog = dialog.NewCustom(title, "Cancel", content, w)
+	customDialog.Resize(fyne.NewSize(900, 0))
+	customDialog.Show()
+}
 
 // showOccultationParametersDialog displays a form dialog for editing occultation parameters
 func showOccultationParametersDialog(w fyne.Window) {
@@ -191,7 +323,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 
 	// File open button
 	loadBtn := widget.NewButton("Load...", func() {
-		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		showFileOpenWithRecents(w, fyne.CurrentApp().Preferences(), "Select Parameters File", nil, func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -243,10 +375,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 			loadedFileName = reader.URI().Name()
 			// Store the full path for use by Run IOTAdiffraction
 			lastLoadedParamsPath = reader.URI().Path()
-		}, w)
-		fileDialog.SetFilter(nil) // Allow all files or set a specific filter
-		fileDialog.Resize(fyne.NewSize(1200, 800))
-		fileDialog.Show()
+		})
 	})
 
 	// Helper functions to parse entry values
@@ -1232,7 +1361,7 @@ func main() {
 
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
-		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		showFileOpenWithRecents(w, prefs, "Select CSV File", storage.NewExtensionFileFilter([]string{".csv"}), func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -1372,10 +1501,7 @@ func main() {
 			vizierTab.ClearInputs()
 			vizierTab.FillFromRavfHeaders(data.SkippedLines)
 			vizierTab.FillFromAdvHeaders(data.SkippedLines)
-		}, w)
-		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".csv"}))
-		fileDialog.Resize(fyne.NewSize(1200, 800))
-		fileDialog.Show()
+		})
 	}
 
 	// Button to load a CSV file
@@ -3116,14 +3242,8 @@ func main() {
 	}
 
 	btnIOTA := widget.NewButton("Run IOTAdiffraction", func() {
-		// If a parameters file was previously loaded, use it directly
-		if lastLoadedParamsPath != "" {
-			runIOTAdiffraction(lastLoadedParamsPath)
-			return
-		}
-
-		// Otherwise, open the file selection dialog to choose a parameter file
-		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		// Always ask the user to select a parameter file
+		showFileOpenWithRecents(w, prefs, "Select Parameter File", nil, func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -3138,9 +3258,7 @@ func main() {
 			}
 
 			runIOTAdiffraction(paramFilePath)
-		}, w)
-		fileDialog.Resize(fyne.NewSize(1200, 800))
-		fileDialog.Show()
+		})
 	})
 	btnOccultParams := widget.NewButton("Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
