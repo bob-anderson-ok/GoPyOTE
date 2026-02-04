@@ -46,7 +46,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.66"
+const Version = "1.0.67"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -551,6 +551,8 @@ func main() {
 	// Callback for single point analysis (assigned later when tab9 is defined)
 	var onSinglePointAnalysis func()
 	var onSinglePointDropCalc func()
+	var onSinglePointTab bool // Track whether the Single Point tab is active
+	var onFitTab bool         // Track whether the Fit tab is active
 
 	// Create the plot with an empty series (will be populated when CSV is loaded)
 	var lightCurvePlot *LightCurvePlot
@@ -579,8 +581,8 @@ func main() {
 		logAction(fmt.Sprintf("Clicked point: %s Frame %d, %s=%s, Value=%.4f",
 			seriesName, frameNum, currentXAxisLabel, xValueStr, point.Y))
 
-		// Trigger single point analysis if both points are selected
-		if onSinglePointAnalysis != nil && lightCurvePlot.SelectedPoint1Valid && lightCurvePlot.SelectedPoint2Valid {
+		// Trigger single point analysis if both points are selected (only on the Single Point tab)
+		if onSinglePointTab && onSinglePointAnalysis != nil && lightCurvePlot.SelectedPoint1Valid && lightCurvePlot.SelectedPoint2Valid {
 			onSinglePointAnalysis()
 		}
 
@@ -2790,7 +2792,138 @@ func main() {
 	onSinglePointAnalysis = performSinglePointAnalysis
 	onSinglePointDropCalc = calculateSinglePointDrop
 
-	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, vizierTab.TabItem, tab9)
+	// Tab 10: Fit
+	tab10Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 220, B: 240, A: 255})
+
+	// Status label for Fit tab
+	fitStatusLabel := widget.NewLabel("Select pairs of points to define baseline regions")
+
+	// Calculate Baseline mean button
+	calcBaselineMeanBtn := widget.NewButton("Calculate Baseline mean", func() {
+		// Check if we have any selected pairs
+		if len(lightCurvePlot.SelectedPairs) == 0 {
+			dialog.ShowError(fmt.Errorf("no point pairs selected - click on points to select baseline regions"), w)
+			return
+		}
+
+		// Check if we have loaded data
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		// Collect all points from all pairs and calculate the average
+		var sum float64
+		var count int
+
+		for _, pair := range lightCurvePlot.SelectedPairs {
+			// Get the data indices for this pair
+			idx1 := pair.Point1DataIdx
+			idx2 := pair.Point2DataIdx
+
+			// Ensure idx1 < idx2
+			if idx1 > idx2 {
+				idx1, idx2 = idx2, idx1
+			}
+
+			// Find the column that matches the pair's series
+			var col *LightCurveColumn
+			for i := range loadedLightCurveData.Columns {
+				if loadedLightCurveData.Columns[i].Name == pair.Point1Series {
+					col = &loadedLightCurveData.Columns[i]
+					break
+				}
+			}
+
+			if col == nil {
+				continue // Skip if column not found
+			}
+
+			// Sum all points in the range [idx1, idx2]
+			for i := idx1; i <= idx2 && i < len(col.Values); i++ {
+				sum += col.Values[i]
+				count++
+			}
+		}
+
+		if count == 0 {
+			dialog.ShowError(fmt.Errorf("no valid points found in selected pairs"), w)
+			return
+		}
+
+		mean := sum / float64(count)
+
+		// Set the baseline value and show the line on the plot
+		lightCurvePlot.BaselineValue = mean
+		lightCurvePlot.ShowBaselineLine = true
+		lightCurvePlot.Refresh()
+
+		// Update status label
+		fitStatusLabel.SetText(fmt.Sprintf("Baseline mean: %.4f (%d points from %d pairs)", mean, count, len(lightCurvePlot.SelectedPairs)))
+		logAction(fmt.Sprintf("Fit: Calculated baseline mean = %.4f from %d points in %d pairs", mean, count, len(lightCurvePlot.SelectedPairs)))
+	})
+
+	// Scale baseline mean to unity button
+	scaleToUnityBtn := widget.NewButton("Scale baseline mean to unity", func() {
+		// Check if the baseline has been calculated
+		if !lightCurvePlot.ShowBaselineLine {
+			dialog.ShowError(fmt.Errorf("no baseline calculated - click 'Calculate Baseline mean' first"), w)
+			return
+		}
+
+		// Check for division by zero
+		if lightCurvePlot.BaselineValue == 0 {
+			dialog.ShowError(fmt.Errorf("baseline mean is zero - cannot scale"), w)
+			return
+		}
+
+		// Check if we have loaded data
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		scaleFactor := lightCurvePlot.BaselineValue
+		logAction(fmt.Sprintf("Fit: Scaling all light curves by 1/%.4f to set baseline mean to unity", scaleFactor))
+
+		// Scale all column values
+		for colIdx := range loadedLightCurveData.Columns {
+			for i := range loadedLightCurveData.Columns[colIdx].Values {
+				loadedLightCurveData.Columns[colIdx].Values[i] /= scaleFactor
+			}
+		}
+
+		// Update the baseline line to 1.0
+		lightCurvePlot.BaselineValue = 1.0
+
+		// Clear the selected pairs (indices may still be valid but values changed)
+		lightCurvePlot.SelectedPairs = nil
+
+		// Save Y bounds and rebuild the plot
+		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+		rebuildPlot()
+		// Scale the Y bounds as well
+		lightCurvePlot.SetYBounds(savedMinY/scaleFactor, savedMaxY/scaleFactor)
+
+		// Update status label
+		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (divided by %.4f) - baseline now at 1.0", scaleFactor))
+	})
+
+	tab10Content := container.NewStack(tab10Bg, container.NewPadded(container.NewVBox(
+		widget.NewLabel("Fit"),
+		widget.NewSeparator(),
+		widget.NewLabel("1. Click two points to mark a baseline region (pair)"),
+		widget.NewLabel("2. Repeat to add more baseline regions"),
+		widget.NewLabel("3. Click on a marked point to remove that pair"),
+		widget.NewSeparator(),
+		calcBaselineMeanBtn,
+		scaleToUnityBtn,
+		widget.NewSeparator(),
+		fitStatusLabel,
+	)))
+	tab10 := container.NewTabItem("Fit", tab10Content)
+
+	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, vizierTab.TabItem, tab9, tab10)
 
 	// Track the previously selected tab for cleanup
 	var previousTab *container.TabItem
@@ -2832,9 +2965,25 @@ func main() {
 		}
 		previousTab = tab
 
+		// Track whether the Single Point tab is active (for point click callbacks)
+		onSinglePointTab = tab == tab9
+
+		// Track whether Fit tab is active and handle multi-pair selection mode
+		previousOnFitTab := onFitTab
+		onFitTab = tab == tab10
+
+		// Clear saved pairs and baseline line when leaving the Fit tab
+		if previousOnFitTab && !onFitTab {
+			lightCurvePlot.SelectedPairs = nil
+			lightCurvePlot.ShowBaselineLine = false
+			lightCurvePlot.Refresh()
+		}
+
+		// Set selection modes based on the current tab
 		if tab == tab6 {
 			// Flash tags tab: enable single select mode
 			lightCurvePlot.SingleSelectMode = true
+			lightCurvePlot.MultiPairSelectMode = false
 			// Clear point 2 selection when entering the Flash tags tab
 			lightCurvePlot.selectedSeries2 = -1
 			lightCurvePlot.selectedIndex2 = -1
@@ -2844,8 +2993,14 @@ func main() {
 			lightCurvePlot.SelectedPoint2Frame = 0
 			lightCurvePlot.SelectedPoint2Value = 0
 			lightCurvePlot.Refresh()
+		} else if tab == tab10 {
+			// Fit tab: enable multi-pair selection mode
+			lightCurvePlot.SingleSelectMode = false
+			lightCurvePlot.MultiPairSelectMode = true
+			lightCurvePlot.Refresh()
 		} else {
 			lightCurvePlot.SingleSelectMode = false
+			lightCurvePlot.MultiPairSelectMode = false
 		}
 
 		// csv ops tab: open the file dialog on the first visit

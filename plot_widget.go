@@ -49,7 +49,15 @@ type LightCurvePlot struct {
 	SelectedPoint2Value float64
 
 	// Selection mode
-	SingleSelectMode bool // When true, only allow single point selection
+	SingleSelectMode    bool // When true, only allow single point selection
+	MultiPairSelectMode bool // When true, allow multiple two-point pair selections
+
+	// Multiple pair selections (for Fit tab)
+	SelectedPairs []PointPair // List of selected point pairs
+
+	// Baseline line (for Fit tab)
+	BaselineValue    float64 // Y value for the baseline horizontal line
+	ShowBaselineLine bool    // Whether to draw the baseline line
 
 	// Plot bounds for coordinate conversion
 	minX, maxX, minY, maxY float64
@@ -422,6 +430,92 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 			return
 		}
 
+		// Multi-pair select mode: allow multiple two-point pair selections
+		if p.MultiPairSelectMode {
+			// Check if clicking on a point that's already part of a saved pair - remove that pair
+			for i, pair := range p.SelectedPairs {
+				if (pair.Point1SeriesIdx == closestSeries && pair.Point1Idx == closestIdx) ||
+					(pair.Point2SeriesIdx == closestSeries && pair.Point2Idx == closestIdx) {
+					// Remove this pair
+					p.SelectedPairs = append(p.SelectedPairs[:i], p.SelectedPairs[i+1:]...)
+					p.Refresh()
+					if p.onPointClicked != nil {
+						p.onPointClicked(clickedPoint)
+					}
+					return
+				}
+			}
+
+			// If clicking on the current point 1, deselect it
+			if p.selectedSeries == closestSeries && p.selectedIndex == closestIdx {
+				p.selectedSeries = -1
+				p.selectedIndex = -1
+				p.selectedPointDataIndex = -1
+				p.selectedSeriesName = ""
+				p.SelectedPoint1Valid = false
+				p.SelectedPoint1Frame = 0
+				p.SelectedPoint1Value = 0
+				p.Refresh()
+				return
+			}
+
+			// If point 1 is not selected, select as point 1
+			if p.selectedSeries < 0 {
+				p.selectedSeries = closestSeries
+				p.selectedIndex = closestIdx
+				p.selectedPointDataIndex = clickedPoint.Index
+				p.selectedSeriesName = p.series[closestSeries].Name
+				p.SelectedPoint1Valid = true
+				p.SelectedPoint1Frame = clickedPoint.X
+				p.SelectedPoint1Value = clickedPoint.Y
+				p.Refresh()
+				if p.onPointClicked != nil {
+					p.onPointClicked(clickedPoint)
+				}
+				return
+			}
+
+			// Point 1 is selected, select as point 2 and save the pair
+			// Warn if point 2 is on a different light curve than point 1
+			if closestSeries != p.selectedSeries {
+				if p.onWarning != nil {
+					p.onWarning("Point 2 is on a different light curve than Point 1")
+				}
+			}
+
+			// Create and save the pair
+			pair := PointPair{
+				Point1SeriesIdx: p.selectedSeries,
+				Point1Idx:       p.selectedIndex,
+				Point1DataIdx:   p.selectedPointDataIndex,
+				Point1Frame:     p.SelectedPoint1Frame,
+				Point1Value:     p.SelectedPoint1Value,
+				Point1Series:    p.selectedSeriesName,
+				Point2SeriesIdx: closestSeries,
+				Point2Idx:       closestIdx,
+				Point2DataIdx:   clickedPoint.Index,
+				Point2Frame:     clickedPoint.X,
+				Point2Value:     clickedPoint.Y,
+				Point2Series:    p.series[closestSeries].Name,
+			}
+			p.SelectedPairs = append(p.SelectedPairs, pair)
+
+			// Clear point 1 selection to allow selecting the next pair
+			p.selectedSeries = -1
+			p.selectedIndex = -1
+			p.selectedPointDataIndex = -1
+			p.selectedSeriesName = ""
+			p.SelectedPoint1Valid = false
+			p.SelectedPoint1Frame = 0
+			p.SelectedPoint1Value = 0
+
+			p.Refresh()
+			if p.onPointClicked != nil {
+				p.onPointClicked(clickedPoint)
+			}
+			return
+		}
+
 		// If clicking on point 2, deselect it
 		if p.selectedSeries2 == closestSeries && p.selectedIndex2 == closestIdx {
 			p.selectedSeries2 = -1
@@ -714,6 +808,49 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			}
 		}
 
+		// Highlight saved pairs (for multi-pair selection mode)
+		pairColors := []color.RGBA{
+			{R: 0, G: 200, B: 0, A: 255},    // Green
+			{R: 255, G: 165, B: 0, A: 255},  // Orange
+			{R: 148, G: 0, B: 211, A: 255},  // Purple
+			{R: 0, G: 206, B: 209, A: 255},  // Cyan
+			{R: 255, G: 20, B: 147, A: 255}, // Pink
+			{R: 139, G: 69, B: 19, A: 255},  // Brown
+			{R: 50, G: 205, B: 50, A: 255},  // Lime
+			{R: 255, G: 215, B: 0, A: 255},  // Gold
+		}
+		for pairIdx, pair := range p.SelectedPairs {
+			pairColor := pairColors[pairIdx%len(pairColors)]
+
+			// Draw point 1 of this pair if it's in the current series
+			if pair.Point1SeriesIdx == s && pair.Point1Idx >= 0 && pair.Point1Idx < len(series.Points) {
+				pairPt1 := make(plotter.XYs, 1)
+				pairPt1[0].X = series.Points[pair.Point1Idx].X
+				pairPt1[0].Y = series.Points[pair.Point1Idx].Y
+				pairScatter1, err := plotter.NewScatter(pairPt1)
+				if err == nil {
+					pairScatter1.Color = pairColor
+					pairScatter1.GlyphStyle.Shape = draw.CircleGlyph{}
+					pairScatter1.GlyphStyle.Radius = vg.Points(7)
+					plt.Add(pairScatter1)
+				}
+			}
+
+			// Draw point 2 of this pair if it's in the current series
+			if pair.Point2SeriesIdx == s && pair.Point2Idx >= 0 && pair.Point2Idx < len(series.Points) {
+				pairPt2 := make(plotter.XYs, 1)
+				pairPt2[0].X = series.Points[pair.Point2Idx].X
+				pairPt2[0].Y = series.Points[pair.Point2Idx].Y
+				pairScatter2, err := plotter.NewScatter(pairPt2)
+				if err == nil {
+					pairScatter2.Color = pairColor
+					pairScatter2.GlyphStyle.Shape = draw.CircleGlyph{}
+					pairScatter2.GlyphStyle.Radius = vg.Points(7)
+					plt.Add(pairScatter2)
+				}
+			}
+		}
+
 		// Add to legend (create a dummy scatter for legend entry)
 		legendScatter, _ := plotter.NewScatter(pts)
 		if legendScatter != nil {
@@ -723,6 +860,22 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			plt.Legend.Add(series.Name, line, legendScatter)
 		} else {
 			plt.Legend.Add(series.Name, line)
+		}
+	}
+
+	// Draw baseline horizontal line if enabled
+	if p.ShowBaselineLine {
+		baselinePts := make(plotter.XYs, 2)
+		baselinePts[0].X = p.minX
+		baselinePts[0].Y = p.BaselineValue
+		baselinePts[1].X = p.maxX
+		baselinePts[1].Y = p.BaselineValue
+		baselineLine, err := plotter.NewLine(baselinePts)
+		if err == nil {
+			baselineLine.Color = color.RGBA{R: 255, G: 0, B: 0, A: 255} // Red
+			baselineLine.Width = vg.Points(2)
+			baselineLine.Dashes = []vg.Length{vg.Points(5), vg.Points(3)} // Dashed line
+			plt.Add(baselineLine)
 		}
 	}
 

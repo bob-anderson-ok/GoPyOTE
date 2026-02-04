@@ -64,3 +64,19 @@ type PlotSeries struct {
 	Color  color.RGBA
 	Name   string
 }
+
+// PointPair represents a pair of selected points (for multi-pair selection mode)
+type PointPair struct {
+	Point1SeriesIdx int
+	Point1Idx       int
+	Point1DataIdx   int
+	Point1Frame     float64
+	Point1Value     float64
+	Point1Series    string
+	Point2SeriesIdx int
+	Point2Idx       int
+	Point2DataIdx   int
+	Point2Frame     float64
+	Point2Value     float64
+	Point2Series    string
+}
