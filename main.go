@@ -48,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.70"
+const Version = "1.0.71"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3311,7 +3311,249 @@ func main() {
 		}
 		lightCurvePlot.SetVerticalLines(edgesKm, true)
 	})
-	buttons := container.NewHBox(btnIOTA, btnOccultParams, btnTestLightCurve)
+
+	btnExtractCSV := widget.NewButton("Extract csv from diffraction image", func() {
+		// Check if we have a loaded light curve to sample from
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded - please load a CSV file first"), w)
+			return
+		}
+
+		// Check if we have parameters loaded
+		if lastLoadedParamsPath == "" {
+			dialog.ShowError(fmt.Errorf("no parameters file loaded - please load parameters first"), w)
+			return
+		}
+
+		// Load parameters from the last loaded params file
+		file, err := os.Open(lastLoadedParamsPath)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("could not open parameters file: %v", err), w)
+			return
+		}
+		params, err := parseOccultationParameters(file)
+		if closeErr := file.Close(); closeErr != nil {
+			dialog.ShowError(fmt.Errorf("failed to close file: %w", closeErr), w)
+		}
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("could not parse parameters: %v", err), w)
+			return
+		}
+
+		// Extract diffraction light curve (pass nil for app to skip window display)
+		lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
+			nil, // Don't show separate windows
+			params.DXKmPerSec,
+			params.DYKmPerSec,
+			params.PathPerpendicularOffsetKm,
+			params.FundamentalPlaneWidthKm,
+			params.FundamentalPlaneWidthNumPoints,
+			"occultImage16bit.png",
+			"geometricShadow.png",
+			"", // No display image needed
+		)
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+
+		// Calculate shadow speed (km/sec)
+		shadowSpeedKmPerSec := math.Sqrt(params.DXKmPerSec*params.DXKmPerSec + params.DYKmPerSec*params.DYKmPerSec)
+		if shadowSpeedKmPerSec == 0 {
+			dialog.ShowError(fmt.Errorf("shadow speed is zero - check dX and dY parameters"), w)
+			return
+		}
+
+		// Get the time values from the displayed curve within the frame range
+		var displayedTimes []float64
+		var displayedIndices []int
+		for i, frameNum := range loadedLightCurveData.FrameNumbers {
+			if frameRangeStart > 0 && frameNum < frameRangeStart {
+				continue
+			}
+			if frameRangeEnd > 0 && frameNum > frameRangeEnd {
+				continue
+			}
+			displayedTimes = append(displayedTimes, loadedLightCurveData.TimeValues[i])
+			displayedIndices = append(displayedIndices, i)
+		}
+
+		if len(displayedTimes) < 2 {
+			dialog.ShowError(fmt.Errorf("not enough time points in displayed range"), w)
+			return
+		}
+
+		// Get the time span of the displayed curve
+		startTime := displayedTimes[0]
+		endTime := displayedTimes[len(displayedTimes)-1]
+		timeSpan := endTime - startTime
+
+		// Convert diffraction light curve from km to time
+		// The diffraction curve spans the full fundamental plane width
+		// We need to map it to the time span of the displayed curve
+		// Distance in km -> time in seconds: time = distance / shadowSpeedKmPerSec
+		// But we need to center/align it with the displayed curve's time range
+
+		// Get the km span of the diffraction curve
+		if len(lcData) == 0 {
+			dialog.ShowError(fmt.Errorf("no diffraction light curve data extracted"), w)
+			return
+		}
+		kmStart := lcData[0].Distance
+		kmEnd := lcData[len(lcData)-1].Distance
+		kmSpan := kmEnd - kmStart
+
+		// Convert km to time offset from center
+		// The center of the diffraction curve maps to the center of the time range
+		centerTime := (startTime + endTime) / 2.0
+		centerKm := (kmStart + kmEnd) / 2.0
+
+		// Build a time-indexed version of the diffraction curve for interpolation
+		type timePoint struct {
+			time      float64
+			intensity float64
+		}
+		diffCurveByTime := make([]timePoint, len(lcData))
+		for i, pt := range lcData {
+			// Convert km offset from center to time offset from center
+			kmOffsetFromCenter := pt.Distance - centerKm
+			timeOffsetFromCenter := kmOffsetFromCenter / shadowSpeedKmPerSec
+			diffCurveByTime[i] = timePoint{
+				time:      centerTime + timeOffsetFromCenter,
+				intensity: pt.Intensity,
+			}
+		}
+
+		// Linear interpolation function for the diffraction curve
+		interpolateDiffCurve := func(t float64) float64 {
+			// Find the two points surrounding t
+			if len(diffCurveByTime) == 0 {
+				return 0
+			}
+			if t <= diffCurveByTime[0].time {
+				return diffCurveByTime[0].intensity
+			}
+			if t >= diffCurveByTime[len(diffCurveByTime)-1].time {
+				return diffCurveByTime[len(diffCurveByTime)-1].intensity
+			}
+			for i := 0; i < len(diffCurveByTime)-1; i++ {
+				if t >= diffCurveByTime[i].time && t <= diffCurveByTime[i+1].time {
+					// Linear interpolation
+					t0 := diffCurveByTime[i].time
+					t1 := diffCurveByTime[i+1].time
+					v0 := diffCurveByTime[i].intensity
+					v1 := diffCurveByTime[i+1].intensity
+					if t1 == t0 {
+						return v0
+					}
+					return v0 + (v1-v0)*(t-t0)/(t1-t0)
+				}
+			}
+			return diffCurveByTime[len(diffCurveByTime)-1].intensity
+		}
+
+		// Calculate frame rate from the displayed curve (4x oversampling)
+		baseFrameRate := float64(len(displayedTimes)-1) / timeSpan
+		if baseFrameRate <= 0 {
+			dialog.ShowError(fmt.Errorf("could not calculate frame rate from displayed curve"), w)
+			return
+		}
+		frameRate := 4.0 * baseFrameRate
+		framePeriod := 1.0 / frameRate
+
+		// Calculate the time duration of the diffraction curve
+		diffDurationSec := kmSpan / shadowSpeedKmPerSec
+
+		// Calculate number of frames needed for the diffraction curve
+		numFrames := int(diffDurationSec*frameRate) + 1
+
+		// Generate time points starting from zero at the frame rate
+		// Sample the diffraction curve at those times
+		var csvData []struct {
+			frameNum  int
+			time      float64
+			intensity float64
+		}
+
+		// We need to map from "time starting at 0" to the diffraction curve's time domain
+		// The diffraction curve is centered, so we offset appropriately
+		diffStartTime := diffCurveByTime[0].time
+		diffEndTime := diffCurveByTime[len(diffCurveByTime)-1].time
+
+		for i := 0; i < numFrames; i++ {
+			t := float64(i) * framePeriod // Time from zero
+			diffT := diffStartTime + t    // Map to diffraction curve time domain
+			if diffT > diffEndTime {
+				break
+			}
+			csvData = append(csvData, struct {
+				frameNum  int
+				time      float64
+				intensity float64
+			}{
+				frameNum:  i,
+				time:      t,
+				intensity: interpolateDiffCurve(diffT),
+			})
+		}
+
+		// Show file save dialog
+		saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if writer == nil {
+				return // User cancelled
+			}
+			defer func() {
+				if cerr := writer.Close(); cerr != nil {
+					fmt.Printf("Error closing file: %v\n", cerr)
+				}
+			}()
+
+			// Write comment line with date/time
+			_, err = fmt.Fprintf(writer, "# GoPyOTE %s\n", time.Now().Format("2006-01-02 15:04:05"))
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("error writing CSV comment: %v", err), w)
+				return
+			}
+
+			// Write CSV header
+			_, err = fmt.Fprintf(writer, "FrameNum,timeInfo,signal-target\n")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("error writing CSV header: %v", err), w)
+				return
+			}
+
+			// Write data rows
+			for _, row := range csvData {
+				timestamp := "[" + formatSecondsAsTimestamp(row.time) + "]"
+				_, err = fmt.Fprintf(writer, "%d,%s,%.6f\n", row.frameNum, timestamp, row.intensity)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("error writing CSV data: %v", err), w)
+					return
+				}
+			}
+
+			dialog.ShowInformation("Export Complete",
+				fmt.Sprintf("Exported %d points to %s\nFrame rate: %.3f fps\nDuration: %.3f sec",
+					len(csvData), writer.URI().Name(), frameRate, diffDurationSec), w)
+		}, w)
+		saveDialog.SetFileName("diffraction_lightcurve.csv")
+		saveDialog.Resize(fyne.NewSize(800, 600))
+		saveDialog.Show()
+
+		// Log the extraction info
+		fmt.Printf("Diffraction curve: %d points, shadow speed: %.3f km/sec, frame rate: %.3f fps\n",
+			len(csvData), shadowSpeedKmPerSec, frameRate)
+		fmt.Printf("Duration: %.3f sec, km span: %.3f km\n", diffDurationSec, kmSpan)
+
+		// Suppress unused variable warnings
+		_ = edges
+	})
+
+	buttons := container.NewHBox(btnIOTA, btnOccultParams, btnTestLightCurve, btnExtractCSV)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
