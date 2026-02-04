@@ -48,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.71"
+const Version = "1.0.72"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3461,6 +3461,7 @@ func main() {
 		frameRate := 4.0 * baseFrameRate
 		framePeriod := 1.0 / frameRate
 
+		// TODO Fix this calculation - it may be wrong - because the length of the observation path is not kmSpan
 		// Calculate the time duration of the diffraction curve
 		diffDurationSec := kmSpan / shadowSpeedKmPerSec
 
@@ -3495,6 +3496,27 @@ func main() {
 				time:      t,
 				intensity: interpolateDiffCurve(diffT),
 			})
+		}
+
+		// Save a copy of all points (unsampled) in theoreticalLightcurve with time starting at zero
+		theoreticalLightcurve := make([]struct {
+			time      float64
+			intensity float64
+		}, len(diffCurveByTime))
+		timeOffset := float64(0)
+		if len(diffCurveByTime) > 0 {
+			timeOffset = diffCurveByTime[0].time
+		}
+		for i, pt := range diffCurveByTime {
+			theoreticalLightcurve[i].time = pt.time - timeOffset
+			theoreticalLightcurve[i].intensity = pt.intensity
+		}
+		if len(theoreticalLightcurve) > 0 {
+			fmt.Printf("theoreticalLightcurve (%d points): first=(t=%.6f, i=%.6f), last=(t=%.6f, i=%.6f)\n",
+				len(theoreticalLightcurve),
+				theoreticalLightcurve[0].time, theoreticalLightcurve[0].intensity,
+				theoreticalLightcurve[len(theoreticalLightcurve)-1].time,
+				theoreticalLightcurve[len(theoreticalLightcurve)-1].intensity)
 		}
 
 		// Show file save dialog
