@@ -31,6 +31,7 @@ type OccultationParameters struct {
 	MainBody                       EllipseParams `json:"main_body"`
 	Satellite                      EllipseParams `json:"satellite"`
 	PathToExternalImage            string        `json:"path_to_external_image"`
+	ExposureTimeSecs               float64       `json:"exposure_time_secs"`
 }
 
 // LightCurveColumn represents a single light curve column from a CSV file

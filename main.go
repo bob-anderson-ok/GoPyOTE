@@ -48,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.72"
+const Version = "1.0.73"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -219,9 +219,20 @@ func showOccultationParametersDialog(w fyne.Window) {
 	satellitePaDegreesEntry := widget.NewEntry()
 
 	pathToExternalImageEntry := widget.NewEntry()
+	exposureTimeSecsEntry := widget.NewEntry()
 
 	// Track the currently loaded file name for save dialog default
 	var loadedFileName string
+
+	// Label to display the loaded parameters file name
+	fileNameLabel := widget.NewLabel("")
+	fileNameLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	// Restore last loaded parameters path from preferences
+	prefs := fyne.CurrentApp().Preferences()
+	if lastLoadedParamsPath == "" {
+		lastLoadedParamsPath = prefs.StringWithFallback("lastLoadedParamsPath", "")
+	}
 
 	// Auto-load previously opened parameters file if available
 	if lastLoadedParamsPath != "" {
@@ -258,7 +269,13 @@ func showOccultationParametersDialog(w fyne.Window) {
 				satelliteMinorAxisEntry.SetText(strconv.FormatFloat(params.Satellite.MinorAxisKm, 'f', -1, 64))
 				satellitePaDegreesEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisPaDegrees, 'f', -1, 64))
 				pathToExternalImageEntry.SetText(params.PathToExternalImage)
+				if params.ExposureTimeSecs != 0.0 {
+					exposureTimeSecsEntry.SetText(strconv.FormatFloat(params.ExposureTimeSecs, 'f', -1, 64))
+				} else {
+					exposureTimeSecsEntry.SetText("")
+				}
 				loadedFileName = filepath.Base(lastLoadedParamsPath)
+				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
 			}
 		}
 	}
@@ -284,6 +301,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 		&widget.FormItem{Text: "Path Perp. Offset (km)", Widget: wrapEntry(pathPerpendicularOffsetKmEntry)},
 		&widget.FormItem{Text: "Percent Mag Drop", Widget: wrapEntry(percentMagDropEntry)},
 		&widget.FormItem{Text: "Star Diam. (mas)", Widget: wrapEntry(starDiamOnPlaneMasEntry)},
+		&widget.FormItem{Text: "Exposure time (secs)", Widget: wrapEntry(exposureTimeSecsEntry)},
 	)
 
 	// Create a right column form
@@ -324,7 +342,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 	})
 
 	// File open button
-	loadBtn := widget.NewButton("Load...", func() {
+	loadBtn := widget.NewButton("Browse", func() {
 		showFileOpenWithRecents(w, fyne.CurrentApp().Preferences(), "Select Parameters File", nil, func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -372,11 +390,19 @@ func showOccultationParametersDialog(w fyne.Window) {
 			satelliteMinorAxisEntry.SetText(strconv.FormatFloat(params.Satellite.MinorAxisKm, 'f', -1, 64))
 			satellitePaDegreesEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisPaDegrees, 'f', -1, 64))
 			pathToExternalImageEntry.SetText(params.PathToExternalImage)
+			if params.ExposureTimeSecs != 0.0 {
+				exposureTimeSecsEntry.SetText(strconv.FormatFloat(params.ExposureTimeSecs, 'f', -1, 64))
+			} else {
+				exposureTimeSecsEntry.SetText("")
+			}
 
 			// Store the loaded file name for use as default in the save dialog
 			loadedFileName = reader.URI().Name()
 			// Store the full path for use by Run IOTAdiffraction
 			lastLoadedParamsPath = reader.URI().Path()
+			// Persist to preferences so it autoloads next time
+			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
+			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
 		})
 	})
 
@@ -391,7 +417,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 	}
 
 	// File save button
-	saveBtn := widget.NewButton("Save...", func() {
+	saveBtn := widget.NewButton("Write", func() {
 		fileDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -438,6 +464,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 					MajorAxisPaDegrees: parseFloat(satellitePaDegreesEntry.Text),
 				},
 				PathToExternalImage: pathToExternalImageEntry.Text,
+				ExposureTimeSecs:    parseFloat(exposureTimeSecsEntry.Text),
 			}
 
 			// Marshal to JSON5
@@ -473,7 +500,8 @@ func showOccultationParametersDialog(w fyne.Window) {
 	})
 
 	buttons := container.NewHBox(loadBtn, saveBtn, layout.NewSpacer(), cancelBtn, okBtn)
-	content := container.NewBorder(nil, buttons, nil, nil, scrollContent)
+	bottomSection := container.NewVBox(fileNameLabel, buttons)
+	content := container.NewBorder(nil, bottomSection, nil, nil, scrollContent)
 
 	customDialog = dialog.NewCustomWithoutButtons("Occultation Parameters", content, w)
 	customDialog.Resize(fyne.NewSize(840, 750))
@@ -3415,7 +3443,7 @@ func main() {
 		}
 		diffCurveByTime := make([]timePoint, len(lcData))
 		for i, pt := range lcData {
-			// Convert km offset from center to time offset from center
+			// Convert km offset from center to time offset from the center
 			kmOffsetFromCenter := pt.Distance - centerKm
 			timeOffsetFromCenter := kmOffsetFromCenter / shadowSpeedKmPerSec
 			diffCurveByTime[i] = timePoint{
@@ -3465,7 +3493,7 @@ func main() {
 		// Calculate the time duration of the diffraction curve
 		diffDurationSec := kmSpan / shadowSpeedKmPerSec
 
-		// Calculate number of frames needed for the diffraction curve
+		// Calculate the number of frames needed for the diffraction curve
 		numFrames := int(diffDurationSec*frameRate) + 1
 
 		// Generate time points starting from zero at the frame rate
@@ -3534,7 +3562,7 @@ func main() {
 				}
 			}()
 
-			// Write comment line with date/time
+			// Write a comment line with date/time
 			_, err = fmt.Fprintf(writer, "# GoPyOTE %s\n", time.Now().Format("2006-01-02 15:04:05"))
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("error writing CSV comment: %v", err), w)
@@ -3558,9 +3586,41 @@ func main() {
 				}
 			}
 
+			// Write unsampled theoreticalLightcurve CSV alongside the sampled one
+			sampledPath := writer.URI().Path()
+			unsampledPath := strings.TrimSuffix(sampledPath, ".csv") + "_unsampled.csv"
+			unsampledFile, uerr := os.Create(unsampledPath)
+			if uerr != nil {
+				dialog.ShowError(fmt.Errorf("error creating unsampled CSV: %v", uerr), w)
+				return
+			}
+			defer func() {
+				if cerr := unsampledFile.Close(); cerr != nil {
+					fmt.Printf("Error closing unsampled file: %v\n", cerr)
+				}
+			}()
+
+			if _, err := fmt.Fprintf(unsampledFile, "# GoPyOTE %s (unsampled theoretical lightcurve)\n", time.Now().Format("2006-01-02 15:04:05")); err != nil {
+				dialog.ShowError(fmt.Errorf("error writing unsampled CSV comment: %v", err), w)
+				return
+			}
+			if _, err := fmt.Fprintf(unsampledFile, "FrameNum,timeInfo,signal-target\n"); err != nil {
+				dialog.ShowError(fmt.Errorf("error writing unsampled CSV header: %v", err), w)
+				return
+			}
+			for i, pt := range theoreticalLightcurve {
+				timestamp := "[" + formatSecondsAsTimestamp(pt.time) + "]"
+				if _, err := fmt.Fprintf(unsampledFile, "%d,%s,%.6f\n", i, timestamp, pt.intensity); err != nil {
+					dialog.ShowError(fmt.Errorf("error writing unsampled CSV data: %v", err), w)
+					return
+				}
+			}
+
 			dialog.ShowInformation("Export Complete",
-				fmt.Sprintf("Exported %d points to %s\nFrame rate: %.3f fps\nDuration: %.3f sec",
-					len(csvData), writer.URI().Name(), frameRate, diffDurationSec), w)
+				fmt.Sprintf("Exported %d sampled points to %s\nExported %d unsampled points to %s\nFrame rate: %.3f fps\nDuration: %.3f sec",
+					len(csvData), writer.URI().Name(),
+					len(theoreticalLightcurve), filepath.Base(unsampledPath),
+					frameRate, diffDurationSec), w)
 		}, w)
 		saveDialog.SetFileName("diffraction_lightcurve.csv")
 		saveDialog.Resize(fyne.NewSize(800, 600))
