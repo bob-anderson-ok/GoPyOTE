@@ -48,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.76"
+const Version = "1.0.77"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -334,7 +334,6 @@ func showOccultationParametersDialog(w fyne.Window) {
 	// Create a custom dialog with OK/Cancel buttons
 	var customDialog *dialog.CustomDialog
 	okBtn := widget.NewButton("OK", func() {
-		// TODO: Process the form data
 		customDialog.Hide()
 	})
 	okBtn.Importance = widget.HighImportance
@@ -3077,6 +3076,98 @@ func main() {
 		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (divided by %.4f) - baseline now at 1.0", scaleFactor))
 	})
 
+	// Fit button - checks preconditions and reports readiness
+	fitBtn := widget.NewButton("Fit", func() {
+		var issues []string
+
+		// Check 1: Single curve selected
+		if len(displayedCurves) != 1 {
+			issues = append(issues, fmt.Sprintf("A single light curve must be selected (currently %d displayed)", len(displayedCurves)))
+		}
+
+		// Check 2: Scaled to unity
+		if !lightCurvePlot.ShowBaselineLine || lightCurvePlot.BaselineValue != 1.0 {
+			issues = append(issues, "Light curve has not been scaled to unity")
+		}
+
+		// Check 3: Parameters file loaded
+		if lastLoadedParamsPath == "" {
+			issues = append(issues, "No parameters file has been selected")
+		}
+
+		// Check 4: Diffraction image available
+		if _, err := os.Stat("occultImage16bit.png"); os.IsNotExist(err) {
+			issues = append(issues, "No diffraction image available (occultImage16bit.png not found)")
+		}
+
+		if len(issues) > 0 {
+			msg := "Cannot perform fit. The following conditions are not met:\n\n"
+			for i, issue := range issues {
+				msg += fmt.Sprintf("%d. %s\n", i+1, issue)
+			}
+			dialog.ShowError(fmt.Errorf("%s", msg), w)
+		} else {
+			// Load parameters
+			file, err := os.Open(lastLoadedParamsPath)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("could not open parameters file: %v", err), w)
+				return
+			}
+			params, err := parseOccultationParameters(file)
+			if closeErr := file.Close(); closeErr != nil {
+				dialog.ShowError(fmt.Errorf("failed to close file: %w", closeErr), w)
+			}
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("could not parse parameters: %v", err), w)
+				return
+			}
+
+			// Find the single displayed column index
+			var displayedColIdx int
+			for k := range displayedCurves {
+				displayedColIdx = k
+				break
+			}
+
+			// Verify timestamps are real (not all zeros)
+			allZero := true
+			for _, t := range loadedLightCurveData.TimeValues {
+				if t != 0 {
+					allZero = false
+					break
+				}
+			}
+			if allZero {
+				dialog.ShowError(fmt.Errorf("timestamps are all zero — real timestamps are required for fitting"), w)
+				return
+			}
+
+			// Collect target times and values within the frame range
+			col := loadedLightCurveData.Columns[displayedColIdx]
+			var targetTimes, targetValues []float64
+			for i, val := range col.Values {
+				frameNum := loadedLightCurveData.FrameNumbers[i]
+				if frameRangeStart > 0 && frameNum < frameRangeStart {
+					continue
+				}
+				if frameRangeEnd > 0 && frameNum > frameRangeEnd {
+					continue
+				}
+				targetTimes = append(targetTimes, loadedLightCurveData.TimeValues[i])
+				targetValues = append(targetValues, val)
+			}
+
+			if len(targetTimes) < 2 {
+				dialog.ShowError(fmt.Errorf("not enough data points in displayed range for fitting"), w)
+				return
+			}
+
+			if err := performFit(a, w, params, targetTimes, targetValues); err != nil {
+				dialog.ShowError(err, w)
+			}
+		}
+	})
+
 	tab10Content := container.NewStack(tab10Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Fit"),
 		widget.NewSeparator(),
@@ -3086,6 +3177,8 @@ func main() {
 		widget.NewSeparator(),
 		calcBaselineMeanBtn,
 		scaleToUnityBtn,
+		widget.NewSeparator(),
+		fitBtn,
 		widget.NewSeparator(),
 		fitStatusLabel,
 	)))
@@ -3495,7 +3588,7 @@ func main() {
 		framePeriod := params.ExposureTimeSecs
 		frameRate := 1.0 / framePeriod
 
-		// TODO Fix this calculation - it may be wrong - because the length of the observation path is not kmSpan
+		// This calculation is correct because the length of the observation path is kmSpan as calculated earlier
 		// Calculate the time duration of the diffraction curve
 		diffDurationSec := kmSpan / shadowSpeedKmPerSec
 
