@@ -164,14 +164,28 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 	nccWindow.Resize(fyne.NewSize(1050, 550))
 	nccWindow.Show()
 
-	// Log the best fit
+	// Find the best fit offset
 	bestIdx := 0
 	for i, r := range results {
 		if r.ncc > results[bestIdx].ncc {
 			bestIdx = i
 		}
 	}
-	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", results[bestIdx].offset, results[bestIdx].ncc)
+	bestOffset := results[bestIdx].offset
+	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", bestOffset, results[bestIdx].ncc)
+
+	// --- Overlay plot: theoretical curve shifted to best-fit position + target curve ---
+	overlayImg, err := createOverlayPlotImage(curve, bestOffset, targetTimes, targetValues, results[bestIdx].ncc, 1200, 500)
+	if err != nil {
+		return fmt.Errorf("failed to create overlay plot: %w", err)
+	}
+
+	overlayWindow := app.NewWindow("Fit Result — Theoretical vs Observed")
+	overlayCanvas := canvas.NewImageFromImage(overlayImg)
+	overlayCanvas.FillMode = canvas.ImageFillOriginal
+	overlayWindow.SetContent(container.NewScroll(overlayCanvas))
+	overlayWindow.Resize(fyne.NewSize(1250, 550))
+	overlayWindow.Show()
 
 	return nil
 }
@@ -279,6 +293,105 @@ func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.I
 	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode plot PNG: %w", err)
+	}
+
+	return goImg, nil
+}
+
+// createOverlayPlotImage renders the target light curve and the theoretical curve
+// (shifted by bestOffset) together in a single plot.
+func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, targetTimes, targetValues []float64, bestNCC float64, plotWidth, plotHeight int) (image.Image, error) {
+	plt := plot.New()
+
+	// Font styling
+	plt.Title.TextStyle.Font.Typeface = "Liberation"
+	plt.Title.TextStyle.Font.Variant = "Sans"
+	plt.Title.TextStyle.Font.Size = vg.Points(14)
+	plt.Title.TextStyle.Font.Weight = 2
+
+	plt.X.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.X.Label.TextStyle.Font.Variant = "Sans"
+	plt.X.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.X.Label.TextStyle.Font.Weight = 2
+
+	plt.Y.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.Y.Label.TextStyle.Font.Variant = "Sans"
+	plt.Y.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.Y.Label.TextStyle.Font.Weight = 2
+
+	plt.X.Tick.Label.Font.Typeface = "Liberation"
+	plt.X.Tick.Label.Font.Variant = "Sans"
+	plt.X.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Y.Tick.Label.Font.Typeface = "Liberation"
+	plt.Y.Tick.Label.Font.Variant = "Sans"
+	plt.Y.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Title.Text = fmt.Sprintf("Fit Result (NCC=%.4f, offset=%.3fs)", bestNCC, bestOffset)
+	plt.X.Label.Text = "Time (seconds)"
+	plt.Y.Label.Text = "Intensity"
+
+	plt.Add(plotter.NewGrid())
+
+	// Target light curve (scatter + line, blue)
+	targetPts := make(plotter.XYs, len(targetTimes))
+	for i := range targetTimes {
+		targetPts[i].X = targetTimes[i]
+		targetPts[i].Y = targetValues[i]
+	}
+
+	targetLine, err := plotter.NewLine(targetPts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create target line: %w", err)
+	}
+	targetLine.Color = color.RGBA{R: 0, G: 100, B: 200, A: 255}
+	targetLine.Width = vg.Points(1)
+	plt.Add(targetLine)
+
+	targetScatter, err := plotter.NewScatter(targetPts)
+	if err == nil {
+		targetScatter.Color = color.RGBA{R: 0, G: 100, B: 200, A: 255}
+		targetScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		targetScatter.GlyphStyle.Radius = vg.Points(2.5)
+		plt.Add(targetScatter)
+	}
+
+	// Theoretical curve shifted by bestOffset (line, red)
+	theoryPts := make(plotter.XYs, len(curve))
+	for i, pt := range curve {
+		theoryPts[i].X = pt.time + bestOffset
+		theoryPts[i].Y = pt.intensity
+	}
+
+	theoryLine, err := plotter.NewLine(theoryPts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create theoretical line: %w", err)
+	}
+	theoryLine.Color = color.RGBA{R: 220, G: 30, B: 30, A: 255}
+	theoryLine.Width = vg.Points(2)
+	plt.Add(theoryLine)
+
+	// Legend
+	plt.Legend.Add("Observed", targetLine)
+	plt.Legend.Add("Theoretical (fit)", theoryLine)
+	plt.Legend.Top = true
+	plt.Legend.Left = true
+
+	// Render to image
+	width := vg.Length(plotWidth) * vg.Inch / 96
+	height := vg.Length(plotHeight) * vg.Inch / 96
+
+	img := vgimg.New(width, height)
+	dc := draw.New(img)
+	plt.Draw(dc)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img.Image()); err != nil {
+		return nil, fmt.Errorf("failed to encode overlay PNG: %w", err)
+	}
+	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode overlay PNG: %w", err)
 	}
 
 	return goImg, nil
