@@ -48,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.75"
+const Version = "1.0.76"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3408,7 +3408,6 @@ func main() {
 
 		// Get the time values from the displayed curve within the frame range
 		var displayedTimes []float64
-		var displayedIndices []int
 		for i, frameNum := range loadedLightCurveData.FrameNumbers {
 			if frameRangeStart > 0 && frameNum < frameRangeStart {
 				continue
@@ -3417,7 +3416,6 @@ func main() {
 				continue
 			}
 			displayedTimes = append(displayedTimes, loadedLightCurveData.TimeValues[i])
-			displayedIndices = append(displayedIndices, i)
 		}
 
 		if len(displayedTimes) < 2 {
@@ -3428,7 +3426,6 @@ func main() {
 		// Get the time span of the displayed curve
 		startTime := displayedTimes[0]
 		endTime := displayedTimes[len(displayedTimes)-1]
-		timeSpan := endTime - startTime
 
 		// Convert diffraction light curve from km to time
 		// The diffraction curve spans the full fundamental plane width
@@ -3490,14 +3487,13 @@ func main() {
 			return diffCurveByTime[len(diffCurveByTime)-1].intensity
 		}
 
-		// Calculate frame rate from the displayed curve (4x oversampling)
-		baseFrameRate := float64(len(displayedTimes)-1) / timeSpan
-		if baseFrameRate <= 0 {
-			dialog.ShowError(fmt.Errorf("could not calculate frame rate from displayed curve"), w)
+		// Calculate frame rate from the exposure time in the parameters file
+		if params.ExposureTimeSecs <= 0 {
+			dialog.ShowError(fmt.Errorf("exposure time must be > 0 in the parameters file"), w)
 			return
 		}
-		frameRate := 4.0 * baseFrameRate
-		framePeriod := 1.0 / frameRate
+		framePeriod := params.ExposureTimeSecs
+		frameRate := 1.0 / framePeriod
 
 		// TODO Fix this calculation - it may be wrong - because the length of the observation path is not kmSpan
 		// Calculate the time duration of the diffraction curve
