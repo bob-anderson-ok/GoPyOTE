@@ -48,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.74"
+const Version = "1.0.75"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -276,6 +276,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 				}
 				loadedFileName = filepath.Base(lastLoadedParamsPath)
 				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+				logAction(fmt.Sprintf("Auto-loaded parameters file: %s", lastLoadedParamsPath))
 			}
 		}
 	}
@@ -403,6 +404,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 			// Persist to preferences so it autoloads next time
 			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
 			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+			logAction(fmt.Sprintf("Loaded parameters file: %s", lastLoadedParamsPath))
 		})
 	})
 
@@ -487,6 +489,8 @@ func showOccultationParametersDialog(w fyne.Window) {
 				dialog.ShowError(fmt.Errorf("failed to write file: %w", err), w)
 				return
 			}
+
+			logAction(fmt.Sprintf("Saved parameters file: %s", writer.URI().Path()))
 
 			// Close the parameters dialog after a successful save
 			customDialog.Hide()
@@ -3295,6 +3299,7 @@ func main() {
 				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
 			}
 
+			logAction(fmt.Sprintf("Running IOTAdiffraction with parameters file: %s", paramFilePath))
 			runIOTAdiffraction(paramFilePath)
 		})
 	})
@@ -3375,6 +3380,7 @@ func main() {
 			dialog.ShowError(fmt.Errorf("could not parse parameters: %v", err), w)
 			return
 		}
+		logAction(fmt.Sprintf("Loaded parameters for fitting: %s", lastLoadedParamsPath))
 
 		// Extract diffraction light curve (pass nil for app to skip window display)
 		lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
@@ -3634,6 +3640,9 @@ func main() {
 					return
 				}
 			}
+
+			logAction(fmt.Sprintf("Saved diffraction CSV: %s (%d sampled points)", writer.URI().Path(), len(csvData)))
+			logAction(fmt.Sprintf("Saved diffraction CSV: %s (%d unsampled points)", unsampledPath, len(theoreticalLightcurve)))
 
 			dialog.ShowInformation("Export Complete",
 				fmt.Sprintf("Exported %d sampled points to %s\nExported %d unsampled points to %s\nFrame rate: %.3f fps\nDuration: %.3f sec",
