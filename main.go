@@ -48,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.73"
+const Version = "1.0.74"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -494,6 +494,14 @@ func showOccultationParametersDialog(w fyne.Window) {
 		fileDialog.SetFilter(nil) // Allow all files or set a specific filter
 		if loadedFileName != "" {
 			fileDialog.SetFileName(loadedFileName)
+		}
+		// Set the starting directory to the directory of the last loaded parameters file
+		if lastLoadedParamsPath != "" {
+			folderURI := storage.NewFileURI(filepath.Dir(lastLoadedParamsPath))
+			listableURI, locErr := storage.ListerForURI(folderURI)
+			if locErr == nil {
+				fileDialog.SetLocation(listableURI)
+			}
 		}
 		fileDialog.Resize(fyne.NewSize(1200, 800))
 		fileDialog.Show()
@@ -3437,16 +3445,12 @@ func main() {
 		centerKm := (kmStart + kmEnd) / 2.0
 
 		// Build a time-indexed version of the diffraction curve for interpolation
-		type timePoint struct {
-			time      float64
-			intensity float64
-		}
-		diffCurveByTime := make([]timePoint, len(lcData))
+		diffCurveByTime := make([]timeIntensityPoint, len(lcData))
 		for i, pt := range lcData {
 			// Convert km offset from center to time offset from the center
 			kmOffsetFromCenter := pt.Distance - centerKm
 			timeOffsetFromCenter := kmOffsetFromCenter / shadowSpeedKmPerSec
-			diffCurveByTime[i] = timePoint{
+			diffCurveByTime[i] = timeIntensityPoint{
 				time:      centerTime + timeOffsetFromCenter,
 				intensity: pt.Intensity,
 			}
@@ -3527,10 +3531,7 @@ func main() {
 		}
 
 		// Save a copy of all points (unsampled) in theoreticalLightcurve with time starting at zero
-		theoreticalLightcurve := make([]struct {
-			time      float64
-			intensity float64
-		}, len(diffCurveByTime))
+		theoreticalLightcurve := make([]timeIntensityPoint, len(diffCurveByTime))
 		timeOffset := float64(0)
 		if len(diffCurveByTime) > 0 {
 			timeOffset = diffCurveByTime[0].time
@@ -3546,6 +3547,24 @@ func main() {
 				theoreticalLightcurve[len(theoreticalLightcurve)-1].time,
 				theoreticalLightcurve[len(theoreticalLightcurve)-1].intensity)
 		}
+
+		// Apply camera exposure integration (averages intensity over each exposure window)
+		theoreticalLightcurve = applyCameraExposure(theoreticalLightcurve, params.ExposureTimeSecs)
+
+		// Plot the sampled lightcurve and the unsampled theoretical lightcurve
+		sampledPoints := make([]PlotPoint, len(csvData))
+		for i, row := range csvData {
+			sampledPoints[i] = PlotPoint{X: row.time, Y: row.intensity, Index: i, Series: 0}
+		}
+		unsampledPoints := make([]PlotPoint, len(theoreticalLightcurve))
+		for i, pt := range theoreticalLightcurve {
+			unsampledPoints[i] = PlotPoint{X: pt.time, Y: pt.intensity, Index: i, Series: 1}
+		}
+		lightCurvePlot.xAxisLabel = "Time (seconds)"
+		lightCurvePlot.SetSeries([]PlotSeries{
+			{Points: sampledPoints, Color: color.RGBA{R: 0, G: 0, B: 255, A: 255}, Name: "Sampled Light Curve"},
+			{Points: unsampledPoints, Color: color.RGBA{R: 255, G: 0, B: 0, A: 255}, Name: "Theoretical Light Curve"},
+		})
 
 		// Show file save dialog
 		saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
