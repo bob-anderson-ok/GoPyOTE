@@ -62,10 +62,19 @@ func computeNCC(target, sampled []float64) float64 {
 	return num / denom
 }
 
-// performFit runs the NCC sliding fit between the theoretical diffraction light curve
-// and the observed target curve, then displays the results in a popup plot window.
-func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64) error {
-	// --- Generate a theoretical curve (same pattern as btnExtractCSV) ---
+// fitResult holds the output of a single-offset NCC fit for reuse.
+type fitResult struct {
+	curve     []timeIntensityPoint
+	edgeTimes []float64
+	nccCurve  []nccResult
+	bestNCC   float64
+	bestShift float64
+}
+
+// runSingleFit generates the theoretical curve for the given params and runs
+// the NCC sliding fit against the target data. It returns the results without
+// displaying anything.
+func runSingleFit(params *OccultationParameters, targetTimes, targetValues []float64) (*fitResult, error) {
 	lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
 		nil,
 		params.DXKmPerSec,
@@ -78,18 +87,17 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 		"",
 	)
 	if err != nil {
-		return fmt.Errorf("failed to extract diffraction light curve: %w", err)
+		return nil, fmt.Errorf("failed to extract diffraction light curve: %w", err)
 	}
 	if len(lcData) == 0 {
-		return fmt.Errorf("no diffraction light curve data extracted")
+		return nil, fmt.Errorf("no diffraction light curve data extracted")
 	}
 
 	shadowSpeed := math.Sqrt(params.DXKmPerSec*params.DXKmPerSec + params.DYKmPerSec*params.DYKmPerSec)
 	if shadowSpeed == 0 {
-		return fmt.Errorf("shadow speed is zero — check dX and dY parameters")
+		return nil, fmt.Errorf("shadow speed is zero — check dX and dY parameters")
 	}
 
-	// Convert distance to time starting at 0
 	kmStart := lcData[0].Distance
 	curve := make([]timeIntensityPoint, len(lcData))
 	for i, pt := range lcData {
@@ -99,10 +107,8 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 		}
 	}
 
-	// Apply camera exposure integration
 	curve = applyCameraExposure(curve, params.ExposureTimeSecs)
 
-	// Convert edge positions from pixels to time (relative to curve start = 0)
 	distancePerPoint := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
 	edgeTimes := make([]float64, len(edges))
 	for i, edge := range edges {
@@ -110,57 +116,62 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 		edgeTimes[i] = (edgeKm - kmStart) / shadowSpeed
 	}
 
-	// Theoretical duration
 	theoreticalDuration := curve[len(curve)-1].time
 
-	// Pre-extract sorted times for binary search in interpolateAt
 	curveTimes := make([]float64, len(curve))
 	for i, pt := range curve {
 		curveTimes[i] = pt.time
 	}
 
-	// --- Compute a frame period as median of consecutive time gaps ---
 	framePeriod := medianTimeDelta(targetTimes)
 	if framePeriod <= 0 {
-		return fmt.Errorf("could not determine frame period from target timestamps")
+		return nil, fmt.Errorf("could not determine frame period from target timestamps")
 	}
 
-	// --- Sliding NCC loop ---
-	// Shift range: slide the theoretical curve across the target observation window
-	// At shift s, the theoretical curve occupies [s, s + theoreticalDuration] in target time.
-	// Initial: theoretical last point aligns with first target frame
-	// Final: theoretical first point aligns with the last target frame
 	shiftStart := targetTimes[0] - theoreticalDuration
 	shiftEnd := targetTimes[len(targetTimes)-1]
 
 	numSteps := int((shiftEnd-shiftStart)/framePeriod) + 1
 	results := make([]nccResult, 0, numSteps)
-
 	sampled := make([]float64, len(targetTimes))
 
 	for step := 0; step < numSteps; step++ {
 		shift := shiftStart + float64(step)*framePeriod
-
-		// Sample the theoretical curve at each target frame time
 		for i, t := range targetTimes {
 			localT := t - shift
 			if localT < 0 || localT > theoreticalDuration {
-				sampled[i] = 1.0 // Outside theoretical curve = baseline
+				sampled[i] = 1.0
 			} else {
 				sampled[i] = interpolateAt(curve, curveTimes, localT)
 			}
 		}
-
 		ncc := computeNCC(targetValues, sampled)
 		results = append(results, nccResult{offset: shift, ncc: ncc})
 	}
 
 	if len(results) == 0 {
-		return fmt.Errorf("no NCC results computed")
+		return nil, fmt.Errorf("no NCC results computed")
 	}
 
-	// --- Display results ---
-	plotImg, err := createNCCPlotImage(results, 1000, 500)
+	bestIdx := 0
+	for i, r := range results {
+		if r.ncc > results[bestIdx].ncc {
+			bestIdx = i
+		}
+	}
+
+	return &fitResult{
+		curve:     curve,
+		edgeTimes: edgeTimes,
+		nccCurve:  results,
+		bestNCC:   results[bestIdx].ncc,
+		bestShift: results[bestIdx].offset,
+	}, nil
+}
+
+// displayFitResult shows the NCC plot, overlay plot, and diffraction image for a fit result.
+func displayFitResult(app fyne.App, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64) error {
+	plotImg, err := createNCCPlotImage(fr.nccCurve, 1000, 500)
 	if err != nil {
 		return fmt.Errorf("failed to create NCC plot: %w", err)
 	}
@@ -172,18 +183,9 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 	nccWindow.Resize(fyne.NewSize(1050, 550))
 	nccWindow.Show()
 
-	// Find the best fit offset
-	bestIdx := 0
-	for i, r := range results {
-		if r.ncc > results[bestIdx].ncc {
-			bestIdx = i
-		}
-	}
-	bestOffset := results[bestIdx].offset
-	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", bestOffset, results[bestIdx].ncc)
+	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", fr.bestShift, fr.bestNCC)
 
-	// --- Overlay plot: theoretical curve shifted to best-fit position + target curve ---
-	overlayImg, err := createOverlayPlotImage(curve, bestOffset, edgeTimes, targetTimes, targetValues, results[bestIdx].ncc, 1200, 500)
+	overlayImg, err := createOverlayPlotImage(fr.curve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.bestNCC, 1200, 500)
 	if err != nil {
 		return fmt.Errorf("failed to create overlay plot: %w", err)
 	}
@@ -195,7 +197,6 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 	overlayWindow.Resize(fyne.NewSize(1250, 550))
 	overlayWindow.Show()
 
-	// --- Show 8-bit diffraction image with observation path ---
 	displayImg, err := lightcurve.LoadImageFromFile("diffractionImage8bit.png")
 	if err != nil {
 		fmt.Printf("Could not load diffractionImage8bit.png: %v\n", err)
@@ -225,6 +226,177 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 	}
 
 	return nil
+}
+
+// performFit runs the NCC sliding fit between the theoretical diffraction light curve
+// and the observed target curve, then displays the results in popup windows.
+func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64) error {
+	fr, err := runSingleFit(params, targetTimes, targetValues)
+	if err != nil {
+		return err
+	}
+	return displayFitResult(app, params, fr, targetTimes, targetValues)
+}
+
+// performFitSearch runs the NCC fit for a range of path perpendicular offsets,
+// plots peak NCC vs path offset, then displays the full fit for the best offset.
+func performFitSearch(app fyne.App, _ fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int) error {
+	results := make([]searchResult, 0, numSteps)
+
+	for step := 0; step < numSteps; step++ {
+		var offset float64
+		if numSteps == 1 {
+			offset = initialOffset
+		} else {
+			offset = initialOffset + float64(step)*(finalOffset-initialOffset)/float64(numSteps-1)
+		}
+
+		// Set the path offset for this iteration
+		params.PathPerpendicularOffsetKm = offset
+
+		fr, err := runSingleFit(params, targetTimes, targetValues)
+		if err != nil {
+			fmt.Printf("Fit at path offset %.3f km failed: %v\n", offset, err)
+			continue
+		}
+
+		fmt.Printf("Path offset %.3f km: peak NCC=%.6f at time shift=%.4f sec\n", offset, fr.bestNCC, fr.bestShift)
+		results = append(results, searchResult{pathOffset: offset, peakNCC: fr.bestNCC, fr: fr})
+	}
+
+	if len(results) == 0 {
+		return fmt.Errorf("all path offset fits failed")
+	}
+
+	// Find the best path offset
+	bestIdx := 0
+	for i, r := range results {
+		if r.peakNCC > results[bestIdx].peakNCC {
+			bestIdx = i
+		}
+	}
+	bestPathOffset := results[bestIdx].pathOffset
+	fmt.Printf("Best path offset: %.3f km (peak NCC=%.6f)\n", bestPathOffset, results[bestIdx].peakNCC)
+
+	// Show NCC vs path offset plot
+	searchPlotImg, err := createPathOffsetPlotImage(results, 1000, 500)
+	if err != nil {
+		return fmt.Errorf("failed to create path offset plot: %w", err)
+	}
+
+	searchWindow := app.NewWindow("Peak NCC vs Path Offset")
+	searchCanvas := canvas.NewImageFromImage(searchPlotImg)
+	searchCanvas.FillMode = canvas.ImageFillOriginal
+	searchWindow.SetContent(container.NewScroll(searchCanvas))
+	searchWindow.Resize(fyne.NewSize(1050, 550))
+	searchWindow.Show()
+
+	// Display the full fit for the best path offset
+	params.PathPerpendicularOffsetKm = bestPathOffset
+	return displayFitResult(app, params, results[bestIdx].fr, targetTimes, targetValues)
+}
+
+// searchResult holds results for one path offset in a search.
+type searchResult struct {
+	pathOffset float64
+	peakNCC    float64
+	fr         *fitResult
+}
+
+// createPathOffsetPlotImage renders peak NCC vs path offset.
+func createPathOffsetPlotImage(results []searchResult, plotWidth, plotHeight int) (image.Image, error) {
+	plt := plot.New()
+
+	plt.Title.TextStyle.Font.Typeface = "Liberation"
+	plt.Title.TextStyle.Font.Variant = "Sans"
+	plt.Title.TextStyle.Font.Size = vg.Points(14)
+	plt.Title.TextStyle.Font.Weight = 2
+
+	plt.X.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.X.Label.TextStyle.Font.Variant = "Sans"
+	plt.X.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.X.Label.TextStyle.Font.Weight = 2
+
+	plt.Y.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.Y.Label.TextStyle.Font.Variant = "Sans"
+	plt.Y.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.Y.Label.TextStyle.Font.Weight = 2
+
+	plt.X.Tick.Label.Font.Typeface = "Liberation"
+	plt.X.Tick.Label.Font.Variant = "Sans"
+	plt.X.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Y.Tick.Label.Font.Typeface = "Liberation"
+	plt.Y.Tick.Label.Font.Variant = "Sans"
+	plt.Y.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Title.Text = "Peak NCC vs Path Perpendicular Offset"
+	plt.X.Label.Text = "Path offset (km)"
+	plt.Y.Label.Text = "Peak NCC"
+
+	plt.Add(plotter.NewGrid())
+
+	pts := make(plotter.XYs, len(results))
+	bestIdx := 0
+	for i, r := range results {
+		pts[i].X = r.pathOffset
+		pts[i].Y = r.peakNCC
+		if r.peakNCC > results[bestIdx].peakNCC {
+			bestIdx = i
+		}
+	}
+
+	line, err := plotter.NewLine(pts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create line plot: %w", err)
+	}
+	line.Color = color.RGBA{R: 0, G: 0, B: 200, A: 255}
+	line.Width = vg.Points(1.5)
+	plt.Add(line)
+
+	scatter, err := plotter.NewScatter(pts)
+	if err == nil {
+		scatter.Color = color.RGBA{R: 0, G: 0, B: 200, A: 255}
+		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		scatter.GlyphStyle.Radius = vg.Points(3)
+		plt.Add(scatter)
+	}
+
+	// Highlight the best with a red point
+	peakPt := make(plotter.XYs, 1)
+	peakPt[0].X = results[bestIdx].pathOffset
+	peakPt[0].Y = results[bestIdx].peakNCC
+	peakScatter, err := plotter.NewScatter(peakPt)
+	if err == nil {
+		peakScatter.Color = color.RGBA{R: 255, G: 0, B: 0, A: 255}
+		peakScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		peakScatter.GlyphStyle.Radius = vg.Points(6)
+		plt.Add(peakScatter)
+	}
+
+	plt.Legend.Add(fmt.Sprintf("Best: %.3f km, NCC=%.4f", results[bestIdx].pathOffset, results[bestIdx].peakNCC), line)
+	plt.Legend.Top = true
+	plt.Legend.Left = false
+
+	plt.Y.Max = 1.1
+
+	width := vg.Length(plotWidth) * vg.Inch / 96
+	height := vg.Length(plotHeight) * vg.Inch / 96
+
+	img := vgimg.New(width, height)
+	dc := draw.New(img)
+	plt.Draw(dc)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img.Image()); err != nil {
+		return nil, fmt.Errorf("failed to encode plot PNG: %w", err)
+	}
+	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode plot PNG: %w", err)
+	}
+
+	return goImg, nil
 }
 
 // medianTimeDelta returns the median of consecutive time differences.

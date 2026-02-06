@@ -590,10 +590,10 @@ func DrawObservationLineOnImage(sourceImage image.Image, path *ObservationPath) 
 	drawLine(result, path.StartX, path.StartY, path.EndX, path.EndY, color.RGBA{R: 255, A: 255})
 
 	// Draw the start dot (red)
-	drawDot(result, path.StartX, path.StartY, 5, color.RGBA{R: 255, A: 255})
+	drawDot(result, path.StartX, path.StartY, 10, color.RGBA{R: 255, A: 255})
 
 	// Draw the end dot (green)
-	drawDot(result, path.EndX, path.EndY, 5, color.RGBA{G: 255, A: 255})
+	drawDot(result, path.EndX, path.EndY, 10, color.RGBA{G: 255, A: 255})
 
 	return result, nil
 }

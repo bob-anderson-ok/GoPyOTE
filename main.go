@@ -48,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.80"
+const Version = "1.0.81"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3081,6 +3081,20 @@ func main() {
 	fitOffsetEntry.SetPlaceHolder("from parameters file")
 	fitOffsetLabel := widget.NewLabel("Path Perpendicular Offset (km)")
 
+	// Search range for observation path offset
+	searchInitialOffsetEntry := widget.NewEntry()
+	searchInitialOffsetEntry.SetPlaceHolder("")
+	searchFinalOffsetEntry := widget.NewEntry()
+	searchFinalOffsetEntry.SetPlaceHolder("")
+	searchNumStepsEntry := widget.NewEntry()
+	searchNumStepsEntry.SetPlaceHolder("")
+	searchRangeForm := widget.NewForm(
+		&widget.FormItem{Text: "Initial offset", Widget: searchInitialOffsetEntry},
+		&widget.FormItem{Text: "Final offset", Widget: searchFinalOffsetEntry},
+		&widget.FormItem{Text: "Number of steps", Widget: searchNumStepsEntry},
+	)
+	searchRangeCard := widget.NewCard("Search range for observation path offset", "", searchRangeForm)
+
 	// Fit button - checks preconditions and reports readiness
 	fitBtn := widget.NewButton("Fit", func() {
 		var issues []string
@@ -3177,8 +3191,34 @@ func main() {
 				return
 			}
 
-			if err := performFit(a, w, params, targetTimes, targetValues); err != nil {
-				dialog.ShowError(err, w)
+			// Check if search range fields are all filled in
+			searchInitial := strings.TrimSpace(searchInitialOffsetEntry.Text)
+			searchFinal := strings.TrimSpace(searchFinalOffsetEntry.Text)
+			searchSteps := strings.TrimSpace(searchNumStepsEntry.Text)
+
+			if searchInitial != "" && searchFinal != "" && searchSteps != "" {
+				initVal, err := strconv.ParseFloat(searchInitial, 64)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("invalid Initial offset: %v", err), w)
+					return
+				}
+				finalVal, err := strconv.ParseFloat(searchFinal, 64)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("invalid Final offset: %v", err), w)
+					return
+				}
+				stepsVal, err := strconv.Atoi(searchSteps)
+				if err != nil || stepsVal < 1 {
+					dialog.ShowError(fmt.Errorf("number of steps must be a positive integer"), w)
+					return
+				}
+				if err := performFitSearch(a, w, params, targetTimes, targetValues, initVal, finalVal, stepsVal); err != nil {
+					dialog.ShowError(err, w)
+				}
+			} else {
+				if err := performFit(a, w, params, targetTimes, targetValues); err != nil {
+					dialog.ShowError(err, w)
+				}
 			}
 		}
 	})
@@ -3195,6 +3235,7 @@ func main() {
 		widget.NewSeparator(),
 		fitOffsetLabel,
 		fitOffsetEntry,
+		searchRangeCard,
 		fitBtn,
 		widget.NewSeparator(),
 		fitStatusLabel,
