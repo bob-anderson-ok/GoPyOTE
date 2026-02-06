@@ -48,7 +48,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.78"
+const Version = "1.0.79"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3076,6 +3076,11 @@ func main() {
 		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (divided by %.4f) - baseline now at 1.0", scaleFactor))
 	})
 
+	// Path perpendicular offset override entry
+	fitOffsetEntry := widget.NewEntry()
+	fitOffsetEntry.SetPlaceHolder("from parameters file")
+	fitOffsetLabel := widget.NewLabel("Path Perpendicular Offset (km)")
+
 	// Fit button - checks preconditions and reports readiness
 	fitBtn := widget.NewButton("Fit", func() {
 		var issues []string
@@ -3120,6 +3125,16 @@ func main() {
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("could not parse parameters: %v", err), w)
 				return
+			}
+
+			// Override path perpendicular offset if the user entered a value
+			if offsetText := fitOffsetEntry.Text; offsetText != "" {
+				offsetVal, err := strconv.ParseFloat(strings.TrimSpace(offsetText), 64)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("invalid Path Perpendicular Offset value: %v", err), w)
+					return
+				}
+				params.PathPerpendicularOffsetKm = offsetVal
 			}
 
 			// Find the single displayed column index
@@ -3178,6 +3193,8 @@ func main() {
 		calcBaselineMeanBtn,
 		scaleToUnityBtn,
 		widget.NewSeparator(),
+		fitOffsetLabel,
+		fitOffsetEntry,
 		fitBtn,
 		widget.NewSeparator(),
 		fitStatusLabel,

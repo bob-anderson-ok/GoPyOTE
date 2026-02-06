@@ -66,7 +66,7 @@ func computeNCC(target, sampled []float64) float64 {
 // and the observed target curve, then displays the results in a popup plot window.
 func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64) error {
 	// --- Generate a theoretical curve (same pattern as btnExtractCSV) ---
-	lcData, _, err := lightcurve.ExtractAndPlotLightCurve(
+	lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
 		nil,
 		params.DXKmPerSec,
 		params.DYKmPerSec,
@@ -101,6 +101,14 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 
 	// Apply camera exposure integration
 	curve = applyCameraExposure(curve, params.ExposureTimeSecs)
+
+	// Convert edge positions from pixels to time (relative to curve start = 0)
+	distancePerPoint := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+	edgeTimes := make([]float64, len(edges))
+	for i, edge := range edges {
+		edgeKm := edge * distancePerPoint
+		edgeTimes[i] = (edgeKm - kmStart) / shadowSpeed
+	}
 
 	// Theoretical duration
 	theoreticalDuration := curve[len(curve)-1].time
@@ -175,7 +183,7 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", bestOffset, results[bestIdx].ncc)
 
 	// --- Overlay plot: theoretical curve shifted to best-fit position + target curve ---
-	overlayImg, err := createOverlayPlotImage(curve, bestOffset, targetTimes, targetValues, results[bestIdx].ncc, 1200, 500)
+	overlayImg, err := createOverlayPlotImage(curve, bestOffset, edgeTimes, targetTimes, targetValues, results[bestIdx].ncc, 1200, 500)
 	if err != nil {
 		return fmt.Errorf("failed to create overlay plot: %w", err)
 	}
@@ -278,6 +286,9 @@ func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.I
 	plt.Legend.Top = true
 	plt.Legend.Left = false
 
+	// Fixed Y maximum
+	plt.Y.Max = 1.1
+
 	// Render to image
 	width := vg.Length(plotWidth) * vg.Inch / 96
 	height := vg.Length(plotHeight) * vg.Inch / 96
@@ -299,8 +310,9 @@ func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.I
 }
 
 // createOverlayPlotImage renders the target light curve and the theoretical curve
-// (shifted by bestOffset) together in a single plot.
-func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, targetTimes, targetValues []float64, bestNCC float64, plotWidth, plotHeight int) (image.Image, error) {
+// (shifted by bestOffset) together in a single plot, with geometric shadow edges
+// shown as vertical dashed lines.
+func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes []float64, targetTimes, targetValues []float64, bestNCC float64, plotWidth, plotHeight int) (image.Image, error) {
 	plt := plot.New()
 
 	// Font styling
@@ -370,6 +382,41 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, targ
 	theoryLine.Color = color.RGBA{R: 220, G: 30, B: 30, A: 255}
 	theoryLine.Width = vg.Points(2)
 	plt.Add(theoryLine)
+
+	// Geometric shadow edges as vertical dashed lines (green)
+	// Determine Y range from the target data for line extent
+	minY, maxY := targetValues[0], targetValues[0]
+	for _, v := range targetValues {
+		if v < minY {
+			minY = v
+		}
+		if v > maxY {
+			maxY = v
+		}
+	}
+	for _, pt := range curve {
+		if pt.intensity < minY {
+			minY = pt.intensity
+		}
+		if pt.intensity > maxY {
+			maxY = pt.intensity
+		}
+	}
+	for _, et := range edgeTimes {
+		edgeX := et + bestOffset // shift to target time domain
+		vlinePts := make(plotter.XYs, 2)
+		vlinePts[0].X = edgeX
+		vlinePts[0].Y = minY
+		vlinePts[1].X = edgeX
+		vlinePts[1].Y = maxY
+		vline, err := plotter.NewLine(vlinePts)
+		if err == nil {
+			vline.Color = color.RGBA{R: 0, G: 180, B: 0, A: 255}
+			vline.Width = vg.Points(1.5)
+			vline.Dashes = []vg.Length{vg.Points(6), vg.Points(4)}
+			plt.Add(vline)
+		}
+	}
 
 	// Legend
 	plt.Legend.Add("Observed", targetLine)
