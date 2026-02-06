@@ -195,6 +195,35 @@ func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targ
 	overlayWindow.Resize(fyne.NewSize(1250, 550))
 	overlayWindow.Show()
 
+	// --- Show 8-bit diffraction image with observation path ---
+	displayImg, err := lightcurve.LoadImageFromFile("diffractionImage8bit.png")
+	if err != nil {
+		fmt.Printf("Could not load diffractionImage8bit.png: %v\n", err)
+	} else {
+		path := &lightcurve.ObservationPath{
+			DxKmPerSec:               params.DXKmPerSec,
+			DyKmPerSec:               params.DYKmPerSec,
+			PathOffsetFromCenterKm:   params.PathPerpendicularOffsetKm,
+			FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
+			FundamentalPlaneWidthPts: params.FundamentalPlaneWidthNumPoints,
+		}
+		if err := path.ComputePathFromVelocity(); err != nil {
+			fmt.Printf("Could not compute observation path: %v\n", err)
+		} else {
+			annotatedImg, err := lightcurve.DrawObservationLineOnImage(displayImg, path)
+			if err != nil {
+				fmt.Printf("Could not draw observation path: %v\n", err)
+			} else {
+				pathWindow := app.NewWindow("Observation Path on Diffraction Image")
+				pathCanvas := canvas.NewImageFromImage(annotatedImg)
+				pathCanvas.FillMode = canvas.ImageFillContain
+				pathWindow.SetContent(container.NewScroll(pathCanvas))
+				pathWindow.Resize(fyne.NewSize(600, 600))
+				pathWindow.Show()
+			}
+		}
+	}
+
 	return nil
 }
 
