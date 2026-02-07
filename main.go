@@ -49,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.82"
+const Version = "1.0.83"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3243,7 +3243,7 @@ func main() {
 				fitProgressBar.Show()
 				fitBtn.Disable()
 				go func() {
-					err := performFitSearch(a, w, params, targetTimes, targetValues, initVal, finalVal, stepsVal, func(progress float64) {
+					fsr, err := runFitSearch(params, targetTimes, targetValues, initVal, finalVal, stepsVal, func(progress float64) {
 						fyne.Do(func() {
 							fitProgressBar.SetValue(progress)
 						})
@@ -3253,6 +3253,10 @@ func main() {
 						fitBtn.Enable()
 						if err != nil {
 							dialog.ShowError(err, w)
+						} else {
+							if err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues); err != nil {
+								dialog.ShowError(err, w)
+							}
 						}
 					})
 				}()

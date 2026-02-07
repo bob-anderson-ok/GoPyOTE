@@ -239,7 +239,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 			if err != nil {
 				fmt.Printf("Could not draw observation path: %v\n", err)
 			} else {
-				pathWindow := app.NewWindow("Observation Path on Diffraction Image")
+				pathWindow := app.NewWindow(fmt.Sprintf("Observation Path on Diffraction Image (offset=%.3f km)", params.PathPerpendicularOffsetKm))
 				pathCanvas := canvas.NewImageFromImage(annotatedImg)
 				pathCanvas.FillMode = canvas.ImageFillContain
 				pathWindow.SetContent(container.NewScroll(pathCanvas))
@@ -284,9 +284,16 @@ func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targ
 	return displayFitResult(app, w, params, fr, targetTimes, targetValues)
 }
 
-// performFitSearch runs the NCC fit for a range of path perpendicular offsets,
-// plots peak NCC versus path offset, then displays the full fit for the best offset.
-func performFitSearch(app fyne.App, w fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int, onProgress func(float64)) error {
+// fitSearchResult holds the output of runFitSearch for display.
+type fitSearchResult struct {
+	results        []searchResult
+	bestIdx        int
+	bestPathOffset float64
+}
+
+// runFitSearch computes the NCC fit for a range of path perpendicular offsets.
+// It is safe to call from a goroutine. UI display is handled separately.
+func runFitSearch(params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int, onProgress func(float64)) (*fitSearchResult, error) {
 	results := make([]searchResult, 0, numSteps)
 
 	for step := 0; step < numSteps; step++ {
@@ -315,7 +322,7 @@ func performFitSearch(app fyne.App, w fyne.Window, params *OccultationParameters
 	}
 
 	if len(results) == 0 {
-		return fmt.Errorf("all path offset fits failed")
+		return nil, fmt.Errorf("all path offset fits failed")
 	}
 
 	// Find the best path offset
@@ -328,8 +335,13 @@ func performFitSearch(app fyne.App, w fyne.Window, params *OccultationParameters
 	bestPathOffset := results[bestIdx].pathOffset
 	fmt.Printf("Best path offset: %.3f km (peak NCC=%.6f)\n", bestPathOffset, results[bestIdx].peakNCC)
 
-	// Show NCC versus path offset plot
-	searchPlotImg, err := createPathOffsetPlotImage(results, 1000, 500)
+	return &fitSearchResult{results: results, bestIdx: bestIdx, bestPathOffset: bestPathOffset}, nil
+}
+
+// displayFitSearchResult shows the path offset plot and the full fit for the best offset.
+// Must be called on the main thread.
+func displayFitSearchResult(app fyne.App, w fyne.Window, params *OccultationParameters, fsr *fitSearchResult, targetTimes, targetValues []float64) error {
+	searchPlotImg, err := createPathOffsetPlotImage(fsr.results, 1000, 500)
 	if err != nil {
 		return fmt.Errorf("failed to create path offset plot: %w", err)
 	}
@@ -341,9 +353,8 @@ func performFitSearch(app fyne.App, w fyne.Window, params *OccultationParameters
 	searchWindow.Resize(fyne.NewSize(1050, 550))
 	searchWindow.Show()
 
-	// Display the full fit for the best path offset
-	params.PathPerpendicularOffsetKm = bestPathOffset
-	return displayFitResult(app, w, params, results[bestIdx].fr, targetTimes, targetValues)
+	params.PathPerpendicularOffsetKm = fsr.bestPathOffset
+	return displayFitResult(app, w, params, fsr.results[fsr.bestIdx].fr, targetTimes, targetValues)
 }
 
 // searchResult holds results for one path offset in a search.
@@ -385,6 +396,20 @@ func createPathOffsetPlotImage(results []searchResult, plotWidth, plotHeight int
 	plt.Y.Label.Text = "Peak NCC"
 
 	plt.Add(plotter.NewGrid())
+
+	// Dashed black line at y=0
+	zeroLinePts := make(plotter.XYs, 2)
+	zeroLinePts[0].X = results[0].pathOffset
+	zeroLinePts[0].Y = 0
+	zeroLinePts[1].X = results[len(results)-1].pathOffset
+	zeroLinePts[1].Y = 0
+	zeroLine, err := plotter.NewLine(zeroLinePts)
+	if err == nil {
+		zeroLine.Color = color.Black
+		zeroLine.Width = vg.Points(1)
+		zeroLine.Dashes = []vg.Length{vg.Points(6), vg.Points(4)}
+		plt.Add(zeroLine)
+	}
 
 	pts := make(plotter.XYs, len(results))
 	bestIdx := 0
@@ -501,6 +526,20 @@ func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.I
 	// Add grid
 	plt.Add(plotter.NewGrid())
 
+	// Dashed black line at y=0
+	zeroLinePts := make(plotter.XYs, 2)
+	zeroLinePts[0].X = results[0].offset
+	zeroLinePts[0].Y = 0
+	zeroLinePts[1].X = results[len(results)-1].offset
+	zeroLinePts[1].Y = 0
+	zeroLine, err := plotter.NewLine(zeroLinePts)
+	if err == nil {
+		zeroLine.Color = color.Black
+		zeroLine.Width = vg.Points(1)
+		zeroLine.Dashes = []vg.Length{vg.Points(6), vg.Points(4)}
+		plt.Add(zeroLine)
+	}
+
 	// Build XY data for unweighted NCC line
 	unweightedPts := make(plotter.XYs, len(results))
 	for i, r := range results {
@@ -611,6 +650,20 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	plt.Y.Label.Text = "Intensity"
 
 	plt.Add(plotter.NewGrid())
+
+	// Dashed black line at y=0
+	zeroLinePts := make(plotter.XYs, 2)
+	zeroLinePts[0].X = targetTimes[0]
+	zeroLinePts[0].Y = 0
+	zeroLinePts[1].X = targetTimes[len(targetTimes)-1]
+	zeroLinePts[1].Y = 0
+	zeroLine, err := plotter.NewLine(zeroLinePts)
+	if err == nil {
+		zeroLine.Color = color.Black
+		zeroLine.Width = vg.Points(1)
+		zeroLine.Dashes = []vg.Length{vg.Points(6), vg.Points(4)}
+		plt.Add(zeroLine)
+	}
 
 	// Target light curve (scatter + line, blue)
 	targetPts := make(plotter.XYs, len(targetTimes))
