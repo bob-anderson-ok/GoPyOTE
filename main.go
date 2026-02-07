@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.81"
+const Version = "1.0.82"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3095,8 +3096,17 @@ func main() {
 	)
 	searchRangeCard := widget.NewCard("Search range for observation path offset", "", searchRangeForm)
 
+	// Noise sigma entry
+	noiseSigmaEntry := widget.NewEntry()
+	noiseSigmaEntry.SetPlaceHolder("0 = no noise")
+	noiseSigmaLabel := widget.NewLabel("Noise sigma")
+
+	fitProgressBar := widget.NewProgressBar()
+	fitProgressBar.Hide()
+
 	// Fit button - checks preconditions and reports readiness
-	fitBtn := widget.NewButton("Fit", func() {
+	var fitBtn *widget.Button
+	fitBtn = widget.NewButton("Fit", func() {
 		var issues []string
 
 		// Check 1: Single curve selected
@@ -3191,6 +3201,23 @@ func main() {
 				return
 			}
 
+			// Add Gaussian noise if sigma is specified
+			if sigmaText := strings.TrimSpace(noiseSigmaEntry.Text); sigmaText != "" {
+				sigma, err := strconv.ParseFloat(sigmaText, 64)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("invalid Noise sigma value: %v", err), w)
+					return
+				}
+				if sigma > 0 {
+					noisyValues := make([]float64, len(targetValues))
+					copy(noisyValues, targetValues)
+					for i := range noisyValues {
+						noisyValues[i] += rand.NormFloat64() * sigma
+					}
+					targetValues = noisyValues
+				}
+			}
+
 			// Check if search range fields are all filled in
 			searchInitial := strings.TrimSpace(searchInitialOffsetEntry.Text)
 			searchFinal := strings.TrimSpace(searchFinalOffsetEntry.Text)
@@ -3212,9 +3239,23 @@ func main() {
 					dialog.ShowError(fmt.Errorf("number of steps must be a positive integer"), w)
 					return
 				}
-				if err := performFitSearch(a, w, params, targetTimes, targetValues, initVal, finalVal, stepsVal); err != nil {
-					dialog.ShowError(err, w)
-				}
+				fitProgressBar.SetValue(0)
+				fitProgressBar.Show()
+				fitBtn.Disable()
+				go func() {
+					err := performFitSearch(a, w, params, targetTimes, targetValues, initVal, finalVal, stepsVal, func(progress float64) {
+						fyne.Do(func() {
+							fitProgressBar.SetValue(progress)
+						})
+					})
+					fyne.Do(func() {
+						fitProgressBar.Hide()
+						fitBtn.Enable()
+						if err != nil {
+							dialog.ShowError(err, w)
+						}
+					})
+				}()
 			} else {
 				if err := performFit(a, w, params, targetTimes, targetValues); err != nil {
 					dialog.ShowError(err, w)
@@ -3236,9 +3277,12 @@ func main() {
 		fitOffsetLabel,
 		fitOffsetEntry,
 		searchRangeCard,
+		noiseSigmaLabel,
+		noiseSigmaEntry,
 		fitBtn,
 		widget.NewSeparator(),
 		fitStatusLabel,
+		fitProgressBar,
 	)))
 	tab10 := container.NewTabItem("Fit", tab10Content)
 

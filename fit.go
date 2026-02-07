@@ -14,6 +14,8 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/widget"
 
 	"gonum.org/v1/plot"
 	"gonum.org/v1/plot/plotter"
@@ -22,10 +24,12 @@ import (
 	"gonum.org/v1/plot/vg/vgimg"
 )
 
-// nccResult holds a single time-offset and its NCC score.
+// nccResult holds a single time-offset and its NCC scores.
 type nccResult struct {
-	offset float64
-	ncc    float64
+	offset       float64
+	ncc          float64
+	weightedNCC  float64
+	overlapCount int
 }
 
 // computeNCC computes the normalized cross-correlation between two equal-length slices.
@@ -137,25 +141,45 @@ func runSingleFit(params *OccultationParameters, targetTimes, targetValues []flo
 
 	for step := 0; step < numSteps; step++ {
 		shift := shiftStart + float64(step)*framePeriod
+		overlapCount := 0
 		for i, t := range targetTimes {
 			localT := t - shift
 			if localT < 0 || localT > theoreticalDuration {
 				sampled[i] = 1.0
 			} else {
 				sampled[i] = interpolateAt(curve, curveTimes, localT)
+				overlapCount++
 			}
 		}
+
 		ncc := computeNCC(targetValues, sampled)
-		results = append(results, nccResult{offset: shift, ncc: ncc})
+		results = append(results, nccResult{offset: shift, ncc: ncc, overlapCount: overlapCount})
 	}
 
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no NCC results computed")
 	}
 
+	// Find max overlap count across all shifts
+	maxOverlap := 0
+	for _, r := range results {
+		if r.overlapCount > maxOverlap {
+			maxOverlap = r.overlapCount
+		}
+	}
+
+	// Compute weighted NCC: w = sqrt(overlapCount / maxOverlap), weightedNCC = ncc * w
+	for i := range results {
+		if maxOverlap > 0 && results[i].overlapCount > 0 {
+			w := float64(results[i].overlapCount) / float64(maxOverlap)
+			results[i].weightedNCC = results[i].ncc * w
+		}
+	}
+
+	// Find the best shift by weighted NCC
 	bestIdx := 0
 	for i, r := range results {
-		if r.ncc > results[bestIdx].ncc {
+		if r.weightedNCC > results[bestIdx].weightedNCC {
 			bestIdx = i
 		}
 	}
@@ -164,13 +188,13 @@ func runSingleFit(params *OccultationParameters, targetTimes, targetValues []flo
 		curve:     curve,
 		edgeTimes: edgeTimes,
 		nccCurve:  results,
-		bestNCC:   results[bestIdx].ncc,
+		bestNCC:   results[bestIdx].weightedNCC,
 		bestShift: results[bestIdx].offset,
 	}, nil
 }
 
-// displayFitResult shows the NCC plot, overlay plot, and diffraction image for a fit result.
-func displayFitResult(app fyne.App, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64) error {
+// displayFitResult shows the NCC plot, overlay plot, diffraction image, and edge times for a fit result.
+func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64) error {
 	plotImg, err := createNCCPlotImage(fr.nccCurve, 1000, 500)
 	if err != nil {
 		return fmt.Errorf("failed to create NCC plot: %w", err)
@@ -225,22 +249,44 @@ func displayFitResult(app fyne.App, params *OccultationParameters, fr *fitResult
 		}
 	}
 
+	// Display edge times in a popup dialog
+	if len(fr.edgeTimes) > 0 {
+		msg := fmt.Sprintf("Best fit: NCC=%.4f, time offset=%.4f sec\n", fr.bestNCC, fr.bestShift)
+		msg += fmt.Sprintf("Path offset=%.3f km\n\n", params.PathPerpendicularOffsetKm)
+		msg += "Edge times (seconds):\n"
+		for i, et := range fr.edgeTimes {
+			edgeAbsTime := et + fr.bestShift
+			msg += fmt.Sprintf("  Edge %d: %.4f\n", i+1, edgeAbsTime)
+		}
+		if len(fr.edgeTimes) == 2 {
+			duration := math.Abs((fr.edgeTimes[1] + fr.bestShift) - (fr.edgeTimes[0] + fr.bestShift))
+			msg += fmt.Sprintf("\nEvent duration: %.4f sec\n", duration)
+		}
+		fmt.Print(msg)
+		edgeLabel := widget.NewLabel(msg)
+		edgeLabel.Wrapping = fyne.TextWrapWord
+		spacer := canvas.NewRectangle(color.Transparent)
+		spacer.SetMinSize(fyne.NewSize(750, 0))
+		edgeContainer := container.NewVBox(spacer, edgeLabel)
+		dialog.ShowCustom("Fit Edge Times", "OK", edgeContainer, w)
+	}
+
 	return nil
 }
 
 // performFit runs the NCC sliding fit between the theoretical diffraction light curve
 // and the observed target curve, then displays the results in popup windows.
-func performFit(app fyne.App, _ fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64) error {
+func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64) error {
 	fr, err := runSingleFit(params, targetTimes, targetValues)
 	if err != nil {
 		return err
 	}
-	return displayFitResult(app, params, fr, targetTimes, targetValues)
+	return displayFitResult(app, w, params, fr, targetTimes, targetValues)
 }
 
 // performFitSearch runs the NCC fit for a range of path perpendicular offsets,
-// plots peak NCC vs path offset, then displays the full fit for the best offset.
-func performFitSearch(app fyne.App, _ fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int) error {
+// plots peak NCC versus path offset, then displays the full fit for the best offset.
+func performFitSearch(app fyne.App, w fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int, onProgress func(float64)) error {
 	results := make([]searchResult, 0, numSteps)
 
 	for step := 0; step < numSteps; step++ {
@@ -262,6 +308,10 @@ func performFitSearch(app fyne.App, _ fyne.Window, params *OccultationParameters
 
 		fmt.Printf("Path offset %.3f km: peak NCC=%.6f at time shift=%.4f sec\n", offset, fr.bestNCC, fr.bestShift)
 		results = append(results, searchResult{pathOffset: offset, peakNCC: fr.bestNCC, fr: fr})
+
+		if onProgress != nil {
+			onProgress(float64(step+1) / float64(numSteps))
+		}
 	}
 
 	if len(results) == 0 {
@@ -278,7 +328,7 @@ func performFitSearch(app fyne.App, _ fyne.Window, params *OccultationParameters
 	bestPathOffset := results[bestIdx].pathOffset
 	fmt.Printf("Best path offset: %.3f km (peak NCC=%.6f)\n", bestPathOffset, results[bestIdx].peakNCC)
 
-	// Show NCC vs path offset plot
+	// Show NCC versus path offset plot
 	searchPlotImg, err := createPathOffsetPlotImage(results, 1000, 500)
 	if err != nil {
 		return fmt.Errorf("failed to create path offset plot: %w", err)
@@ -293,7 +343,7 @@ func performFitSearch(app fyne.App, _ fyne.Window, params *OccultationParameters
 
 	// Display the full fit for the best path offset
 	params.PathPerpendicularOffsetKm = bestPathOffset
-	return displayFitResult(app, params, results[bestIdx].fr, targetTimes, targetValues)
+	return displayFitResult(app, w, params, results[bestIdx].fr, targetTimes, targetValues)
 }
 
 // searchResult holds results for one path offset in a search.
@@ -303,7 +353,7 @@ type searchResult struct {
 	fr         *fitResult
 }
 
-// createPathOffsetPlotImage renders peak NCC vs path offset.
+// createPathOffsetPlotImage renders peak NCC versus path offset.
 func createPathOffsetPlotImage(results []searchResult, plotWidth, plotHeight int) (image.Image, error) {
 	plt := plot.New()
 
@@ -451,29 +501,44 @@ func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.I
 	// Add grid
 	plt.Add(plotter.NewGrid())
 
-	// Build XY data for line
-	pts := make(plotter.XYs, len(results))
+	// Build XY data for unweighted NCC line
+	unweightedPts := make(plotter.XYs, len(results))
+	for i, r := range results {
+		unweightedPts[i].X = r.offset
+		unweightedPts[i].Y = r.ncc
+	}
+
+	unweightedLine, err := plotter.NewLine(unweightedPts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create unweighted line plot: %w", err)
+	}
+	unweightedLine.Color = color.RGBA{R: 150, G: 150, B: 150, A: 255}
+	unweightedLine.Width = vg.Points(1)
+	plt.Add(unweightedLine)
+
+	// Build XY data for weighted NCC line
+	weightedPts := make(plotter.XYs, len(results))
 	bestIdx := 0
 	for i, r := range results {
-		pts[i].X = r.offset
-		pts[i].Y = r.ncc
-		if r.ncc > results[bestIdx].ncc {
+		weightedPts[i].X = r.offset
+		weightedPts[i].Y = r.weightedNCC
+		if r.weightedNCC > results[bestIdx].weightedNCC {
 			bestIdx = i
 		}
 	}
 
-	line, err := plotter.NewLine(pts)
+	weightedLine, err := plotter.NewLine(weightedPts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create line plot: %w", err)
+		return nil, fmt.Errorf("failed to create weighted line plot: %w", err)
 	}
-	line.Color = color.RGBA{R: 0, G: 0, B: 200, A: 255}
-	line.Width = vg.Points(1.5)
-	plt.Add(line)
+	weightedLine.Color = color.RGBA{R: 0, G: 0, B: 200, A: 255}
+	weightedLine.Width = vg.Points(1.5)
+	plt.Add(weightedLine)
 
-	// Highlight peak with red scatter point
+	// Highlight the peak of weighted NCC with a red scatter point
 	peakPt := make(plotter.XYs, 1)
 	peakPt[0].X = results[bestIdx].offset
-	peakPt[0].Y = results[bestIdx].ncc
+	peakPt[0].Y = results[bestIdx].weightedNCC
 	peakScatter, err := plotter.NewScatter(peakPt)
 	if err == nil {
 		peakScatter.Color = color.RGBA{R: 255, G: 0, B: 0, A: 255}
@@ -482,8 +547,9 @@ func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.I
 		plt.Add(peakScatter)
 	}
 
-	// Add peak annotation to legend
-	plt.Legend.Add(fmt.Sprintf("Peak: offset=%.3fs, NCC=%.4f", results[bestIdx].offset, results[bestIdx].ncc), line)
+	// Add legend entries
+	plt.Legend.Add("NCC (unweighted)", unweightedLine)
+	plt.Legend.Add(fmt.Sprintf("NCC*w peak: offset=%.3fs, val=%.4f", results[bestIdx].offset, results[bestIdx].weightedNCC), weightedLine)
 	plt.Legend.Top = true
 	plt.Legend.Left = false
 
@@ -569,7 +635,7 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 		plt.Add(targetScatter)
 	}
 
-	// Theoretical curve shifted by bestOffset (line, red)
+	// Theoretical curve shifted by the bestOffset (line, red)
 	theoryPts := make(plotter.XYs, len(curve))
 	for i, pt := range curve {
 		theoryPts[i].X = pt.time + bestOffset
@@ -585,7 +651,7 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	plt.Add(theoryLine)
 
 	// Geometric shadow edges as vertical dashed lines (green)
-	// Determine Y range from the target data for line extent
+	// Determine Y range from the target data for the line extent
 	minY, maxY := targetValues[0], targetValues[0]
 	for _, v := range targetValues {
 		if v < minY {
@@ -604,7 +670,7 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 		}
 	}
 	for _, et := range edgeTimes {
-		edgeX := et + bestOffset // shift to target time domain
+		edgeX := et + bestOffset // shift to the target time domain
 		vlinePts := make(plotter.XYs, 2)
 		vlinePts[0].X = edgeX
 		vlinePts[0].Y = minY
