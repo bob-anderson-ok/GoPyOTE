@@ -49,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.83"
+const Version = "1.0.84"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2966,15 +2966,15 @@ func main() {
 	// Status label for Fit tab
 	fitStatusLabel := widget.NewLabel("Select pairs of points to define baseline regions")
 
-	// Calculate Baseline mean button
+	// Stored baseline noise for later use
+	var extractedNoise []float64
+
+	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
 	calcBaselineMeanBtn := widget.NewButton("Calculate Baseline mean", func() {
-		// Check if we have any selected pairs
 		if len(lightCurvePlot.SelectedPairs) == 0 {
 			dialog.ShowError(fmt.Errorf("no point pairs selected - click on points to select baseline regions"), w)
 			return
 		}
-
-		// Check if we have loaded data
 		if loadedLightCurveData == nil {
 			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
 			return
@@ -2985,16 +2985,12 @@ func main() {
 		var count int
 
 		for _, pair := range lightCurvePlot.SelectedPairs {
-			// Get the data indices for this pair
 			idx1 := pair.Point1DataIdx
 			idx2 := pair.Point2DataIdx
-
-			// Ensure idx1 < idx2
 			if idx1 > idx2 {
 				idx1, idx2 = idx2, idx1
 			}
 
-			// Find the column that matches the pair's series
 			var col *LightCurveColumn
 			for i := range loadedLightCurveData.Columns {
 				if loadedLightCurveData.Columns[i].Name == pair.Point1Series {
@@ -3002,12 +2998,10 @@ func main() {
 					break
 				}
 			}
-
 			if col == nil {
-				continue // Skip if column not found
+				continue
 			}
 
-			// Sum all points in the range [idx1, idx2]
 			for i := idx1; i <= idx2 && i < len(col.Values); i++ {
 				sum += col.Values[i]
 				count++
@@ -3020,62 +3014,75 @@ func main() {
 		}
 
 		mean := sum / float64(count)
-
-		// Set the baseline value and show the line on the plot
-		lightCurvePlot.BaselineValue = mean
-		lightCurvePlot.ShowBaselineLine = true
-		lightCurvePlot.Refresh()
-
-		// Update status label
-		fitStatusLabel.SetText(fmt.Sprintf("Baseline mean: %.4f (%d points from %d pairs)", mean, count, len(lightCurvePlot.SelectedPairs)))
 		logAction(fmt.Sprintf("Fit: Calculated baseline mean = %.4f from %d points in %d pairs", mean, count, len(lightCurvePlot.SelectedPairs)))
-	})
 
-	// Scale baseline mean to unity button
-	scaleToUnityBtn := widget.NewButton("Scale baseline mean to unity", func() {
-		// Check if the baseline has been calculated
-		if !lightCurvePlot.ShowBaselineLine {
-			dialog.ShowError(fmt.Errorf("no baseline calculated - click 'Calculate Baseline mean' first"), w)
-			return
-		}
-
-		// Check for division by zero
-		if lightCurvePlot.BaselineValue == 0 {
+		if mean == 0 {
 			dialog.ShowError(fmt.Errorf("baseline mean is zero - cannot scale"), w)
 			return
 		}
 
-		// Check if we have loaded data
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
-			return
+		// Extract noise before scaling: noise = value/mean - 1.0 (equivalent to (value - mean)/mean)
+		var noise []float64
+		for _, pair := range lightCurvePlot.SelectedPairs {
+			idx1 := pair.Point1DataIdx
+			idx2 := pair.Point2DataIdx
+			if idx1 > idx2 {
+				idx1, idx2 = idx2, idx1
+			}
+
+			var col *LightCurveColumn
+			for i := range loadedLightCurveData.Columns {
+				if loadedLightCurveData.Columns[i].Name == pair.Point1Series {
+					col = &loadedLightCurveData.Columns[i]
+					break
+				}
+			}
+			if col == nil {
+				continue
+			}
+
+			for i := idx1; i <= idx2 && i < len(col.Values); i++ {
+				noise = append(noise, col.Values[i]/mean-1.0)
+			}
 		}
+		extractedNoise = noise
 
-		scaleFactor := lightCurvePlot.BaselineValue
+		// Scale all column values to unity
+		scaleFactor := mean
 		logAction(fmt.Sprintf("Fit: Scaling all light curves by 1/%.4f to set baseline mean to unity", scaleFactor))
-
-		// Scale all column values
 		for colIdx := range loadedLightCurveData.Columns {
 			for i := range loadedLightCurveData.Columns[colIdx].Values {
 				loadedLightCurveData.Columns[colIdx].Values[i] /= scaleFactor
 			}
 		}
 
-		// Update the baseline line to 1.0
 		lightCurvePlot.BaselineValue = 1.0
-
-		// Clear the selected pairs (indices may still be valid but values changed)
+		lightCurvePlot.ShowBaselineLine = true
 		lightCurvePlot.SelectedPairs = nil
 
-		// Save Y bounds and rebuild the plot
 		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
 		rebuildPlot()
-		// Scale the Y bounds as well
 		lightCurvePlot.SetYBounds(savedMinY/scaleFactor, savedMaxY/scaleFactor)
 
-		// Update status label
-		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (divided by %.4f) - baseline now at 1.0", scaleFactor))
+		// Show noise histogram if we have enough points
+		if len(noise) >= 2 {
+			histImg, noiseMean, noiseSigma, err := createNoiseHistogramImage(noise, 800, 500)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to create noise histogram: %v", err), w)
+			} else {
+				histWindow := a.NewWindow("Baseline Noise Histogram")
+				histCanvas := canvas.NewImageFromImage(histImg)
+				histCanvas.FillMode = canvas.ImageFillOriginal
+				histWindow.SetContent(container.NewScroll(histCanvas))
+				histWindow.Resize(fyne.NewSize(850, 550))
+				histWindow.Show()
+				logAction(fmt.Sprintf("Fit: Extracted baseline noise: %d points, mean=%.6f, sigma=%.6f", len(noise), noiseMean, noiseSigma))
+			}
+		}
+
+		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (baseline=%.4f, %d points) — noise: %d samples", mean, count, len(noise)))
 	})
+	_ = extractedNoise // will be used later
 
 	// Path perpendicular offset override entry
 	fitOffsetEntry := widget.NewEntry()
@@ -3276,7 +3283,6 @@ func main() {
 		widget.NewLabel("3. Click on a marked point to remove that pair"),
 		widget.NewSeparator(),
 		calcBaselineMeanBtn,
-		scaleToUnityBtn,
 		widget.NewSeparator(),
 		fitOffsetLabel,
 		fitOffsetEntry,

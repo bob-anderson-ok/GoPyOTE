@@ -763,3 +763,118 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 
 	return goImg, nil
 }
+
+// createNoiseHistogramImage renders a histogram of noise values with a Gaussian fit overlay.
+// Returns the image, mean, and sigma.
+func createNoiseHistogramImage(noise []float64, plotWidth, plotHeight int) (image.Image, float64, float64, error) {
+	n := float64(len(noise))
+	var sum float64
+	for _, v := range noise {
+		sum += v
+	}
+	mean := sum / n
+
+	var sumSq float64
+	for _, v := range noise {
+		d := v - mean
+		sumSq += d * d
+	}
+	sigma := math.Sqrt(sumSq / n)
+
+	plt := plot.New()
+
+	plt.Title.TextStyle.Font.Typeface = "Liberation"
+	plt.Title.TextStyle.Font.Variant = "Sans"
+	plt.Title.TextStyle.Font.Size = vg.Points(14)
+	plt.Title.TextStyle.Font.Weight = 2
+
+	plt.X.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.X.Label.TextStyle.Font.Variant = "Sans"
+	plt.X.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.X.Label.TextStyle.Font.Weight = 2
+
+	plt.Y.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.Y.Label.TextStyle.Font.Variant = "Sans"
+	plt.Y.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.Y.Label.TextStyle.Font.Weight = 2
+
+	plt.X.Tick.Label.Font.Typeface = "Liberation"
+	plt.X.Tick.Label.Font.Variant = "Sans"
+	plt.X.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Y.Tick.Label.Font.Typeface = "Liberation"
+	plt.Y.Tick.Label.Font.Variant = "Sans"
+	plt.Y.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Title.Text = fmt.Sprintf("Baseline Noise (mean=%.4f, sigma=%.4f, n=%d)", mean, sigma, len(noise))
+	plt.X.Label.Text = "Noise (value - baseline)"
+	plt.Y.Label.Text = "Density"
+
+	plt.Add(plotter.NewGrid())
+
+	vals := make(plotter.Values, len(noise))
+	copy(vals, noise)
+
+	numBins := int(math.Sqrt(n))
+	if numBins < 10 {
+		numBins = 10
+	}
+
+	hist, err := plotter.NewHist(vals, numBins)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to create histogram: %w", err)
+	}
+	hist.Normalize(1)
+	hist.FillColor = color.RGBA{R: 100, G: 149, B: 237, A: 180}
+	hist.Color = color.RGBA{R: 0, G: 0, B: 150, A: 255}
+	plt.Add(hist)
+
+	// Overlay Gaussian PDF curve
+	if sigma > 0 {
+		sorted := make([]float64, len(noise))
+		copy(sorted, noise)
+		sort.Float64s(sorted)
+		xMin := sorted[0]
+		xMax := sorted[len(sorted)-1]
+		margin := (xMax - xMin) * 0.1
+		xMin -= margin
+		xMax += margin
+
+		gaussPts := make(plotter.XYs, 200)
+		for i := range gaussPts {
+			x := xMin + float64(i)*(xMax-xMin)/199.0
+			z := (x - mean) / sigma
+			gaussPts[i].X = x
+			gaussPts[i].Y = math.Exp(-0.5*z*z) / (sigma * math.Sqrt(2*math.Pi))
+		}
+
+		gaussLine, err := plotter.NewLine(gaussPts)
+		if err == nil {
+			gaussLine.Color = color.RGBA{R: 220, G: 30, B: 30, A: 255}
+			gaussLine.Width = vg.Points(2)
+			plt.Add(gaussLine)
+			plt.Legend.Add(fmt.Sprintf("Gaussian (σ=%.4f)", sigma), gaussLine)
+		}
+	}
+
+	plt.Legend.Top = true
+	plt.Legend.Left = false
+
+	width := vg.Length(plotWidth) * vg.Inch / 96
+	height := vg.Length(plotHeight) * vg.Inch / 96
+
+	img := vgimg.New(width, height)
+	dc := draw.New(img)
+	plt.Draw(dc)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img.Image()); err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to encode histogram PNG: %w", err)
+	}
+	histImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to decode histogram PNG: %w", err)
+	}
+
+	return histImg, mean, sigma, nil
+}
