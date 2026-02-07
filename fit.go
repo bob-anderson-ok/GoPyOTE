@@ -216,8 +216,8 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 
 	overlayWindow := app.NewWindow("Fit Result — Theoretical vs Observed")
 	overlayCanvas := canvas.NewImageFromImage(overlayImg)
-	overlayCanvas.FillMode = canvas.ImageFillOriginal
-	overlayWindow.SetContent(container.NewScroll(overlayCanvas))
+	overlayCanvas.FillMode = canvas.ImageFillContain
+	overlayWindow.SetContent(overlayCanvas)
 	overlayWindow.Resize(fyne.NewSize(1250, 550))
 	overlayWindow.Show()
 
@@ -395,6 +395,12 @@ func createPathOffsetPlotImage(results []searchResult, plotWidth, plotHeight int
 	plt.X.Label.Text = "Path offset (km)"
 	plt.Y.Label.Text = "Peak NCC"
 
+	xRange := math.Abs(results[len(results)-1].pathOffset - results[0].pathOffset)
+	if xRange > 0 {
+		xStep := xRange / 20
+		plt.X.Tick.Marker = lightcurve.StepTicks{Step: xStep, Format: "%.2f"}
+	}
+	plt.Y.Tick.Marker = lightcurve.StepTicks{Step: 0.05, Format: "%.2f"}
 	plt.Add(plotter.NewGrid())
 
 	// Dashed black line at y=0

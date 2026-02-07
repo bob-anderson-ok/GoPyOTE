@@ -49,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.84"
+const Version = "1.0.85"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -154,16 +154,20 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 	}
 
 	// Add the "Browse..." button at the top
-	browseBtn := widget.NewButton("Browse default location...", func() {
+	browseBtn := widget.NewButton("Open last used folder", func() {
 		openAtLocation("")
 	})
-	buttons = append(buttons, browseBtn)
+	browseBtn.Importance = widget.HighImportance
+	roseBg := canvas.NewRectangle(color.RGBA{R: 255, G: 150, B: 170, A: 255})
+	browseBtnContainer := container.NewStack(roseBg, browseBtn)
+	browseBtnHalf := container.NewGridWrap(fyne.NewSize(450/2, browseBtn.MinSize().Height), browseBtnContainer)
+	buttons = append(buttons, browseBtnHalf)
 
 	// Add separator
 	buttons = append(buttons, widget.NewSeparator())
 
 	// Add label for recent folders
-	buttons = append(buttons, widget.NewLabel("Recent folders:"))
+	buttons = append(buttons, widget.NewLabel("Recent folders (click to select):"))
 
 	// Add a button for each recent folder
 	for _, folder := range folders {
@@ -1403,7 +1407,7 @@ func main() {
 
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
-		showFileOpenWithRecents(w, prefs, "Select CSV File", storage.NewExtensionFileFilter([]string{".csv"}), func(reader fyne.URIReadCloser, err error) {
+		showFileOpenWithRecents(w, prefs, "Select CSV Folder", storage.NewExtensionFileFilter([]string{".csv"}), func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -1589,7 +1593,7 @@ func main() {
 		nil,                  // right
 		lightCurveListScroll, // center
 	)))
-	tab3 := container.NewTabItem(".csv ops", tab3Content)
+	tab3 := container.NewTabItem("Csv", tab3Content)
 
 	// Tab 5: Block integration
 	tab5Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 220, B: 200, A: 255})
