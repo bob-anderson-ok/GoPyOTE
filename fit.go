@@ -341,6 +341,7 @@ type mcTrialsResult struct {
 	numEdges  int
 	edgeMeans []float64
 	edgeStds  []float64
+	edgeAll   [][]float64 // edgeAll[edgeIdx][trial] — individual edge times
 }
 
 // runMonteCarloTrials runs numTrials Monte Carlo re-noise refits and computes
@@ -410,6 +411,7 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 		numEdges:  numEdges,
 		edgeMeans: edgeMeans,
 		edgeStds:  edgeStds,
+		edgeAll:   edgeAccum,
 	}, nil
 }
 

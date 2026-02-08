@@ -49,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.86"
+const Version = "1.0.87"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3339,12 +3339,27 @@ func main() {
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
 					msg += fmt.Sprintf("\n  Duration: mean=%.4f sec, std=%.4f sec\n", durationMean, durationStd)
 				}
+				// Temporary: show individual trial edge times
+				msg += "\nIndividual trial edge times:\n"
+				numCompleted := 0
+				if result.numEdges > 0 {
+					numCompleted = len(result.edgeAll[0])
+				}
+				for t := 0; t < numCompleted; t++ {
+					msg += fmt.Sprintf("  Trial %3d:", t+1)
+					for i := 0; i < result.numEdges; i++ {
+						msg += fmt.Sprintf("  Edge %d=%.4f", i+1, result.edgeAll[i][t])
+					}
+					msg += "\n"
+				}
 				fmt.Print(msg)
-				mcLabel := widget.NewLabel(msg)
-				mcLabel.Wrapping = fyne.TextWrapWord
-				mcSpacer := canvas.NewRectangle(color.Transparent)
-				mcSpacer.SetMinSize(fyne.NewSize(750, 0))
-				mcContainer := container.NewVBox(mcSpacer, mcLabel)
+				summaryLabel := widget.NewLabel(msg[:strings.Index(msg, "\nIndividual trial edge times:")])
+				summaryLabel.Wrapping = fyne.TextWrapWord
+				trialsLabel := widget.NewLabel(msg[strings.Index(msg, "\nIndividual trial edge times:"):])
+				trialsLabel.TextStyle.Monospace = true
+				trialsScroll := container.NewScroll(trialsLabel)
+				trialsScroll.SetMinSize(fyne.NewSize(750, 300))
+				mcContainer := container.NewVBox(summaryLabel, trialsScroll)
 				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
 			})
 		}()
