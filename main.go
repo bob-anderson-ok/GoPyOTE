@@ -49,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.89"
+const Version = "1.0.90"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3097,12 +3097,93 @@ func main() {
 	fitOffsetLabel := widget.NewLabel("Path Perpendicular Offset (km)")
 
 	// Search range for observation path offset
-	searchInitialOffsetEntry := widget.NewEntry()
+	searchInitialOffsetEntry := NewFocusLossEntry()
 	searchInitialOffsetEntry.SetPlaceHolder("")
-	searchFinalOffsetEntry := widget.NewEntry()
+	searchFinalOffsetEntry := NewFocusLossEntry()
 	searchFinalOffsetEntry.SetPlaceHolder("")
 	searchNumStepsEntry := widget.NewEntry()
 	searchNumStepsEntry.SetPlaceHolder("")
+
+	// Preview window for search range paths — kept so we can update in place
+	var searchPreviewWindow fyne.Window
+
+	showSearchRangePreview := func() {
+		initText := strings.TrimSpace(searchInitialOffsetEntry.Text)
+		finalText := strings.TrimSpace(searchFinalOffsetEntry.Text)
+		if initText == "" || finalText == "" {
+			return
+		}
+		initVal, err1 := strconv.ParseFloat(initText, 64)
+		finalVal, err2 := strconv.ParseFloat(finalText, 64)
+		if err1 != nil || err2 != nil {
+			return
+		}
+		if lastLoadedParamsPath == "" {
+			return
+		}
+		go func() {
+			file, err := os.Open(lastLoadedParamsPath)
+			if err != nil {
+				return
+			}
+			params, err := parseOccultationParameters(file)
+			if closeErr := file.Close(); closeErr != nil {
+				fmt.Printf("Failed to close parameters file: %v\n", closeErr)
+			}
+			if err != nil {
+				return
+			}
+			baseImg, err := lightcurve.LoadImageFromFile("diffractionImage8bit.png")
+			if err != nil {
+				return
+			}
+			// Draw the initial offset path
+			path1 := &lightcurve.ObservationPath{
+				DxKmPerSec:               params.DXKmPerSec,
+				DyKmPerSec:               params.DYKmPerSec,
+				PathOffsetFromCenterKm:   initVal,
+				FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
+				FundamentalPlaneWidthPts: params.FundamentalPlaneWidthNumPoints,
+			}
+			if err := path1.ComputePathFromVelocity(); err != nil {
+				return
+			}
+			annotatedImg, err := lightcurve.DrawObservationLineOnImage(baseImg, path1)
+			if err != nil {
+				return
+			}
+			// Draw final offset path on same image
+			path2 := &lightcurve.ObservationPath{
+				DxKmPerSec:               params.DXKmPerSec,
+				DyKmPerSec:               params.DYKmPerSec,
+				PathOffsetFromCenterKm:   finalVal,
+				FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
+				FundamentalPlaneWidthPts: params.FundamentalPlaneWidthNumPoints,
+			}
+			if err := path2.ComputePathFromVelocity(); err != nil {
+				return
+			}
+			annotatedImg, err = lightcurve.DrawObservationLineOnImage(annotatedImg, path2)
+			if err != nil {
+				return
+			}
+			fyne.Do(func() {
+				if searchPreviewWindow != nil {
+					searchPreviewWindow.Close()
+				}
+				searchPreviewWindow = a.NewWindow(fmt.Sprintf("Search Range: %.3f to %.3f km", initVal, finalVal))
+				previewCanvas := canvas.NewImageFromImage(annotatedImg)
+				previewCanvas.FillMode = canvas.ImageFillContain
+				searchPreviewWindow.SetContent(previewCanvas)
+				searchPreviewWindow.Resize(fyne.NewSize(600, 600))
+				searchPreviewWindow.Show()
+			})
+		}()
+	}
+
+	searchInitialOffsetEntry.OnSubmitted = func(_ string) { showSearchRangePreview() }
+	searchFinalOffsetEntry.OnSubmitted = func(_ string) { showSearchRangePreview() }
+
 	searchRangeForm := widget.NewForm(
 		&widget.FormItem{Text: "Initial offset", Widget: searchInitialOffsetEntry},
 		&widget.FormItem{Text: "Final offset", Widget: searchFinalOffsetEntry},
@@ -3293,6 +3374,9 @@ func main() {
 	})
 
 	// Monte Carlo UI elements
+	mcShowTrialsCheck := widget.NewCheck("Show individual trial results", nil)
+	mcShowTrialsCheck.Checked = false
+
 	mcNumTrialsEntry := widget.NewEntry()
 	mcNumTrialsEntry.SetText("100")
 	mcNumTrialsEntry.SetPlaceHolder("number of trials")
@@ -3339,30 +3423,39 @@ func main() {
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
 					msg += fmt.Sprintf("\n  Duration: mean=%.4f sec, std=%.4f sec\n", durationMean, durationStd)
 				}
-				// Temporary: show individual trial edge times
-				msg += "\nIndividual trial edge times:\n"
-				numCompleted := 0
-				if result.numEdges > 0 {
-					numCompleted = len(result.edgeAll[0])
-				}
-				for t := 0; t < numCompleted; t++ {
-					msg += fmt.Sprintf("  Trial %3d:", t+1)
-					for i := 0; i < result.numEdges; i++ {
-						msg += fmt.Sprintf("  Edge %d=%.4f", i+1, result.edgeAll[i][t])
-					}
-					if t < len(result.pathOffsets) {
-						msg += fmt.Sprintf("  Path=%.3f km", result.pathOffsets[t])
-					}
-					msg += "\n"
-				}
 				fmt.Print(msg)
-				summaryLabel := widget.NewLabel(msg[:strings.Index(msg, "\nIndividual trial edge times:")])
+				summaryLabel := widget.NewLabel(msg)
 				summaryLabel.Wrapping = fyne.TextWrapWord
-				trialsLabel := widget.NewLabel(msg[strings.Index(msg, "\nIndividual trial edge times:"):])
-				trialsLabel.TextStyle.Monospace = true
-				trialsScroll := container.NewScroll(trialsLabel)
-				trialsScroll.SetMinSize(fyne.NewSize(750, 300))
-				mcContainer := container.NewVBox(summaryLabel, trialsScroll)
+
+				var mcContainer *fyne.Container
+				if mcShowTrialsCheck.Checked {
+					// Temporary: show individual trial edge times
+					trialsMsg := "Individual trial edge times:\n"
+					numCompleted := 0
+					if result.numEdges > 0 {
+						numCompleted = len(result.edgeAll[0])
+					}
+					for t := 0; t < numCompleted; t++ {
+						trialsMsg += fmt.Sprintf("  Trial %3d:", t+1)
+						for i := 0; i < result.numEdges; i++ {
+							trialsMsg += fmt.Sprintf("  Edge %d=%.4f", i+1, result.edgeAll[i][t])
+						}
+						if t < len(result.pathOffsets) {
+							trialsMsg += fmt.Sprintf("  Path=%.3f km", result.pathOffsets[t])
+						}
+						trialsMsg += "\n"
+					}
+					fmt.Print(trialsMsg)
+					trialsLabel := widget.NewLabel(trialsMsg)
+					trialsLabel.TextStyle.Monospace = true
+					trialsScroll := container.NewScroll(trialsLabel)
+					trialsScroll.SetMinSize(fyne.NewSize(750, 300))
+					mcContainer = container.NewVBox(summaryLabel, trialsScroll)
+				} else {
+					mcSpacer := canvas.NewRectangle(color.Transparent)
+					mcSpacer.SetMinSize(fyne.NewSize(750, 0))
+					mcContainer = container.NewVBox(mcSpacer, summaryLabel)
+				}
 				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
 			})
 		}()
@@ -3386,6 +3479,7 @@ func main() {
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
+		mcShowTrialsCheck,
 		mcBtn,
 		mcProgressBar,
 		widget.NewSeparator(),
