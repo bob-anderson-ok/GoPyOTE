@@ -49,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.87"
+const Version = "1.0.88"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3349,6 +3349,9 @@ func main() {
 					msg += fmt.Sprintf("  Trial %3d:", t+1)
 					for i := 0; i < result.numEdges; i++ {
 						msg += fmt.Sprintf("  Edge %d=%.4f", i+1, result.edgeAll[i][t])
+					}
+					if t < len(result.pathOffsets) {
+						msg += fmt.Sprintf("  Path=%.3f km", result.pathOffsets[t])
 					}
 					msg += "\n"
 				}

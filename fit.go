@@ -299,6 +299,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 type mcRefitResult struct {
 	fr          *fitResult
 	noisyValues []float64
+	pathOffset  float64
 }
 
 func runMonteCarloRefit(params *OccultationParameters, fr *fitResult, noise []float64) (*mcRefitResult, error) {
@@ -317,12 +318,31 @@ func runMonteCarloRefit(params *OccultationParameters, fr *fitResult, noise []fl
 		noisyValues[i] = v + noiseVal
 	}
 
-	// Re-run the fit using the sampled times and noisy values as the "observation"
-	mcFr, err := runSingleFit(params, fr.sampledTimes, noisyValues)
-	if err != nil {
-		return nil, err
+	// Search path offsets: 5 steps on each side of the current offset
+	centerOffset := params.PathPerpendicularOffsetKm
+	pathStep := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+	numSide := 5
+	var bestFr *fitResult
+	bestNCC := -1.0
+	bestPathOffset := centerOffset
+	for s := -numSide; s <= numSide; s++ {
+		trialParams := *params
+		trialOffset := centerOffset + float64(s)*pathStep
+		trialParams.PathPerpendicularOffsetKm = trialOffset
+		mcFr, err := runSingleFit(&trialParams, fr.sampledTimes, noisyValues)
+		if err != nil {
+			continue
+		}
+		if mcFr.bestNCC > bestNCC {
+			bestNCC = mcFr.bestNCC
+			bestFr = mcFr
+			bestPathOffset = trialOffset
+		}
 	}
-	return &mcRefitResult{fr: mcFr, noisyValues: noisyValues}, nil
+	if bestFr == nil {
+		return nil, fmt.Errorf("all path offset steps failed in Monte Carlo refit")
+	}
+	return &mcRefitResult{fr: bestFr, noisyValues: noisyValues, pathOffset: bestPathOffset}, nil
 }
 
 // performFit runs the NCC sliding fit between the theoretical diffraction light curve
@@ -337,11 +357,12 @@ func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targ
 
 // mcTrialsResult holds the accumulated edge time statistics from Monte Carlo trials.
 type mcTrialsResult struct {
-	numTrials int
-	numEdges  int
-	edgeMeans []float64
-	edgeStds  []float64
-	edgeAll   [][]float64 // edgeAll[edgeIdx][trial] — individual edge times
+	numTrials   int
+	numEdges    int
+	edgeMeans   []float64
+	edgeStds    []float64
+	edgeAll     [][]float64 // edgeAll[edgeIdx][trial] — individual edge times
+	pathOffsets []float64   // path offset for each trial
 }
 
 // runMonteCarloTrials runs numTrials Monte Carlo re-noise refits and computes
@@ -363,6 +384,7 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 	for i := range edgeAccum {
 		edgeAccum[i] = make([]float64, 0, numTrials)
 	}
+	pathOffsets := make([]float64, 0, numTrials)
 
 	for trial := 0; trial < numTrials; trial++ {
 		mcResult, err := runMonteCarloRefit(params, fr, noise)
@@ -376,6 +398,7 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 				edgeAccum[i] = append(edgeAccum[i], et+mcFr.bestShift)
 			}
 		}
+		pathOffsets = append(pathOffsets, mcResult.pathOffset)
 		if onProgress != nil {
 			onProgress(float64(trial+1) / float64(numTrials))
 		}
@@ -407,11 +430,12 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 	}
 
 	return &mcTrialsResult{
-		numTrials: numTrials,
-		numEdges:  numEdges,
-		edgeMeans: edgeMeans,
-		edgeStds:  edgeStds,
-		edgeAll:   edgeAccum,
+		numTrials:   numTrials,
+		numEdges:    numEdges,
+		edgeMeans:   edgeMeans,
+		edgeStds:    edgeStds,
+		edgeAll:     edgeAccum,
+		pathOffsets: pathOffsets,
 	}, nil
 }
 
