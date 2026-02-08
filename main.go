@@ -49,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.90"
+const Version = "1.0.91"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3402,7 +3402,24 @@ func main() {
 		mcProgressBar.Show()
 		mcBtn.Disable()
 		go func() {
-			result, err := runMonteCarloTrials(lastFitParams, lastFitResult, extractedNoise, numTrials, func(progress float64) {
+			var precomputeDialog dialog.Dialog
+			result, err := runMonteCarloTrials(lastFitParams, lastFitResult, extractedNoise, numTrials, func(done bool) {
+				fyne.Do(func() {
+					if done {
+						if precomputeDialog != nil {
+							precomputeDialog.Hide()
+							precomputeDialog = nil
+						}
+					} else {
+						precomputeDialog = dialog.NewInformation(
+							"Pre-computing candidate curves",
+							"Building theoretical light curves for each path offset candidate...\nThis may take a moment.",
+							w,
+						)
+						precomputeDialog.Show()
+					}
+				})
+			}, func(progress float64) {
 				fyne.Do(func() {
 					mcProgressBar.SetValue(progress)
 				})
@@ -3424,6 +3441,37 @@ func main() {
 					msg += fmt.Sprintf("\n  Duration: mean=%.4f sec, std=%.4f sec\n", durationMean, durationStd)
 				}
 				fmt.Print(msg)
+
+				// Log Monte Carlo results
+				logAction(fmt.Sprintf("Monte Carlo results (%d trials):", result.numTrials))
+				for i := 0; i < result.numEdges; i++ {
+					logAction(fmt.Sprintf("  Edge %d: mean=%.4f sec, std=%.4f sec", i+1, result.edgeMeans[i], result.edgeStds[i]))
+				}
+				if result.numEdges == 2 {
+					durationMean := math.Abs(result.edgeMeans[1] - result.edgeMeans[0])
+					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+					logAction(fmt.Sprintf("  Duration: mean=%.4f sec, std=%.4f sec", durationMean, durationStd))
+				}
+
+				// Final report: fit edge times (as timestamps) with MC uncertainty
+				logAction("--- Final Report ---")
+				logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", lastFitResult.bestNCC, lastFitParams.PathPerpendicularOffsetKm))
+				for i, et := range lastFitResult.edgeTimes {
+					absTime := et + lastFitResult.bestShift
+					ts := formatSecondsAsTimestamp(absTime)
+					if i < result.numEdges {
+						logAction(fmt.Sprintf("  Edge %d: %s +/- %.4f sec", i+1, ts, result.edgeStds[i]))
+					} else {
+						logAction(fmt.Sprintf("  Edge %d: %s", i+1, ts))
+					}
+				}
+				if len(lastFitResult.edgeTimes) == 2 && result.numEdges == 2 {
+					fitDuration := math.Abs((lastFitResult.edgeTimes[1] + lastFitResult.bestShift) - (lastFitResult.edgeTimes[0] + lastFitResult.bestShift))
+					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+					logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec", fitDuration, durationStd))
+				}
+				logAction("--- End Report ---")
+
 				summaryLabel := widget.NewLabel(msg)
 				summaryLabel.Wrapping = fyne.TextWrapWord
 
@@ -3439,6 +3487,9 @@ func main() {
 						trialsMsg += fmt.Sprintf("  Trial %3d:", t+1)
 						for i := 0; i < result.numEdges; i++ {
 							trialsMsg += fmt.Sprintf("  Edge %d=%.4f", i+1, result.edgeAll[i][t])
+						}
+						if result.numEdges == 2 {
+							trialsMsg += fmt.Sprintf("  Dur=%.4f", math.Abs(result.edgeAll[1][t]-result.edgeAll[0][t]))
 						}
 						if t < len(result.pathOffsets) {
 							trialsMsg += fmt.Sprintf("  Path=%.3f km", result.pathOffsets[t])
@@ -3457,6 +3508,54 @@ func main() {
 					mcContainer = container.NewVBox(mcSpacer, summaryLabel)
 				}
 				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
+
+				// Show histograms for each edge time
+				for i := 0; i < result.numEdges; i++ {
+					if len(result.edgeAll[i]) < 2 {
+						continue
+					}
+					histImg, err := createHistogramImage(
+						result.edgeAll[i],
+						fmt.Sprintf("Edge %d Times", i+1),
+						"Time (seconds)",
+						900, 500,
+					)
+					if err != nil {
+						fmt.Printf("Failed to create Edge %d histogram: %v\n", i+1, err)
+						continue
+					}
+					histWin := a.NewWindow(fmt.Sprintf("Monte Carlo — Edge %d Histogram", i+1))
+					histCanvas := canvas.NewImageFromImage(histImg)
+					histCanvas.FillMode = canvas.ImageFillContain
+					histWin.SetContent(histCanvas)
+					histWin.Resize(fyne.NewSize(950, 550))
+					histWin.Show()
+				}
+
+				// Show duration histogram if 2 edges
+				if result.numEdges == 2 && len(result.edgeAll[0]) >= 2 {
+					n := len(result.edgeAll[0])
+					durations := make([]float64, n)
+					for t := 0; t < n; t++ {
+						durations[t] = math.Abs(result.edgeAll[1][t] - result.edgeAll[0][t])
+					}
+					histImg, err := createHistogramImage(
+						durations,
+						"Event Duration",
+						"Duration (seconds)",
+						900, 500,
+					)
+					if err != nil {
+						fmt.Printf("Failed to create duration histogram: %v\n", err)
+					} else {
+						histWin := a.NewWindow("Monte Carlo — Duration Histogram")
+						histCanvas := canvas.NewImageFromImage(histImg)
+						histCanvas.FillMode = canvas.ImageFillContain
+						histWin.SetContent(histCanvas)
+						histWin.Resize(fyne.NewSize(950, 550))
+						histWin.Show()
+					}
+				}
 			})
 		}()
 	})

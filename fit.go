@@ -309,6 +309,16 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 		}
 		fmt.Print(msg)
 
+		// Log fit results
+		logAction(fmt.Sprintf("Fit result: NCC=%.4f, time offset=%.4f sec, path offset=%.3f km", fr.bestNCC, fr.bestShift, params.PathPerpendicularOffsetKm))
+		for i, et := range fr.edgeTimes {
+			logAction(fmt.Sprintf("  Edge %d: %.4f sec", i+1, et+fr.bestShift))
+		}
+		if len(fr.edgeTimes) == 2 {
+			duration := math.Abs((fr.edgeTimes[1] + fr.bestShift) - (fr.edgeTimes[0] + fr.bestShift))
+			logAction(fmt.Sprintf("  Event duration: %.4f sec", duration))
+		}
+
 		edgeLabel := widget.NewLabel(msg)
 		edgeLabel.Wrapping = fyne.TextWrapWord
 		spacer := canvas.NewRectangle(color.Transparent)
@@ -392,7 +402,7 @@ type mcTrialsResult struct {
 
 // runMonteCarloTrials runs numTrials Monte Carlo re-noise refits and computes
 // the mean and standard deviation of the edge times. Safe to call from a goroutine.
-func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []float64, numTrials int, onProgress func(float64)) (*mcTrialsResult, error) {
+func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []float64, numTrials int, onPrecompute func(done bool), onProgress func(float64)) (*mcTrialsResult, error) {
 	if len(fr.sampledTimes) == 0 || len(fr.sampledVals) == 0 {
 		return nil, fmt.Errorf("no sampled theoretical curve available — run a fit first")
 	}
@@ -404,10 +414,14 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 	}
 
 	// Pre-compute theoretical curves for each path offset candidate
+	if onPrecompute != nil {
+		onPrecompute(false)
+	}
 	centerOffset := params.PathPerpendicularOffsetKm
 	pathStep := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
-	numSide := 5
+	numSide := 25
 	var candidates []*precomputedCurve
+	noEdgeCount := 0
 	for s := -numSide; s <= numSide; s++ {
 		trialParams := *params
 		trialParams.PathPerpendicularOffsetKm = centerOffset + float64(s)*pathStep
@@ -416,12 +430,20 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 			fmt.Printf("Pre-compute path offset %.3f km failed: %v\n", trialParams.PathPerpendicularOffsetKm, err)
 			continue
 		}
+		if len(pc.edgeTimes) != 2 {
+			fmt.Printf("  Path offset %.3f km rejected: %d edges (need exactly 2)\n", trialParams.PathPerpendicularOffsetKm, len(pc.edgeTimes))
+			noEdgeCount++
+			continue
+		}
 		candidates = append(candidates, pc)
 	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("failed to pre-compute any candidate curves")
+	if onPrecompute != nil {
+		onPrecompute(true)
 	}
-	fmt.Printf("Pre-computed %d candidate curves for Monte Carlo path offset search\n", len(candidates))
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("failed to pre-compute any candidate curves with exactly 2 edges")
+	}
+	fmt.Printf("Pre-computed %d candidate curves for Monte Carlo path offset search (%d rejected: not exactly 2 edges)\n", len(candidates), noEdgeCount)
 
 	numEdges := len(fr.edgeTimes)
 	// edgeAccum[edgeIdx][trial] = absolute edge time for that trial
@@ -986,6 +1008,124 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	}
 
 	return goImg, nil
+}
+
+// createHistogramImage renders a histogram of values with a Gaussian curve fit overlay.
+func createHistogramImage(values []float64, title, xLabel string, plotWidth, plotHeight int) (image.Image, error) {
+	n := float64(len(values))
+	if n < 2 {
+		return nil, fmt.Errorf("need at least 2 values for histogram")
+	}
+
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	mean := sum / n
+
+	var sumSq float64
+	for _, v := range values {
+		d := v - mean
+		sumSq += d * d
+	}
+	sigma := math.Sqrt(sumSq / (n - 1))
+
+	plt := plot.New()
+
+	plt.Title.TextStyle.Font.Typeface = "Liberation"
+	plt.Title.TextStyle.Font.Variant = "Sans"
+	plt.Title.TextStyle.Font.Size = vg.Points(14)
+	plt.Title.TextStyle.Font.Weight = 2
+
+	plt.X.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.X.Label.TextStyle.Font.Variant = "Sans"
+	plt.X.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.X.Label.TextStyle.Font.Weight = 2
+
+	plt.Y.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.Y.Label.TextStyle.Font.Variant = "Sans"
+	plt.Y.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.Y.Label.TextStyle.Font.Weight = 2
+
+	plt.X.Tick.Label.Font.Typeface = "Liberation"
+	plt.X.Tick.Label.Font.Variant = "Sans"
+	plt.X.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Y.Tick.Label.Font.Typeface = "Liberation"
+	plt.Y.Tick.Label.Font.Variant = "Sans"
+	plt.Y.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Title.Text = fmt.Sprintf("%s (mean=%.4f, std=%.4f, n=%d)", title, mean, sigma, len(values))
+	plt.X.Label.Text = xLabel
+	plt.Y.Label.Text = "Density"
+
+	plt.Add(plotter.NewGrid())
+
+	vals := make(plotter.Values, len(values))
+	copy(vals, values)
+
+	numBins := int(math.Sqrt(n))
+	if numBins < 10 {
+		numBins = 10
+	}
+
+	hist, err := plotter.NewHist(vals, numBins)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create histogram: %w", err)
+	}
+	hist.Normalize(1)
+	hist.FillColor = color.RGBA{R: 100, G: 149, B: 237, A: 180}
+	hist.Color = color.RGBA{R: 0, G: 0, B: 150, A: 255}
+	plt.Add(hist)
+
+	// Overlay Gaussian PDF curve
+	if sigma > 0 {
+		sorted := make([]float64, len(values))
+		copy(sorted, values)
+		sort.Float64s(sorted)
+		xMin := sorted[0]
+		xMax := sorted[len(sorted)-1]
+		margin := (xMax - xMin) * 0.1
+		xMin -= margin
+		xMax += margin
+
+		gaussPts := make(plotter.XYs, 200)
+		for i := range gaussPts {
+			x := xMin + float64(i)*(xMax-xMin)/199.0
+			z := (x - mean) / sigma
+			gaussPts[i].X = x
+			gaussPts[i].Y = math.Exp(-0.5*z*z) / (sigma * math.Sqrt(2*math.Pi))
+		}
+
+		gaussLine, err := plotter.NewLine(gaussPts)
+		if err == nil {
+			gaussLine.Color = color.RGBA{R: 220, G: 30, B: 30, A: 255}
+			gaussLine.Width = vg.Points(2)
+			plt.Add(gaussLine)
+			plt.Legend.Add(fmt.Sprintf("Gaussian (σ=%.4f)", sigma), gaussLine)
+		}
+	}
+
+	plt.Legend.Top = true
+	plt.Legend.Left = false
+
+	width := vg.Length(plotWidth) * vg.Inch / 96
+	height := vg.Length(plotHeight) * vg.Inch / 96
+
+	img := vgimg.New(width, height)
+	dc := draw.New(img)
+	plt.Draw(dc)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img.Image()); err != nil {
+		return nil, fmt.Errorf("failed to encode histogram PNG: %w", err)
+	}
+	histImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode histogram PNG: %w", err)
+	}
+
+	return histImg, nil
 }
 
 // createNoiseHistogramImage renders a histogram of noise values with a Gaussian fit overlay.
