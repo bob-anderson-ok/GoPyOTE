@@ -78,10 +78,18 @@ type fitResult struct {
 	sampledVals  []float64
 }
 
-// runSingleFit generates the theoretical curve for the given params and runs
-// the NCC sliding fit against the target data. It returns the results without
-// displaying anything.
-func runSingleFit(params *OccultationParameters, targetTimes, targetValues []float64) (*fitResult, error) {
+// precomputedCurve holds a theoretical light curve and edge times for a specific path offset,
+// ready for NCC sliding fit without regenerating from the diffraction model.
+type precomputedCurve struct {
+	pathOffset float64
+	curve      []timeIntensityPoint
+	curveTimes []float64
+	edgeTimes  []float64
+	duration   float64
+}
+
+// buildPrecomputedCurve generates the theoretical light curve for the given params.
+func buildPrecomputedCurve(params *OccultationParameters) (*precomputedCurve, error) {
 	lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
 		nil,
 		params.DXKmPerSec,
@@ -123,19 +131,28 @@ func runSingleFit(params *OccultationParameters, targetTimes, targetValues []flo
 		edgeTimes[i] = (edgeKm - kmStart) / shadowSpeed
 	}
 
-	theoreticalDuration := curve[len(curve)-1].time
-
 	curveTimes := make([]float64, len(curve))
 	for i, pt := range curve {
 		curveTimes[i] = pt.time
 	}
 
+	return &precomputedCurve{
+		pathOffset: params.PathPerpendicularOffsetKm,
+		curve:      curve,
+		curveTimes: curveTimes,
+		edgeTimes:  edgeTimes,
+		duration:   curve[len(curve)-1].time,
+	}, nil
+}
+
+// nccSlidingFit runs the NCC sliding fit of a precomputed curve against target data.
+func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*fitResult, error) {
 	framePeriod := medianTimeDelta(targetTimes)
 	if framePeriod <= 0 {
 		return nil, fmt.Errorf("could not determine frame period from target timestamps")
 	}
 
-	shiftStart := targetTimes[0] - theoreticalDuration
+	shiftStart := targetTimes[0] - pc.duration
 	shiftEnd := targetTimes[len(targetTimes)-1]
 
 	numSteps := int((shiftEnd-shiftStart)/framePeriod) + 1
@@ -147,10 +164,10 @@ func runSingleFit(params *OccultationParameters, targetTimes, targetValues []flo
 		overlapCount := 0
 		for i, t := range targetTimes {
 			localT := t - shift
-			if localT < 0 || localT > theoreticalDuration {
+			if localT < 0 || localT > pc.duration {
 				sampled[i] = 1.0
 			} else {
-				sampled[i] = interpolateAt(curve, curveTimes, localT)
+				sampled[i] = interpolateAt(pc.curve, pc.curveTimes, localT)
 				overlapCount++
 			}
 		}
@@ -171,7 +188,7 @@ func runSingleFit(params *OccultationParameters, targetTimes, targetValues []flo
 		}
 	}
 
-	// Compute weighted NCC: w = sqrt(overlapCount / maxOverlap), weightedNCC = ncc * w
+	// Compute weighted NCC: w = overlapCount / maxOverlap, weightedNCC = ncc * w
 	for i := range results {
 		if maxOverlap > 0 && results[i].overlapCount > 0 {
 			w := float64(results[i].overlapCount) / float64(maxOverlap)
@@ -192,22 +209,33 @@ func runSingleFit(params *OccultationParameters, targetTimes, targetValues []flo
 	sampledVals := make([]float64, len(targetTimes))
 	for i, t := range targetTimes {
 		localT := t - bestShift
-		if localT < 0 || localT > theoreticalDuration {
+		if localT < 0 || localT > pc.duration {
 			sampledVals[i] = 1.0
 		} else {
-			sampledVals[i] = interpolateAt(curve, curveTimes, localT)
+			sampledVals[i] = interpolateAt(pc.curve, pc.curveTimes, localT)
 		}
 	}
 
 	return &fitResult{
-		curve:        curve,
-		edgeTimes:    edgeTimes,
+		curve:        pc.curve,
+		edgeTimes:    pc.edgeTimes,
 		nccCurve:     results,
 		bestNCC:      results[bestIdx].weightedNCC,
 		bestShift:    bestShift,
 		sampledTimes: append([]float64{}, targetTimes...),
 		sampledVals:  sampledVals,
 	}, nil
+}
+
+// runSingleFit generates the theoretical curve for the given params and runs
+// the NCC sliding fit against the target data. It returns the results without
+// displaying anything.
+func runSingleFit(params *OccultationParameters, targetTimes, targetValues []float64) (*fitResult, error) {
+	pc, err := buildPrecomputedCurve(params)
+	if err != nil {
+		return nil, err
+	}
+	return nccSlidingFit(pc, targetTimes, targetValues)
 }
 
 // displayFitResult shows the NCC plot, overlay plot, diffraction image, and edge times for a fit result.
@@ -302,12 +330,15 @@ type mcRefitResult struct {
 	pathOffset  float64
 }
 
-func runMonteCarloRefit(params *OccultationParameters, fr *fitResult, noise []float64) (*mcRefitResult, error) {
+func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noise []float64) (*mcRefitResult, error) {
 	if len(fr.sampledTimes) == 0 || len(fr.sampledVals) == 0 {
 		return nil, fmt.Errorf("no sampled theoretical curve available for Monte Carlo")
 	}
 	if len(noise) == 0 {
 		return nil, fmt.Errorf("no baseline noise data available — run Estimate Baseline first")
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no precomputed candidate curves available")
 	}
 
 	// Create a noisy version of the sampled theoretical curve
@@ -318,29 +349,23 @@ func runMonteCarloRefit(params *OccultationParameters, fr *fitResult, noise []fl
 		noisyValues[i] = v + noiseVal
 	}
 
-	// Search path offsets: 5 steps on each side of the current offset
-	centerOffset := params.PathPerpendicularOffsetKm
-	pathStep := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
-	numSide := 5
+	// Search across precomputed path offset candidates
 	var bestFr *fitResult
 	bestNCC := -1.0
-	bestPathOffset := centerOffset
-	for s := -numSide; s <= numSide; s++ {
-		trialParams := *params
-		trialOffset := centerOffset + float64(s)*pathStep
-		trialParams.PathPerpendicularOffsetKm = trialOffset
-		mcFr, err := runSingleFit(&trialParams, fr.sampledTimes, noisyValues)
+	bestPathOffset := candidates[0].pathOffset
+	for _, pc := range candidates {
+		mcFr, err := nccSlidingFit(pc, fr.sampledTimes, noisyValues)
 		if err != nil {
 			continue
 		}
 		if mcFr.bestNCC > bestNCC {
 			bestNCC = mcFr.bestNCC
 			bestFr = mcFr
-			bestPathOffset = trialOffset
+			bestPathOffset = pc.pathOffset
 		}
 	}
 	if bestFr == nil {
-		return nil, fmt.Errorf("all path offset steps failed in Monte Carlo refit")
+		return nil, fmt.Errorf("all path offset candidates failed in Monte Carlo refit")
 	}
 	return &mcRefitResult{fr: bestFr, noisyValues: noisyValues, pathOffset: bestPathOffset}, nil
 }
@@ -378,6 +403,26 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 		return nil, fmt.Errorf("no edge times in fit result")
 	}
 
+	// Pre-compute theoretical curves for each path offset candidate
+	centerOffset := params.PathPerpendicularOffsetKm
+	pathStep := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+	numSide := 5
+	var candidates []*precomputedCurve
+	for s := -numSide; s <= numSide; s++ {
+		trialParams := *params
+		trialParams.PathPerpendicularOffsetKm = centerOffset + float64(s)*pathStep
+		pc, err := buildPrecomputedCurve(&trialParams)
+		if err != nil {
+			fmt.Printf("Pre-compute path offset %.3f km failed: %v\n", trialParams.PathPerpendicularOffsetKm, err)
+			continue
+		}
+		candidates = append(candidates, pc)
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("failed to pre-compute any candidate curves")
+	}
+	fmt.Printf("Pre-computed %d candidate curves for Monte Carlo path offset search\n", len(candidates))
+
 	numEdges := len(fr.edgeTimes)
 	// edgeAccum[edgeIdx][trial] = absolute edge time for that trial
 	edgeAccum := make([][]float64, numEdges)
@@ -387,7 +432,7 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 	pathOffsets := make([]float64, 0, numTrials)
 
 	for trial := 0; trial < numTrials; trial++ {
-		mcResult, err := runMonteCarloRefit(params, fr, noise)
+		mcResult, err := runMonteCarloRefit(candidates, fr, noise)
 		if err != nil {
 			fmt.Printf("Monte Carlo trial %d failed: %v\n", trial+1, err)
 			continue

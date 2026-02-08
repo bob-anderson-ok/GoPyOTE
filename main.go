@@ -49,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.88"
+const Version = "1.0.89"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
