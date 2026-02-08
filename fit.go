@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"math"
+	"math/rand/v2"
 	"sort"
 
 	"GoPyOTE/lightcurve"
@@ -68,11 +69,13 @@ func computeNCC(target, sampled []float64) float64 {
 
 // fitResult holds the output of a single-offset NCC fit for reuse.
 type fitResult struct {
-	curve     []timeIntensityPoint
-	edgeTimes []float64
-	nccCurve  []nccResult
-	bestNCC   float64
-	bestShift float64
+	curve        []timeIntensityPoint
+	edgeTimes    []float64
+	nccCurve     []nccResult
+	bestNCC      float64
+	bestShift    float64
+	sampledTimes []float64
+	sampledVals  []float64
 }
 
 // runSingleFit generates the theoretical curve for the given params and runs
@@ -184,12 +187,26 @@ func runSingleFit(params *OccultationParameters, targetTimes, targetValues []flo
 		}
 	}
 
+	// Recompute the sampled theoretical values at the best shift
+	bestShift := results[bestIdx].offset
+	sampledVals := make([]float64, len(targetTimes))
+	for i, t := range targetTimes {
+		localT := t - bestShift
+		if localT < 0 || localT > theoreticalDuration {
+			sampledVals[i] = 1.0
+		} else {
+			sampledVals[i] = interpolateAt(curve, curveTimes, localT)
+		}
+	}
+
 	return &fitResult{
-		curve:     curve,
-		edgeTimes: edgeTimes,
-		nccCurve:  results,
-		bestNCC:   results[bestIdx].weightedNCC,
-		bestShift: results[bestIdx].offset,
+		curve:        curve,
+		edgeTimes:    edgeTimes,
+		nccCurve:     results,
+		bestNCC:      results[bestIdx].weightedNCC,
+		bestShift:    bestShift,
+		sampledTimes: append([]float64{}, targetTimes...),
+		sampledVals:  sampledVals,
 	}, nil
 }
 
@@ -209,7 +226,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 
 	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", fr.bestShift, fr.bestNCC)
 
-	overlayImg, err := createOverlayPlotImage(fr.curve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.bestNCC, 1200, 500)
+	overlayImg, err := createOverlayPlotImage(fr.curve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, fr.sampledVals, fr.bestNCC, 1200, 500)
 	if err != nil {
 		return fmt.Errorf("failed to create overlay plot: %w", err)
 	}
@@ -263,6 +280,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 			msg += fmt.Sprintf("\nEvent duration: %.4f sec\n", duration)
 		}
 		fmt.Print(msg)
+
 		edgeLabel := widget.NewLabel(msg)
 		edgeLabel.Wrapping = fyne.TextWrapWord
 		spacer := canvas.NewRectangle(color.Transparent)
@@ -274,14 +292,125 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 	return nil
 }
 
+// runMonteCarloRefit takes the sampled theoretical curve from the best fit,
+// adds noise by sampling with replacement from extractedNoise, and re-runs
+// the fit to get new edge times.
+// mcRefitResult holds the Monte Carlo refit output along with the noisy observation used.
+type mcRefitResult struct {
+	fr          *fitResult
+	noisyValues []float64
+}
+
+func runMonteCarloRefit(params *OccultationParameters, fr *fitResult, noise []float64) (*mcRefitResult, error) {
+	if len(fr.sampledTimes) == 0 || len(fr.sampledVals) == 0 {
+		return nil, fmt.Errorf("no sampled theoretical curve available for Monte Carlo")
+	}
+	if len(noise) == 0 {
+		return nil, fmt.Errorf("no baseline noise data available — run Estimate Baseline first")
+	}
+
+	// Create a noisy version of the sampled theoretical curve
+	noisyValues := make([]float64, len(fr.sampledVals))
+	for i, v := range fr.sampledVals {
+		// Sample noise with replacement
+		noiseVal := noise[rand.IntN(len(noise))]
+		noisyValues[i] = v + noiseVal
+	}
+
+	// Re-run the fit using the sampled times and noisy values as the "observation"
+	mcFr, err := runSingleFit(params, fr.sampledTimes, noisyValues)
+	if err != nil {
+		return nil, err
+	}
+	return &mcRefitResult{fr: mcFr, noisyValues: noisyValues}, nil
+}
+
 // performFit runs the NCC sliding fit between the theoretical diffraction light curve
 // and the observed target curve, then displays the results in popup windows.
-func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64) error {
+func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64) (*fitResult, error) {
 	fr, err := runSingleFit(params, targetTimes, targetValues)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return displayFitResult(app, w, params, fr, targetTimes, targetValues)
+	return fr, displayFitResult(app, w, params, fr, targetTimes, targetValues)
+}
+
+// mcTrialsResult holds the accumulated edge time statistics from Monte Carlo trials.
+type mcTrialsResult struct {
+	numTrials int
+	numEdges  int
+	edgeMeans []float64
+	edgeStds  []float64
+}
+
+// runMonteCarloTrials runs numTrials Monte Carlo re-noise refits and computes
+// the mean and standard deviation of the edge times. Safe to call from a goroutine.
+func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []float64, numTrials int, onProgress func(float64)) (*mcTrialsResult, error) {
+	if len(fr.sampledTimes) == 0 || len(fr.sampledVals) == 0 {
+		return nil, fmt.Errorf("no sampled theoretical curve available — run a fit first")
+	}
+	if len(noise) == 0 {
+		return nil, fmt.Errorf("no baseline noise data — run Estimate Baseline first")
+	}
+	if len(fr.edgeTimes) == 0 {
+		return nil, fmt.Errorf("no edge times in fit result")
+	}
+
+	numEdges := len(fr.edgeTimes)
+	// edgeAccum[edgeIdx][trial] = absolute edge time for that trial
+	edgeAccum := make([][]float64, numEdges)
+	for i := range edgeAccum {
+		edgeAccum[i] = make([]float64, 0, numTrials)
+	}
+
+	for trial := 0; trial < numTrials; trial++ {
+		mcResult, err := runMonteCarloRefit(params, fr, noise)
+		if err != nil {
+			fmt.Printf("Monte Carlo trial %d failed: %v\n", trial+1, err)
+			continue
+		}
+		mcFr := mcResult.fr
+		for i, et := range mcFr.edgeTimes {
+			if i < numEdges {
+				edgeAccum[i] = append(edgeAccum[i], et+mcFr.bestShift)
+			}
+		}
+		if onProgress != nil {
+			onProgress(float64(trial+1) / float64(numTrials))
+		}
+	}
+
+	// Compute mean and std for each edge
+	edgeMeans := make([]float64, numEdges)
+	edgeStds := make([]float64, numEdges)
+	for i := 0; i < numEdges; i++ {
+		n := len(edgeAccum[i])
+		if n == 0 {
+			continue
+		}
+		var sum float64
+		for _, v := range edgeAccum[i] {
+			sum += v
+		}
+		mean := sum / float64(n)
+		edgeMeans[i] = mean
+
+		if n > 1 {
+			var sumSq float64
+			for _, v := range edgeAccum[i] {
+				d := v - mean
+				sumSq += d * d
+			}
+			edgeStds[i] = math.Sqrt(sumSq / float64(n-1))
+		}
+	}
+
+	return &mcTrialsResult{
+		numTrials: numTrials,
+		numEdges:  numEdges,
+		edgeMeans: edgeMeans,
+		edgeStds:  edgeStds,
+	}, nil
 }
 
 // fitSearchResult holds the output of runFitSearch for display.
@@ -340,10 +469,10 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 
 // displayFitSearchResult shows the path offset plot and the full fit for the best offset.
 // Must be called on the main thread.
-func displayFitSearchResult(app fyne.App, w fyne.Window, params *OccultationParameters, fsr *fitSearchResult, targetTimes, targetValues []float64) error {
+func displayFitSearchResult(app fyne.App, w fyne.Window, params *OccultationParameters, fsr *fitSearchResult, targetTimes, targetValues []float64) (*fitResult, error) {
 	searchPlotImg, err := createPathOffsetPlotImage(fsr.results, 1000, 500)
 	if err != nil {
-		return fmt.Errorf("failed to create path offset plot: %w", err)
+		return nil, fmt.Errorf("failed to create path offset plot: %w", err)
 	}
 
 	searchWindow := app.NewWindow("Peak NCC vs Path Offset")
@@ -354,7 +483,9 @@ func displayFitSearchResult(app fyne.App, w fyne.Window, params *OccultationPara
 	searchWindow.Show()
 
 	params.PathPerpendicularOffsetKm = fsr.bestPathOffset
-	return displayFitResult(app, w, params, fsr.results[fsr.bestIdx].fr, targetTimes, targetValues)
+	bestFr := fsr.results[fsr.bestIdx].fr
+	err = displayFitResult(app, w, params, bestFr, targetTimes, targetValues)
+	return bestFr, err
 }
 
 // searchResult holds results for one path offset in a search.
@@ -624,7 +755,7 @@ func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.I
 // createOverlayPlotImage renders the target light curve and the theoretical curve
 // (shifted by bestOffset) together in a single plot, with geometric shadow edges
 // shown as vertical dashed lines.
-func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes []float64, targetTimes, targetValues []float64, bestNCC float64, plotWidth, plotHeight int) (image.Image, error) {
+func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes []float64, targetTimes, targetValues, sampledTimes, sampledVals []float64, bestNCC float64, plotWidth, plotHeight int) (image.Image, error) {
 	plt := plot.New()
 
 	// Font styling
@@ -705,9 +836,25 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	if err != nil {
 		return nil, fmt.Errorf("failed to create theoretical line: %w", err)
 	}
-	theoryLine.Color = color.RGBA{R: 220, G: 30, B: 30, A: 255}
+	theoryLine.Color = color.RGBA{R: 255, G: 170, B: 170, A: 255}
 	theoryLine.Width = vg.Points(2)
 	plt.Add(theoryLine)
+
+	// Sampled theoretical points as red dots
+	if len(sampledTimes) > 0 && len(sampledTimes) == len(sampledVals) {
+		sampledPts := make(plotter.XYs, len(sampledTimes))
+		for i := range sampledTimes {
+			sampledPts[i].X = sampledTimes[i]
+			sampledPts[i].Y = sampledVals[i]
+		}
+		sampledScatter, err := plotter.NewScatter(sampledPts)
+		if err == nil {
+			sampledScatter.Color = color.RGBA{R: 220, G: 30, B: 30, A: 255}
+			sampledScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+			sampledScatter.GlyphStyle.Radius = vg.Points(3)
+			plt.Add(sampledScatter)
+		}
+	}
 
 	// Geometric shadow edges as vertical dashed lines (green)
 	// Determine Y range from the target data for the line extent

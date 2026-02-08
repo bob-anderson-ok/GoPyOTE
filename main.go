@@ -49,7 +49,7 @@ var vizierExportMarkdown embed.FS
 var singlePointAnalysisMarkdown embed.FS
 
 // Version information
-const Version = "1.0.85"
+const Version = "1.0.86"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2973,6 +2973,10 @@ func main() {
 	// Stored baseline noise for later use
 	var extractedNoise []float64
 
+	// Stored last fit result and params for Monte Carlo
+	var lastFitResult *fitResult
+	var lastFitParams *OccultationParameters
+
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
 	calcBaselineMeanBtn := widget.NewButton("Calculate Baseline mean", func() {
 		if len(lightCurvePlot.SelectedPairs) == 0 {
@@ -3086,7 +3090,6 @@ func main() {
 
 		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (baseline=%.4f, %d points) — noise: %d samples", mean, count, len(noise)))
 	})
-	_ = extractedNoise // will be used later
 
 	// Path perpendicular offset override entry
 	fitOffsetEntry := widget.NewEntry()
@@ -3265,18 +3268,86 @@ func main() {
 						if err != nil {
 							dialog.ShowError(err, w)
 						} else {
-							if err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues); err != nil {
+							fr, err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues)
+							if err != nil {
 								dialog.ShowError(err, w)
+							} else {
+								lastFitResult = fr
+								paramsCopy := *params
+								lastFitParams = &paramsCopy
 							}
 						}
 					})
 				}()
 			} else {
-				if err := performFit(a, w, params, targetTimes, targetValues); err != nil {
+				fr, err := performFit(a, w, params, targetTimes, targetValues)
+				if err != nil {
 					dialog.ShowError(err, w)
+				} else {
+					lastFitResult = fr
+					paramsCopy := *params
+					lastFitParams = &paramsCopy
 				}
 			}
 		}
+	})
+
+	// Monte Carlo UI elements
+	mcNumTrialsEntry := widget.NewEntry()
+	mcNumTrialsEntry.SetText("100")
+	mcNumTrialsEntry.SetPlaceHolder("number of trials")
+	mcProgressBar := widget.NewProgressBar()
+	mcProgressBar.Hide()
+
+	var mcBtn *widget.Button
+	mcBtn = widget.NewButton("Run Monte Carlo", func() {
+		if lastFitResult == nil || lastFitParams == nil {
+			dialog.ShowError(fmt.Errorf("no fit result available — run a fit first"), w)
+			return
+		}
+		if len(extractedNoise) == 0 {
+			dialog.ShowError(fmt.Errorf("no baseline noise data — run Estimate Baseline first"), w)
+			return
+		}
+		numTrials, err := strconv.Atoi(mcNumTrialsEntry.Text)
+		if err != nil || numTrials < 1 {
+			dialog.ShowError(fmt.Errorf("number of Monte Carlo trials must be a positive integer"), w)
+			return
+		}
+		mcProgressBar.SetValue(0)
+		mcProgressBar.Show()
+		mcBtn.Disable()
+		go func() {
+			result, err := runMonteCarloTrials(lastFitParams, lastFitResult, extractedNoise, numTrials, func(progress float64) {
+				fyne.Do(func() {
+					mcProgressBar.SetValue(progress)
+				})
+			})
+			fyne.Do(func() {
+				mcProgressBar.Hide()
+				mcBtn.Enable()
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
+				for i := 0; i < result.numEdges; i++ {
+					msg += fmt.Sprintf("  Edge %d: mean=%.4f sec, std=%.4f sec\n", i+1, result.edgeMeans[i], result.edgeStds[i])
+				}
+				if result.numEdges == 2 {
+					durationMean := math.Abs(result.edgeMeans[1] - result.edgeMeans[0])
+					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+					msg += fmt.Sprintf("\n  Duration: mean=%.4f sec, std=%.4f sec\n", durationMean, durationStd)
+				}
+				fmt.Print(msg)
+				mcLabel := widget.NewLabel(msg)
+				mcLabel.Wrapping = fyne.TextWrapWord
+				mcSpacer := canvas.NewRectangle(color.Transparent)
+				mcSpacer.SetMinSize(fyne.NewSize(750, 0))
+				mcContainer := container.NewVBox(mcSpacer, mcLabel)
+				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
+			})
+		}()
 	})
 
 	tab10Content := container.NewStack(tab10Bg, container.NewPadded(container.NewVBox(
@@ -3294,6 +3365,11 @@ func main() {
 		noiseSigmaLabel,
 		noiseSigmaEntry,
 		fitBtn,
+		widget.NewSeparator(),
+		widget.NewLabel("Monte Carlo trials"),
+		mcNumTrialsEntry,
+		mcBtn,
+		mcProgressBar,
 		widget.NewSeparator(),
 		fitStatusLabel,
 		fitProgressBar,
