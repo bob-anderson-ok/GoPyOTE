@@ -51,7 +51,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.0.95"
+const Version = "1.0.96"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -294,6 +294,25 @@ func showOccultationParametersDialog(w fyne.Window) {
 		}
 	}
 
+	// Collect all entries for dirty-checking on Cancel
+	allEntries := []*widget.Entry{
+		windowSizeEntry, titleEntry, fundamentalPlaneWidthKmEntry,
+		fundamentalPlaneWidthNumPointsEntry, parallaxArcsecEntry, distanceAuEntry,
+		pathToQeTableFileEntry, observationWavelengthNmEntry, dXKmPerSecEntry,
+		dYKmPerSecEntry, pathPerpendicularOffsetKmEntry, percentMagDropEntry,
+		starDiamOnPlaneMasEntry, limbDarkeningCoeffEntry, starClassEntry,
+		mainBodyXCenterEntry, mainBodyYCenterEntry, mainBodyMajorAxisEntry,
+		mainBodyMinorAxisEntry, mainBodyPaDegreesEntry,
+		satelliteXCenterEntry, satelliteYCenterEntry, satelliteMajorAxisEntry,
+		satelliteMinorAxisEntry, satellitePaDegreesEntry,
+		pathToExternalImageEntry, exposureTimeSecsEntry,
+	}
+	// Snapshot initial values so we can detect edits
+	initialValues := make([]string, len(allEntries))
+	for i, e := range allEntries {
+		initialValues[i] = e.Text
+	}
+
 	// Helper to wrap entry in a fixed-width container
 	entryWidth := float32(280)
 	wrapEntry := func(e *widget.Entry) *fyne.Container {
@@ -344,14 +363,28 @@ func showOccultationParametersDialog(w fyne.Window) {
 	scrollContent := container.NewVScroll(twoColumns)
 	scrollContent.SetMinSize(fyne.NewSize(770, 650))
 
-	// Create a custom dialog with OK/Cancel buttons
+	// Create a custom dialog with Browse/Write/Cancel buttons
 	var customDialog *dialog.CustomDialog
-	okBtn := widget.NewButton("OK", func() {
-		customDialog.Hide()
-	})
-	okBtn.Importance = widget.HighImportance
 	cancelBtn := widget.NewButton("Cancel", func() {
-		customDialog.Hide()
+		// Check if any entry has been modified
+		dirty := false
+		for i, e := range allEntries {
+			if e.Text != initialValues[i] {
+				dirty = true
+				break
+			}
+		}
+		if dirty {
+			dialog.ShowConfirm("Unsaved Changes",
+				"You have unsaved changes. Use Write to save them.\n\nDiscard changes and close?",
+				func(confirmed bool) {
+					if confirmed {
+						customDialog.Hide()
+					}
+				}, w)
+		} else {
+			customDialog.Hide()
+		}
 	})
 
 	// File open button
@@ -417,6 +450,10 @@ func showOccultationParametersDialog(w fyne.Window) {
 			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
 			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
 			logAction(fmt.Sprintf("Loaded parameters file: %s", lastLoadedParamsPath))
+			// Re-snapshot so a fresh load is considered clean
+			for i, e := range allEntries {
+				initialValues[i] = e.Text
+			}
 		})
 	})
 
@@ -504,6 +541,11 @@ func showOccultationParametersDialog(w fyne.Window) {
 
 			logAction(fmt.Sprintf("Saved parameters file: %s", writer.URI().Path()))
 
+			// Re-snapshot so saved state is considered clean
+			for i, e := range allEntries {
+				initialValues[i] = e.Text
+			}
+
 			// Close the parameters dialog after a successful save
 			customDialog.Hide()
 		}, w)
@@ -523,11 +565,11 @@ func showOccultationParametersDialog(w fyne.Window) {
 		fileDialog.Show()
 	})
 
-	buttons := container.NewHBox(loadBtn, saveBtn, layout.NewSpacer(), cancelBtn, okBtn)
+	buttons := container.NewHBox(loadBtn, saveBtn, layout.NewSpacer(), cancelBtn)
 	bottomSection := container.NewVBox(fileNameLabel, buttons)
 	content := container.NewBorder(nil, bottomSection, nil, nil, scrollContent)
 
-	customDialog = dialog.NewCustomWithoutButtons("Occultation Parameters", content, w)
+	customDialog = dialog.NewCustomWithoutButtons("Edit/Enter Occultation Parameters", content, w)
 	customDialog.Resize(fyne.NewSize(840, 750))
 	customDialog.Show()
 }
@@ -3882,7 +3924,7 @@ func main() {
 			runIOTAdiffraction(paramFilePath)
 		})
 	})
-	btnOccultParams := widget.NewButton("Occultation Parameters", func() {
+	btnOccultParams := widget.NewButton("Edit/Enter Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
 	})
 	buttons := container.NewHBox(btnIOTA, btnOccultParams)
