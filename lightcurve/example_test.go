@@ -18,7 +18,7 @@ func Example(app fyne.App) {
 		-1.18,                      // pathOffsetFromCenterKm: Perpendicular offset from the center
 		40.0,                       // fundamentalPlaneWidthKm: Width of fundamental plane in km
 		2000,                       // fundamentalPlaneWidthPts: Width of fundamental plane in pixels
-		"occultImage16bit.png",     // Path to the 16-bit diffraction image
+		"targetImage16bit.png",     // Path to the 16-bit diffraction image
 		"geometricShadow.png",      // Path to geometric shadow image
 		"diffractionImage8bit.png", // Path to 8-bit display image for path overlay
 	)

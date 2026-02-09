@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"image/color"
 	"math"
-	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,7 +51,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.0.92"
+const Version = "1.0.93"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -545,6 +544,9 @@ func main() {
 		prefs.SetFloat("splitOffset", 0.6)
 	}
 
+	// Load the last used parameters path from preferences for startup display
+	lastLoadedParamsPath = prefs.StringWithFallback("lastLoadedParamsPath", "")
+
 	savedX := int32(prefs.IntWithFallback("windowX", -1))
 	savedY := int32(prefs.IntWithFallback("windowY", -1))
 	savedW := int32(prefs.IntWithFallback("windowW", 1000))
@@ -949,12 +951,36 @@ func main() {
 		plotStatusLabel, // center (takes remaining space)
 	)
 
+	// Create the startup overlay showing diffraction image and parameters file info
+	var startupOverlayCenter fyne.CanvasObject
+	if _, err := os.Stat("diffractionImage8bit.png"); err == nil {
+		diffImg := canvas.NewImageFromFile("diffractionImage8bit.png")
+		diffImg.FillMode = canvas.ImageFillContain
+		startupOverlayCenter = diffImg
+	}
+	paramsInfo := "No occultation parameters file loaded"
+	if lastLoadedParamsPath != "" {
+		paramsInfo = "Parameters: " + filepath.Base(lastLoadedParamsPath)
+	}
+	startupInfoLabel := widget.NewLabel(paramsInfo)
+	startupInfoLabel.Alignment = fyne.TextAlignCenter
+	startupInfoLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	var startupOverlay *fyne.Container
+	if startupOverlayCenter != nil {
+		startupOverlay = container.NewBorder(nil, startupInfoLabel, nil, nil, startupOverlayCenter)
+	} else {
+		startupOverlay = container.NewCenter(startupInfoLabel)
+	}
+
+	plotCenter := container.NewStack(lightCurvePlot, startupOverlay)
+
 	plotArea := container.NewBorder(
-		rangeControls,  // top
-		plotBottomRow,  // bottom
-		nil,            // left
-		nil,            // right
-		lightCurvePlot, // center
+		rangeControls, // top
+		plotBottomRow, // bottom
+		nil,           // left
+		nil,           // right
+		plotCenter,    // center
 	)
 
 	// Tab 3: Data - Light curve list with click to toggle on/off plot
@@ -1439,6 +1465,7 @@ func main() {
 			}
 
 			loadedLightCurveData = data
+			startupOverlay.Hide()
 
 			// Create an action log file for this CSV
 			if err := createActionLog(filePath); err != nil {
@@ -1786,6 +1813,7 @@ func main() {
 		}
 
 		loadedLightCurveData = data
+		startupOverlay.Hide()
 		normalizationApplied = false
 		smoothedSeries = nil
 
@@ -2433,6 +2461,7 @@ func main() {
 		}
 
 		loadedLightCurveData = data
+		startupOverlay.Hide()
 		normalizationApplied = false
 		smoothedSeries = nil
 
@@ -3213,11 +3242,6 @@ func main() {
 	)
 	searchRangeCard := widget.NewCard("Search range for observation path offset", "", searchRangeForm)
 
-	// Noise sigma entry
-	noiseSigmaEntry := widget.NewEntry()
-	noiseSigmaEntry.SetPlaceHolder("0 = no noise")
-	noiseSigmaLabel := widget.NewLabel("Noise sigma")
-
 	fitProgressBar := widget.NewProgressBar()
 	fitProgressBar.Hide()
 
@@ -3242,8 +3266,8 @@ func main() {
 		}
 
 		// Check 4: Diffraction image available
-		if _, err := os.Stat("occultImage16bit.png"); os.IsNotExist(err) {
-			issues = append(issues, "No diffraction image available (occultImage16bit.png not found)")
+		if _, err := os.Stat("targetImage16bit.png"); os.IsNotExist(err) {
+			issues = append(issues, "No diffraction image available (targetImage16bit.png not found)")
 		}
 
 		if len(issues) > 0 {
@@ -3318,23 +3342,6 @@ func main() {
 				return
 			}
 
-			// Add Gaussian noise if sigma is specified
-			if sigmaText := strings.TrimSpace(noiseSigmaEntry.Text); sigmaText != "" {
-				sigma, err := strconv.ParseFloat(sigmaText, 64)
-				if err != nil {
-					dialog.ShowError(fmt.Errorf("invalid Noise sigma value: %v", err), w)
-					return
-				}
-				if sigma > 0 {
-					noisyValues := make([]float64, len(targetValues))
-					copy(noisyValues, targetValues)
-					for i := range noisyValues {
-						noisyValues[i] += rand.NormFloat64() * sigma
-					}
-					targetValues = noisyValues
-				}
-			}
-
 			// Check if search range fields are all filled in
 			searchInitial := strings.TrimSpace(searchInitialOffsetEntry.Text)
 			searchFinal := strings.TrimSpace(searchFinalOffsetEntry.Text)
@@ -3402,7 +3409,7 @@ func main() {
 	mcShowHistogramsCheck.Checked = false
 
 	mcNumTrialsEntry := widget.NewEntry()
-	mcNumTrialsEntry.SetText("100")
+	mcNumTrialsEntry.SetText("1000")
 	mcNumTrialsEntry.SetPlaceHolder("number of trials")
 	mcProgressBar := widget.NewProgressBar()
 	mcProgressBar.Hide()
@@ -3597,8 +3604,6 @@ func main() {
 		fitOffsetLabel,
 		fitOffsetEntry,
 		searchRangeCard,
-		noiseSigmaLabel,
-		noiseSigmaEntry,
 		fitBtn,
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
@@ -3827,360 +3832,7 @@ func main() {
 	btnOccultParams := widget.NewButton("Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
 	})
-	btnTestLightCurve := widget.NewButton("Test ExtractAndPlotLightCurve()", func() {
-		// Parameters for the test
-		fundamentalPlaneWidthKm := 40.0
-		fundamentalPlaneWidthPts := 2000
-
-		lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
-			a,                          // Fyne app for displaying windows
-			5.074,                      // dxKmPerSec: Shadow velocity X component
-			-0.904,                     // dyKmPerSec: Shadow velocity Y component
-			-1.18,                      // pathOffsetFromCenterKm: Perpendicular offset from the center
-			fundamentalPlaneWidthKm,    // fundamentalPlaneWidthKm: Width of fundamental plane in km
-			fundamentalPlaneWidthPts,   // fundamentalPlaneWidthPts: Width of fundamental plane in pixels
-			"occultImage16bit.png",     // Path to the 16-bit diffraction image
-			"geometricShadow.png",      // Path to geometric shadow image
-			"diffractionImage8bit.png", // Path to 8-bit display image for path overlay
-		)
-		if err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-
-		// Convert lightcurve.Point data to PlotSeries for display in the main plot area
-		points := make([]PlotPoint, len(lcData))
-		for i, pt := range lcData {
-			points[i] = PlotPoint{
-				X:      pt.Distance,
-				Y:      pt.Intensity,
-				Index:  i,
-				Series: 0,
-			}
-		}
-		series := []PlotSeries{{
-			Points: points,
-			Color:  color.RGBA{R: 0, G: 0, B: 255, A: 255},
-			Name:   "Diffraction Light Curve",
-		}}
-		lightCurvePlot.SetSeries(series)
-
-		// Convert edge positions from pixels to km and display as vertical lines
-		distancePerPoint := fundamentalPlaneWidthKm / float64(fundamentalPlaneWidthPts)
-		edgesKm := make([]float64, len(edges))
-		for i, edge := range edges {
-			edgesKm[i] = edge * distancePerPoint
-		}
-		lightCurvePlot.SetVerticalLines(edgesKm, true)
-	})
-
-	btnExtractCSV := widget.NewButton("Extract csv from diffraction image", func() {
-		// Check if we have a loaded light curve to sample from
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded - please load a CSV file first"), w)
-			return
-		}
-
-		// Check if we have parameters loaded
-		if lastLoadedParamsPath == "" {
-			dialog.ShowError(fmt.Errorf("no parameters file loaded - please load parameters first"), w)
-			return
-		}
-
-		// Load parameters from the last loaded params file
-		file, err := os.Open(lastLoadedParamsPath)
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("could not open parameters file: %v", err), w)
-			return
-		}
-		params, err := parseOccultationParameters(file)
-		if closeErr := file.Close(); closeErr != nil {
-			dialog.ShowError(fmt.Errorf("failed to close file: %w", closeErr), w)
-		}
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("could not parse parameters: %v", err), w)
-			return
-		}
-		logAction(fmt.Sprintf("Loaded parameters for fitting: %s", lastLoadedParamsPath))
-
-		// Extract diffraction light curve (pass nil for app to skip window display)
-		lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
-			nil, // Don't show separate windows
-			params.DXKmPerSec,
-			params.DYKmPerSec,
-			params.PathPerpendicularOffsetKm,
-			params.FundamentalPlaneWidthKm,
-			params.FundamentalPlaneWidthNumPoints,
-			"occultImage16bit.png",
-			"geometricShadow.png",
-			"", // No display image needed
-		)
-		if err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-
-		// Calculate shadow speed (km/sec)
-		shadowSpeedKmPerSec := math.Sqrt(params.DXKmPerSec*params.DXKmPerSec + params.DYKmPerSec*params.DYKmPerSec)
-		if shadowSpeedKmPerSec == 0 {
-			dialog.ShowError(fmt.Errorf("shadow speed is zero - check dX and dY parameters"), w)
-			return
-		}
-
-		// Get the time values from the displayed curve within the frame range
-		var displayedTimes []float64
-		for i, frameNum := range loadedLightCurveData.FrameNumbers {
-			if frameRangeStart > 0 && frameNum < frameRangeStart {
-				continue
-			}
-			if frameRangeEnd > 0 && frameNum > frameRangeEnd {
-				continue
-			}
-			displayedTimes = append(displayedTimes, loadedLightCurveData.TimeValues[i])
-		}
-
-		if len(displayedTimes) < 2 {
-			dialog.ShowError(fmt.Errorf("not enough time points in displayed range"), w)
-			return
-		}
-
-		// Get the time span of the displayed curve
-		startTime := displayedTimes[0]
-		endTime := displayedTimes[len(displayedTimes)-1]
-
-		// Convert diffraction light curve from km to time
-		// The diffraction curve spans the full fundamental plane width
-		// We need to map it to the time span of the displayed curve
-		// Distance in km -> time in seconds: time = distance / shadowSpeedKmPerSec
-		// But we need to center/align it with the displayed curve's time range
-
-		// Get the km span of the diffraction curve
-		if len(lcData) == 0 {
-			dialog.ShowError(fmt.Errorf("no diffraction light curve data extracted"), w)
-			return
-		}
-		kmStart := lcData[0].Distance
-		kmEnd := lcData[len(lcData)-1].Distance
-		kmSpan := kmEnd - kmStart
-
-		// Convert km to time offset from center
-		// The center of the diffraction curve maps to the center of the time range
-		centerTime := (startTime + endTime) / 2.0
-		centerKm := (kmStart + kmEnd) / 2.0
-
-		// Build a time-indexed version of the diffraction curve for interpolation
-		diffCurveByTime := make([]timeIntensityPoint, len(lcData))
-		for i, pt := range lcData {
-			// Convert km offset from center to time offset from the center
-			kmOffsetFromCenter := pt.Distance - centerKm
-			timeOffsetFromCenter := kmOffsetFromCenter / shadowSpeedKmPerSec
-			diffCurveByTime[i] = timeIntensityPoint{
-				time:      centerTime + timeOffsetFromCenter,
-				intensity: pt.Intensity,
-			}
-		}
-
-		// Linear interpolation function for the diffraction curve
-		interpolateDiffCurve := func(t float64) float64 {
-			// Find the two points surrounding t
-			if len(diffCurveByTime) == 0 {
-				return 0
-			}
-			if t <= diffCurveByTime[0].time {
-				return diffCurveByTime[0].intensity
-			}
-			if t >= diffCurveByTime[len(diffCurveByTime)-1].time {
-				return diffCurveByTime[len(diffCurveByTime)-1].intensity
-			}
-			for i := 0; i < len(diffCurveByTime)-1; i++ {
-				if t >= diffCurveByTime[i].time && t <= diffCurveByTime[i+1].time {
-					// Linear interpolation
-					t0 := diffCurveByTime[i].time
-					t1 := diffCurveByTime[i+1].time
-					v0 := diffCurveByTime[i].intensity
-					v1 := diffCurveByTime[i+1].intensity
-					if t1 == t0 {
-						return v0
-					}
-					return v0 + (v1-v0)*(t-t0)/(t1-t0)
-				}
-			}
-			return diffCurveByTime[len(diffCurveByTime)-1].intensity
-		}
-
-		// Calculate frame rate from the exposure time in the parameters file
-		if params.ExposureTimeSecs <= 0 {
-			dialog.ShowError(fmt.Errorf("exposure time must be > 0 in the parameters file"), w)
-			return
-		}
-		framePeriod := params.ExposureTimeSecs
-		frameRate := 1.0 / framePeriod
-
-		// This calculation is correct because the length of the observation path is kmSpan as calculated earlier
-		// Calculate the time duration of the diffraction curve
-		diffDurationSec := kmSpan / shadowSpeedKmPerSec
-
-		// Calculate the number of frames needed for the diffraction curve
-		numFrames := int(diffDurationSec*frameRate) + 1
-
-		// Generate time points starting from zero at the frame rate
-		// Sample the diffraction curve at those times
-		var csvData []struct {
-			frameNum  int
-			time      float64
-			intensity float64
-		}
-
-		// We need to map from "time starting at 0" to the diffraction curve's time domain
-		// The diffraction curve is centered, so we offset appropriately
-		diffStartTime := diffCurveByTime[0].time
-		diffEndTime := diffCurveByTime[len(diffCurveByTime)-1].time
-
-		for i := 0; i < numFrames; i++ {
-			t := float64(i) * framePeriod // Time from zero
-			diffT := diffStartTime + t    // Map to diffraction curve time domain
-			if diffT > diffEndTime {
-				break
-			}
-			csvData = append(csvData, struct {
-				frameNum  int
-				time      float64
-				intensity float64
-			}{
-				frameNum:  i,
-				time:      t,
-				intensity: interpolateDiffCurve(diffT),
-			})
-		}
-
-		// Save a copy of all points (unsampled) in theoreticalLightcurve with time starting at zero
-		theoreticalLightcurve := make([]timeIntensityPoint, len(diffCurveByTime))
-		timeOffset := float64(0)
-		if len(diffCurveByTime) > 0 {
-			timeOffset = diffCurveByTime[0].time
-		}
-		for i, pt := range diffCurveByTime {
-			theoreticalLightcurve[i].time = pt.time - timeOffset
-			theoreticalLightcurve[i].intensity = pt.intensity
-		}
-		if len(theoreticalLightcurve) > 0 {
-			fmt.Printf("theoreticalLightcurve (%d points): first=(t=%.6f, i=%.6f), last=(t=%.6f, i=%.6f)\n",
-				len(theoreticalLightcurve),
-				theoreticalLightcurve[0].time, theoreticalLightcurve[0].intensity,
-				theoreticalLightcurve[len(theoreticalLightcurve)-1].time,
-				theoreticalLightcurve[len(theoreticalLightcurve)-1].intensity)
-		}
-
-		// Apply camera exposure integration (averages intensity over each exposure window)
-		theoreticalLightcurve = applyCameraExposure(theoreticalLightcurve, params.ExposureTimeSecs)
-
-		// Plot the sampled lightcurve and the unsampled theoretical lightcurve
-		sampledPoints := make([]PlotPoint, len(csvData))
-		for i, row := range csvData {
-			sampledPoints[i] = PlotPoint{X: row.time, Y: row.intensity, Index: i, Series: 0}
-		}
-		unsampledPoints := make([]PlotPoint, len(theoreticalLightcurve))
-		for i, pt := range theoreticalLightcurve {
-			unsampledPoints[i] = PlotPoint{X: pt.time, Y: pt.intensity, Index: i, Series: 1}
-		}
-		lightCurvePlot.xAxisLabel = "Time (seconds)"
-		lightCurvePlot.SetSeries([]PlotSeries{
-			{Points: sampledPoints, Color: color.RGBA{R: 0, G: 0, B: 255, A: 255}, Name: "Sampled Light Curve"},
-			{Points: unsampledPoints, Color: color.RGBA{R: 255, G: 0, B: 0, A: 255}, Name: "Theoretical Light Curve"},
-		})
-
-		// Show file save dialog
-		saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
-			if err != nil {
-				dialog.ShowError(err, w)
-				return
-			}
-			if writer == nil {
-				return // User cancelled
-			}
-			defer func() {
-				if cerr := writer.Close(); cerr != nil {
-					fmt.Printf("Error closing file: %v\n", cerr)
-				}
-			}()
-
-			// Write a comment line with date/time
-			_, err = fmt.Fprintf(writer, "# GoPyOTE %s\n", time.Now().Format("2006-01-02 15:04:05"))
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("error writing CSV comment: %v", err), w)
-				return
-			}
-
-			// Write CSV header
-			_, err = fmt.Fprintf(writer, "FrameNum,timeInfo,signal-target\n")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("error writing CSV header: %v", err), w)
-				return
-			}
-
-			// Write data rows
-			for _, row := range csvData {
-				timestamp := "[" + formatSecondsAsTimestamp(row.time) + "]"
-				_, err = fmt.Fprintf(writer, "%d,%s,%.6f\n", row.frameNum, timestamp, row.intensity)
-				if err != nil {
-					dialog.ShowError(fmt.Errorf("error writing CSV data: %v", err), w)
-					return
-				}
-			}
-
-			// Write unsampled theoreticalLightcurve CSV alongside the sampled one
-			sampledPath := writer.URI().Path()
-			unsampledPath := strings.TrimSuffix(sampledPath, ".csv") + "_unsampled.csv"
-			unsampledFile, uerr := os.Create(unsampledPath)
-			if uerr != nil {
-				dialog.ShowError(fmt.Errorf("error creating unsampled CSV: %v", uerr), w)
-				return
-			}
-			defer func() {
-				if cerr := unsampledFile.Close(); cerr != nil {
-					fmt.Printf("Error closing unsampled file: %v\n", cerr)
-				}
-			}()
-
-			if _, err := fmt.Fprintf(unsampledFile, "# GoPyOTE %s (unsampled theoretical lightcurve)\n", time.Now().Format("2006-01-02 15:04:05")); err != nil {
-				dialog.ShowError(fmt.Errorf("error writing unsampled CSV comment: %v", err), w)
-				return
-			}
-			if _, err := fmt.Fprintf(unsampledFile, "FrameNum,timeInfo,signal-target\n"); err != nil {
-				dialog.ShowError(fmt.Errorf("error writing unsampled CSV header: %v", err), w)
-				return
-			}
-			for i, pt := range theoreticalLightcurve {
-				timestamp := "[" + formatSecondsAsTimestamp(pt.time) + "]"
-				if _, err := fmt.Fprintf(unsampledFile, "%d,%s,%.6f\n", i, timestamp, pt.intensity); err != nil {
-					dialog.ShowError(fmt.Errorf("error writing unsampled CSV data: %v", err), w)
-					return
-				}
-			}
-
-			logAction(fmt.Sprintf("Saved diffraction CSV: %s (%d sampled points)", writer.URI().Path(), len(csvData)))
-			logAction(fmt.Sprintf("Saved diffraction CSV: %s (%d unsampled points)", unsampledPath, len(theoreticalLightcurve)))
-
-			dialog.ShowInformation("Export Complete",
-				fmt.Sprintf("Exported %d sampled points to %s\nExported %d unsampled points to %s\nFrame rate: %.3f fps\nDuration: %.3f sec",
-					len(csvData), writer.URI().Name(),
-					len(theoreticalLightcurve), filepath.Base(unsampledPath),
-					frameRate, diffDurationSec), w)
-		}, w)
-		saveDialog.SetFileName("diffraction_lightcurve.csv")
-		saveDialog.Resize(fyne.NewSize(800, 600))
-		saveDialog.Show()
-
-		// Log the extraction info
-		fmt.Printf("Diffraction curve: %d points, shadow speed: %.3f km/sec, frame rate: %.3f fps\n",
-			len(csvData), shadowSpeedKmPerSec, frameRate)
-		fmt.Printf("Duration: %.3f sec, km span: %.3f km\n", diffDurationSec, kmSpan)
-
-		// Suppress unused variable warnings
-		_ = edges
-	})
-
-	buttons := container.NewHBox(btnIOTA, btnOccultParams, btnTestLightCurve, btnExtractCSV)
+	buttons := container.NewHBox(btnIOTA, btnOccultParams)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)

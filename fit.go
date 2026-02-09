@@ -97,7 +97,7 @@ func buildPrecomputedCurve(params *OccultationParameters) (*precomputedCurve, er
 		params.PathPerpendicularOffsetKm,
 		params.FundamentalPlaneWidthKm,
 		params.FundamentalPlaneWidthNumPoints,
-		"occultImage16bit.png",
+		"targetImage16bit.png",
 		"geometricShadow.png",
 		"",
 	)

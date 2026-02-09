@@ -9,7 +9,7 @@
 //	go run main.go
 //
 // This example assumes the following files exist in the current directory:
-//   - occultImage16bit.png (16-bit diffraction image)
+//   - targetImage16bit.png (16-bit diffraction image)
 //   - geometricShadow.png (geometric shadow image)
 //   - diffractionImage8bit.png (8-bit display image)
 //
@@ -68,7 +68,7 @@ func main() {
 	fmt.Printf("Path length: %.1f pixels\n", path.SamplePoints[len(path.SamplePoints)-1].DistanceFromStart)
 
 	// Try to load the 16-bit diffraction image
-	intensityFile := filepath.Join(imageDir, "occultImage16bit.png")
+	intensityFile := filepath.Join(imageDir, "targetImage16bit.png")
 	intensityMatrix, err := lightcurve.LoadGray16PNG(intensityFile, 4000.0)
 	if err != nil {
 		fmt.Printf("\nNote: Could not load %s: %v\n", intensityFile, err)

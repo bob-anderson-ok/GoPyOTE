@@ -22,7 +22,7 @@ import (
 //   - pathOffsetFromCenterKm: Perpendicular offset from the center (km)
 //   - fundamentalPlaneWidthKm: Width of the fundamental plane in km
 //   - fundamentalPlaneWidthPts: Width of the fundamental plane in pixels
-//   - intensityImagePath: Path to the 16-bit diffraction image (e.g., "occultImage16bit.png")
+//   - intensityImagePath: Path to the 16-bit diffraction image (e.g., "targetImage16bit.png")
 //   - geometricImagePath: Path to the geometric shadow image (e.g., "geometricShadow.png")
 //   - displayImagePath: Path to the 8-bit display image for observation path overlay (e.g., "diffractionImage8bit.png")
 func ExtractAndPlotLightCurve(

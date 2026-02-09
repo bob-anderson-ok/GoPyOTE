@@ -64,15 +64,9 @@ When both offset entries are filled and focus leaves the entry, a **preview imag
 
 If the search range fields are left empty, a single fit at the configured path offset is performed instead.
 
-## 
+##
 
-### 5. Noise Sigma (Optional)
-
-**Noise sigma** — if set to a positive value, Gaussian noise with the given standard deviation is added to the observed light curve before fitting. This is useful for testing fit robustness. Set to 0 or leave blank for no added noise.
-
-## 
-
-### 6. Run the Fit
+### 5. Run the Fit
 
 Click **Fit** to start. The procedure:
 
@@ -105,7 +99,7 @@ After a successful fit, the Monte Carlo procedure estimates the uncertainty in e
 
 ### Configuration
 
-- **Monte Carlo trials** — entry box for the number of trials (default: 100).
+- **Monte Carlo trials** — entry box for the number of trials (default: 1000).
 - **Show individual trial results** — checkbox (default: unchecked). When checked, the results dialog includes a scrollable list of individual trial edge times, durations, and path offsets.
 - **Show histograms** — checkbox (default: unchecked). When checked, histogram windows with Gaussian fits are displayed for each edge time and for the event duration.
 
