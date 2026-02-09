@@ -51,7 +51,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.0.94"
+const Version = "1.0.95"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -973,10 +973,12 @@ func main() {
 
 	// Create the startup overlay showing diffraction image and parameters file info
 	var startupOverlayCenter fyne.CanvasObject
-	if _, err := os.Stat("diffractionImage8bit.png"); err == nil {
-		diffImg := canvas.NewImageFromFile("diffractionImage8bit.png")
-		diffImg.FillMode = canvas.ImageFillContain
-		startupOverlayCenter = diffImg
+	if lastDiffractionParamsPath != "" {
+		if _, err := os.Stat("diffractionImage8bit.png"); err == nil {
+			diffImg := canvas.NewImageFromFile("diffractionImage8bit.png")
+			diffImg.FillMode = canvas.ImageFillContain
+			startupOverlayCenter = diffImg
+		}
 	}
 	paramsInfo := "No diffraction image has been generated yet"
 	if lastDiffractionParamsPath != "" {

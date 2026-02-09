@@ -11,7 +11,7 @@ import (
 
 // verboseExtraction controls whether diagnostic messages are printed during path extraction.
 // Set to true to re-enable console output for debugging.
-var verboseExtraction = false
+const verboseExtraction = false
 
 // ExtractAndPlotLightCurve demonstrates how to use the lightcurve package to:
 // 1. Load a 16-bit diffraction image and extract a light curve

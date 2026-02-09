@@ -880,7 +880,7 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	plt.Y.Tick.Label.Font.Variant = "Sans"
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
-	plt.Title.Text = fmt.Sprintf("Fit Result (NCC=%.4f, offset=%.3fs)", bestNCC, bestOffset)
+	plt.Title.Text = fmt.Sprintf("Fit Result (NCC=%.4f, offset=%s)", bestNCC, formatSecondsAsTimestamp(bestOffset))
 	if occultationTitle != "" {
 		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
 	}
@@ -996,6 +996,7 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	// Legend
 	plt.Legend.Add("Observed", targetLine)
 	plt.Legend.Add("Theoretical (fit)", theoryLine)
+	plt.Legend.Add("Zero level", zeroLine)
 	plt.Legend.Top = true
 	plt.Legend.Left = true
 
