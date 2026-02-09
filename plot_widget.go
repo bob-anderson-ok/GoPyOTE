@@ -32,7 +32,8 @@ type LightCurvePlot struct {
 	selectedSeries2   int
 	selectedIndex2    int
 	xAxisLabel        string
-	useTimestampTicks bool // When true, format X axis ticks as timestamps
+	occultationTitle  string // Title from the occultation parameters file
+	useTimestampTicks bool   // When true, format X axis ticks as timestamps
 
 	// Stable identifiers for preserving selection across rebuilds
 	selectedPointDataIndex  int    // Original data index of selected point 1
@@ -650,6 +651,9 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	// If no series, show an empty plot
 	if len(p.series) == 0 {
 		plt.Title.Text = "Light Curve"
+		if p.occultationTitle != "" {
+			plt.Title.Text = p.occultationTitle + " — " + plt.Title.Text
+		}
 		plt.X.Label.Text = p.xAxisLabel
 		plt.Y.Label.Text = "Brightness"
 
@@ -683,6 +687,9 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		return
 	}
 	plt.Title.Text = "Light Curve"
+	if p.occultationTitle != "" {
+		plt.Title.Text = p.occultationTitle + " — " + plt.Title.Text
+	}
 	plt.Title.TextStyle.Font.Weight = 2 // Bold
 	plt.X.Label.Text = p.xAxisLabel
 	plt.X.Label.TextStyle.Font.Weight = 2

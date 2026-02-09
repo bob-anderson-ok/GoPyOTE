@@ -51,10 +51,16 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.0.93"
+const Version = "1.0.94"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
+
+// Track the parameters file used for the last IOTAdiffraction run (for startup display)
+var lastDiffractionParamsPath string
+
+// Title from the parameters file used for the last IOTAdiffraction run (for plot titles)
+var lastDiffractionTitle string
 
 // Maximum number of recent folders to keep
 const maxRecentFolders = 6
@@ -546,6 +552,20 @@ func main() {
 
 	// Load the last used parameters path from preferences for startup display
 	lastLoadedParamsPath = prefs.StringWithFallback("lastLoadedParamsPath", "")
+	lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
+	lastDiffractionTitle = prefs.StringWithFallback("lastDiffractionTitle", "")
+	// Backfill the title from the parameters file if a path exists but title was never saved
+	if lastDiffractionParamsPath != "" && lastDiffractionTitle == "" {
+		if f, err := os.Open(lastDiffractionParamsPath); err == nil {
+			if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
+				lastDiffractionTitle = p.Title
+				prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
+			}
+			if err := f.Close(); err != nil {
+				fmt.Printf("Warning: failed to close parameters file: %v\n", err)
+			}
+		}
+	}
 
 	savedX := int32(prefs.IntWithFallback("windowX", -1))
 	savedY := int32(prefs.IntWithFallback("windowY", -1))
@@ -958,9 +978,18 @@ func main() {
 		diffImg.FillMode = canvas.ImageFillContain
 		startupOverlayCenter = diffImg
 	}
-	paramsInfo := "No occultation parameters file loaded"
-	if lastLoadedParamsPath != "" {
-		paramsInfo = "Parameters: " + filepath.Base(lastLoadedParamsPath)
+	paramsInfo := "No diffraction image has been generated yet"
+	if lastDiffractionParamsPath != "" {
+		paramsInfo = "Current diffraction image as built from: " + filepath.Base(lastDiffractionParamsPath)
+		// Try to load the title from the parameters file
+		if f, err := os.Open(lastDiffractionParamsPath); err == nil {
+			if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
+				paramsInfo = p.Title + "\n" + paramsInfo
+			}
+			if err := f.Close(); err != nil {
+				fmt.Printf("Warning: failed to close parameters file: %v\n", err)
+			}
+		}
 	}
 	startupInfoLabel := widget.NewLabel(paramsInfo)
 	startupInfoLabel.Alignment = fyne.TextAlignCenter
@@ -1321,6 +1350,9 @@ func main() {
 		}
 		return wasZoomed
 	}
+
+	// Set the occultation title on the main plot from the last diffraction run
+	lightCurvePlot.occultationTitle = lastDiffractionTitle
 
 	// Set up a warning callback for the plot
 	lightCurvePlot.SetOnWarning(func(message string) {
@@ -3114,7 +3146,7 @@ func main() {
 
 		// Show noise histogram if we have enough points
 		if len(noise) >= 2 {
-			histImg, noiseMean, noiseSigma, err := createNoiseHistogramImage(noise, 800, 500)
+			histImg, noiseMean, noiseSigma, err := createNoiseHistogramImage(noise, lastDiffractionTitle, 800, 500)
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("failed to create noise histogram: %v", err), w)
 			} else {
@@ -3158,11 +3190,11 @@ func main() {
 		if err1 != nil || err2 != nil {
 			return
 		}
-		if lastLoadedParamsPath == "" {
+		if lastDiffractionParamsPath == "" {
 			return
 		}
 		go func() {
-			file, err := os.Open(lastLoadedParamsPath)
+			file, err := os.Open(lastDiffractionParamsPath)
 			if err != nil {
 				return
 			}
@@ -3222,7 +3254,11 @@ func main() {
 				if searchPreviewWindow != nil {
 					searchPreviewWindow.Close()
 				}
-				searchPreviewWindow = a.NewWindow(fmt.Sprintf("Search Range: %.3f to %.3f km", initVal, finalVal))
+				previewTitle := fmt.Sprintf("Search Range: %.3f to %.3f km", initVal, finalVal)
+				if lastDiffractionTitle != "" {
+					previewTitle = lastDiffractionTitle + " — " + previewTitle
+				}
+				searchPreviewWindow = a.NewWindow(previewTitle)
 				previewCanvas := canvas.NewImageFromImage(annotatedImg)
 				previewCanvas.FillMode = canvas.ImageFillContain
 				searchPreviewWindow.SetContent(previewCanvas)
@@ -3260,9 +3296,9 @@ func main() {
 			issues = append(issues, "Light curve has not been scaled to unity")
 		}
 
-		// Check 3: Parameters file loaded
-		if lastLoadedParamsPath == "" {
-			issues = append(issues, "No parameters file has been selected")
+		// Check 3: Parameters file from IOTAdiffraction run
+		if lastDiffractionParamsPath == "" {
+			issues = append(issues, "No diffraction has been generated (run IOTAdiffraction first)")
 		}
 
 		// Check 4: Diffraction image available
@@ -3277,8 +3313,8 @@ func main() {
 			}
 			dialog.ShowError(fmt.Errorf("%s", msg), w)
 		} else {
-			// Load parameters
-			file, err := os.Open(lastLoadedParamsPath)
+			// Load parameters from the file used to generate the diffraction image
+			file, err := os.Open(lastDiffractionParamsPath)
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("could not open parameters file: %v", err), w)
 				return
@@ -3549,6 +3585,7 @@ func main() {
 							result.edgeAll[i],
 							fmt.Sprintf("Edge %d Times", i+1),
 							"Time (seconds)",
+							lastDiffractionTitle,
 							900, 500,
 						)
 						if err != nil {
@@ -3574,6 +3611,7 @@ func main() {
 							durations,
 							"Event Duration",
 							"Duration (seconds)",
+							lastDiffractionTitle,
 							900, 500,
 						)
 						if err != nil {
@@ -3826,6 +3864,19 @@ func main() {
 			}
 
 			logAction(fmt.Sprintf("Running IOTAdiffraction with parameters file: %s", paramFilePath))
+			lastDiffractionParamsPath = paramFilePath
+			prefs.SetString("lastDiffractionParamsPath", paramFilePath)
+			// Extract and save the title from the parameters file
+			lastDiffractionTitle = ""
+			if f, err := os.Open(paramFilePath); err == nil {
+				if p, err := parseOccultationParameters(f); err == nil {
+					lastDiffractionTitle = p.Title
+				}
+				if err := f.Close(); err != nil {
+					fmt.Printf("Warning: failed to close parameters file: %v\n", err)
+				}
+			}
+			prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
 			runIOTAdiffraction(paramFilePath)
 		})
 	})

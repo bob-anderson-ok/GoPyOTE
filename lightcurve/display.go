@@ -9,6 +9,10 @@ import (
 	"fyne.io/fyne/v2/container"
 )
 
+// verboseExtraction controls whether diagnostic messages are printed during path extraction.
+// Set to true to re-enable console output for debugging.
+var verboseExtraction = false
+
 // ExtractAndPlotLightCurve demonstrates how to use the lightcurve package to:
 // 1. Load a 16-bit diffraction image and extract a light curve
 // 2. Load a geometric shadow image and detect edges
@@ -52,15 +56,19 @@ func ExtractAndPlotLightCurve(
 		return nil, nil, fmt.Errorf("failed to compute path: %w", err)
 	}
 
-	fmt.Printf("Shadow speed: %.3f km/sec\n", path.ShadowSpeedKmPerSec)
-	fmt.Printf("Path angle: %.1f degrees\n", path.PathAngleDegrees)
-	fmt.Printf("Path direction: %s\n", path.Direction)
-	fmt.Printf("Path start: (%.1f, %.1f)\n", path.StartX, path.StartY)
-	fmt.Printf("Path end: (%.1f, %.1f)\n", path.EndX, path.EndY)
+	if verboseExtraction {
+		fmt.Printf("Shadow speed: %.3f km/sec\n", path.ShadowSpeedKmPerSec)
+		fmt.Printf("Path angle: %.1f degrees\n", path.PathAngleDegrees)
+		fmt.Printf("Path direction: %s\n", path.Direction)
+		fmt.Printf("Path start: (%.1f, %.1f)\n", path.StartX, path.StartY)
+		fmt.Printf("Path end: (%.1f, %.1f)\n", path.EndX, path.EndY)
+	}
 
 	// Compute sample points along the path
 	path.ComputeSamplePoints()
-	fmt.Printf("Generated %d sample points along the observation path\n", len(path.SamplePoints))
+	if verboseExtraction {
+		fmt.Printf("Generated %d sample points along the observation path\n", len(path.SamplePoints))
+	}
 
 	// Load the 16-bit diffraction image
 	// The scale factor of 4000 matches what the main application uses
@@ -71,7 +79,9 @@ func ExtractAndPlotLightCurve(
 
 	// Extract the light curve from the intensity matrix
 	lightCurveData := ExtractLightCurve(intensityMatrix, path)
-	fmt.Printf("Extracted %d light curve points\n", len(lightCurveData))
+	if verboseExtraction {
+		fmt.Printf("Extracted %d light curve points\n", len(lightCurveData))
+	}
 
 	// Load the geometric shadow image and detect edges
 	geometricMatrix, err := LoadGray8PNG(geometricImagePath)
@@ -81,10 +91,12 @@ func ExtractAndPlotLightCurve(
 
 	// Find edges in the geometric shadow
 	edges := FindEdgesInGeometricShadow(geometricMatrix, path)
-	fmt.Printf("Found %d edges in the geometric shadow\n", len(edges))
-	for i, edge := range edges {
-		distanceKm := edge * path.FundamentalPlaneWidthKm / float64(path.FundamentalPlaneWidthPts)
-		fmt.Printf("  Edge %d at pixel distance %.1f (%.3f km)\n", i+1, edge, distanceKm)
+	if verboseExtraction {
+		fmt.Printf("Found %d edges in the geometric shadow\n", len(edges))
+		for i, edge := range edges {
+			distanceKm := edge * path.FundamentalPlaneWidthKm / float64(path.FundamentalPlaneWidthPts)
+			fmt.Printf("  Edge %d at pixel distance %.1f (%.3f km)\n", i+1, edge, distanceKm)
+		}
 	}
 
 	// Create the light curve plot image

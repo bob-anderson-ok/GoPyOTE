@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"math"
 	"math/rand/v2"
+	"os"
 	"sort"
 
 	"GoPyOTE/lightcurve"
@@ -240,7 +241,7 @@ func runSingleFit(params *OccultationParameters, targetTimes, targetValues []flo
 
 // displayFitResult shows the NCC plot, overlay plot, diffraction image, and edge times for a fit result.
 func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64) error {
-	plotImg, err := createNCCPlotImage(fr.nccCurve, 1000, 500)
+	plotImg, err := createNCCPlotImage(fr.nccCurve, params.Title, 1000, 500)
 	if err != nil {
 		return fmt.Errorf("failed to create NCC plot: %w", err)
 	}
@@ -254,7 +255,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 
 	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", fr.bestShift, fr.bestNCC)
 
-	overlayImg, err := createOverlayPlotImage(fr.curve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, fr.sampledVals, fr.bestNCC, 1200, 500)
+	overlayImg, err := createOverlayPlotImage(fr.curve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, fr.sampledVals, fr.bestNCC, params.Title, 1200, 500)
 	if err != nil {
 		return fmt.Errorf("failed to create overlay plot: %w", err)
 	}
@@ -284,7 +285,11 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 			if err != nil {
 				fmt.Printf("Could not draw observation path: %v\n", err)
 			} else {
-				pathWindow := app.NewWindow(fmt.Sprintf("Observation Path on Diffraction Image (offset=%.3f km)", params.PathPerpendicularOffsetKm))
+				pathTitle := fmt.Sprintf("Observation Path on Diffraction Image (offset=%.3f km)", params.PathPerpendicularOffsetKm)
+				if params.Title != "" {
+					pathTitle = params.Title + " — " + pathTitle
+				}
+				pathWindow := app.NewWindow(pathTitle)
 				pathCanvas := canvas.NewImageFromImage(annotatedImg)
 				pathCanvas.FillMode = canvas.ImageFillContain
 				pathWindow.SetContent(container.NewScroll(pathCanvas))
@@ -557,7 +562,7 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 // displayFitSearchResult shows the path offset plot and the full fit for the best offset.
 // Must be called on the main thread.
 func displayFitSearchResult(app fyne.App, w fyne.Window, params *OccultationParameters, fsr *fitSearchResult, targetTimes, targetValues []float64) (*fitResult, error) {
-	searchPlotImg, err := createPathOffsetPlotImage(fsr.results, 1000, 500)
+	searchPlotImg, err := createPathOffsetPlotImage(fsr.results, params.Title, 1000, 500)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create path offset plot: %w", err)
 	}
@@ -583,7 +588,7 @@ type searchResult struct {
 }
 
 // createPathOffsetPlotImage renders peak NCC versus path offset.
-func createPathOffsetPlotImage(results []searchResult, plotWidth, plotHeight int) (image.Image, error) {
+func createPathOffsetPlotImage(results []searchResult, occultationTitle string, plotWidth, plotHeight int) (image.Image, error) {
 	plt := plot.New()
 
 	plt.Title.TextStyle.Font.Typeface = "Liberation"
@@ -610,6 +615,9 @@ func createPathOffsetPlotImage(results []searchResult, plotWidth, plotHeight int
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
 	plt.Title.Text = "Peak NCC vs Path Perpendicular Offset"
+	if occultationTitle != "" {
+		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
+	}
 	plt.X.Label.Text = "Path offset (km)"
 	plt.Y.Label.Text = "Peak NCC"
 
@@ -716,7 +724,7 @@ func medianTimeDelta(times []float64) float64 {
 }
 
 // createNCCPlotImage renders the NCC results as a gonum/plot image.
-func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.Image, error) {
+func createNCCPlotImage(results []nccResult, occultationTitle string, plotWidth, plotHeight int) (image.Image, error) {
 	plt := plot.New()
 
 	// Font styling (same pattern as plot_widget.go)
@@ -744,6 +752,9 @@ func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.I
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
 	plt.Title.Text = "Normalized Cross-Correlation vs Time Offset"
+	if occultationTitle != "" {
+		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
+	}
 	plt.X.Label.Text = "Time offset (seconds)"
 	plt.Y.Label.Text = "NCC"
 
@@ -842,7 +853,7 @@ func createNCCPlotImage(results []nccResult, plotWidth, plotHeight int) (image.I
 // createOverlayPlotImage renders the target light curve and the theoretical curve
 // (shifted by bestOffset) together in a single plot, with geometric shadow edges
 // shown as vertical dashed lines.
-func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes []float64, targetTimes, targetValues, sampledTimes, sampledVals []float64, bestNCC float64, plotWidth, plotHeight int) (image.Image, error) {
+func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes []float64, targetTimes, targetValues, sampledTimes, sampledVals []float64, bestNCC float64, occultationTitle string, plotWidth, plotHeight int) (image.Image, error) {
 	plt := plot.New()
 
 	// Font styling
@@ -870,8 +881,12 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
 	plt.Title.Text = fmt.Sprintf("Fit Result (NCC=%.4f, offset=%.3fs)", bestNCC, bestOffset)
-	plt.X.Label.Text = "Time (seconds)"
+	if occultationTitle != "" {
+		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
+	}
+	plt.X.Label.Text = "Time (timestamp)"
 	plt.Y.Label.Text = "Intensity"
+	plt.X.Tick.Marker = timestampTicker{}
 
 	plt.Add(plotter.NewGrid())
 
@@ -996,6 +1011,12 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	if err := png.Encode(&buf, img.Image()); err != nil {
 		return nil, fmt.Errorf("failed to encode overlay PNG: %w", err)
 	}
+
+	// Save to fitPlot.png
+	if err := os.WriteFile("fitPlot.png", buf.Bytes(), 0644); err != nil {
+		fmt.Printf("Warning: could not save fitPlot.png: %v\n", err)
+	}
+
 	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode overlay PNG: %w", err)
@@ -1005,7 +1026,7 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 }
 
 // createHistogramImage renders a histogram of values with a Gaussian curve fit overlay.
-func createHistogramImage(values []float64, title, xLabel string, plotWidth, plotHeight int) (image.Image, error) {
+func createHistogramImage(values []float64, title, xLabel, occultationTitle string, plotWidth, plotHeight int) (image.Image, error) {
 	n := float64(len(values))
 	if n < 2 {
 		return nil, fmt.Errorf("need at least 2 values for histogram")
@@ -1050,6 +1071,9 @@ func createHistogramImage(values []float64, title, xLabel string, plotWidth, plo
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
 	plt.Title.Text = fmt.Sprintf("%s (mean=%.4f, std=%.4f, n=%d)", title, mean, sigma, len(values))
+	if occultationTitle != "" {
+		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
+	}
 	plt.X.Label.Text = xLabel
 	plt.Y.Label.Text = "Density"
 
@@ -1124,7 +1148,7 @@ func createHistogramImage(values []float64, title, xLabel string, plotWidth, plo
 
 // createNoiseHistogramImage renders a histogram of noise values with a Gaussian fit overlay.
 // Returns the image, mean, and sigma.
-func createNoiseHistogramImage(noise []float64, plotWidth, plotHeight int) (image.Image, float64, float64, error) {
+func createNoiseHistogramImage(noise []float64, occultationTitle string, plotWidth, plotHeight int) (image.Image, float64, float64, error) {
 	n := float64(len(noise))
 	var sum float64
 	for _, v := range noise {
@@ -1165,6 +1189,9 @@ func createNoiseHistogramImage(noise []float64, plotWidth, plotHeight int) (imag
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
 	plt.Title.Text = fmt.Sprintf("Baseline Noise (mean=%.4f, sigma=%.4f, n=%d)", mean, sigma, len(noise))
+	if occultationTitle != "" {
+		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
+	}
 	plt.X.Label.Text = "Noise (value - baseline)"
 	plt.Y.Label.Text = "Density"
 
@@ -1229,6 +1256,12 @@ func createNoiseHistogramImage(noise []float64, plotWidth, plotHeight int) (imag
 	if err := png.Encode(&buf, img.Image()); err != nil {
 		return nil, 0, 0, fmt.Errorf("failed to encode histogram PNG: %w", err)
 	}
+
+	// Save to baselineNoiseHistogram.png
+	if err := os.WriteFile("baselineNoiseHistogram.png", buf.Bytes(), 0644); err != nil {
+		fmt.Printf("Warning: could not save baselineNoiseHistogram.png: %v\n", err)
+	}
+
 	histImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("failed to decode histogram PNG: %w", err)
