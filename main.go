@@ -48,8 +48,11 @@ var vizierExportMarkdown embed.FS
 //go:embed help_markdown/singlePointAnalysis.md
 var singlePointAnalysisMarkdown embed.FS
 
+//go:embed help_markdown/fitMarkdown.md
+var fitExplanationMarkdown embed.FS
+
 // Version information
-const Version = "1.0.91"
+const Version = "1.0.92"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -142,7 +145,7 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 		}
 		fileDialog.Resize(fyne.NewSize(1200, 800))
 
-		// Set starting location if folder exists
+		// Set the starting location if the folder exists
 		if folderPath != "" {
 			folderURI := storage.NewFileURI(folderPath)
 			listableURI, err := storage.ListerForURI(folderURI)
@@ -590,6 +593,14 @@ func main() {
 			}
 			ShowMarkdownDialogWithImages("Single point analysis", string(content), &singlePointAnalysisMarkdown, w)
 		}),
+		fyne.NewMenuItem("Fit explanation", func() {
+			content, err := fitExplanationMarkdown.ReadFile("help_markdown/fitMarkdown.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load fitMarkdown.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Fit explanation", string(content), &fitExplanationMarkdown, w)
+		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About GoPyOTE", func() {
 			content, err := aboutMarkdown.ReadFile("help_markdown/about.md")
@@ -929,7 +940,7 @@ func main() {
 		timestampTicksCheck,
 	)
 
-	// Bottom section with frame range controls on left and status label on right
+	// Bottom section with frame range controls on the left and status label on the right
 	plotBottomRow := container.NewBorder(
 		nil,             // top
 		nil,             // bottom
@@ -3133,6 +3144,17 @@ func main() {
 			if err != nil {
 				return
 			}
+
+			// Auto-calculate the number of steps from image resolution
+			if params.FundamentalPlaneWidthNumPoints > 0 {
+				stepSize := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+				if stepSize > 0 {
+					numSteps := int(math.Abs(finalVal-initVal)/stepSize) + 1
+					fyne.Do(func() {
+						searchNumStepsEntry.SetText(fmt.Sprintf("%d", numSteps))
+					})
+				}
+			}
 			baseImg, err := lightcurve.LoadImageFromFile("diffractionImage8bit.png")
 			if err != nil {
 				return
@@ -3152,7 +3174,7 @@ func main() {
 			if err != nil {
 				return
 			}
-			// Draw final offset path on same image
+			// Draw the final offset path on the same image
 			path2 := &lightcurve.ObservationPath{
 				DxKmPerSec:               params.DXKmPerSec,
 				DyKmPerSec:               params.DYKmPerSec,
@@ -3376,6 +3398,8 @@ func main() {
 	// Monte Carlo UI elements
 	mcShowTrialsCheck := widget.NewCheck("Show individual trial results", nil)
 	mcShowTrialsCheck.Checked = false
+	mcShowHistogramsCheck := widget.NewCheck("Show histograms", nil)
+	mcShowHistogramsCheck.Checked = false
 
 	mcNumTrialsEntry := widget.NewEntry()
 	mcNumTrialsEntry.SetText("100")
@@ -3433,12 +3457,11 @@ func main() {
 				}
 				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
 				for i := 0; i < result.numEdges; i++ {
-					msg += fmt.Sprintf("  Edge %d: mean=%.4f sec, std=%.4f sec\n", i+1, result.edgeMeans[i], result.edgeStds[i])
+					msg += fmt.Sprintf("  Edge %d: std=%.4f sec (1 sigma)\n", i+1, result.edgeStds[i])
 				}
 				if result.numEdges == 2 {
-					durationMean := math.Abs(result.edgeMeans[1] - result.edgeMeans[0])
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
-					msg += fmt.Sprintf("\n  Duration: mean=%.4f sec, std=%.4f sec\n", durationMean, durationStd)
+					msg += fmt.Sprintf("\n  Duration: std=%.4f sec (1 sigma)\n", durationStd)
 				}
 				fmt.Print(msg)
 
@@ -3460,7 +3483,7 @@ func main() {
 					absTime := et + lastFitResult.bestShift
 					ts := formatSecondsAsTimestamp(absTime)
 					if i < result.numEdges {
-						logAction(fmt.Sprintf("  Edge %d: %s +/- %.4f sec", i+1, ts, result.edgeStds[i]))
+						logAction(fmt.Sprintf("  Edge %d: %s +/- %.4f sec (1 sigma)", i+1, ts, result.edgeStds[i]))
 					} else {
 						logAction(fmt.Sprintf("  Edge %d: %s", i+1, ts))
 					}
@@ -3468,7 +3491,7 @@ func main() {
 				if len(lastFitResult.edgeTimes) == 2 && result.numEdges == 2 {
 					fitDuration := math.Abs((lastFitResult.edgeTimes[1] + lastFitResult.bestShift) - (lastFitResult.edgeTimes[0] + lastFitResult.bestShift))
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
-					logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec", fitDuration, durationStd))
+					logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec (1 sigma)", fitDuration, durationStd))
 				}
 				logAction("--- End Report ---")
 
@@ -3509,51 +3532,53 @@ func main() {
 				}
 				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
 
-				// Show histograms for each edge time
-				for i := 0; i < result.numEdges; i++ {
-					if len(result.edgeAll[i]) < 2 {
-						continue
-					}
-					histImg, err := createHistogramImage(
-						result.edgeAll[i],
-						fmt.Sprintf("Edge %d Times", i+1),
-						"Time (seconds)",
-						900, 500,
-					)
-					if err != nil {
-						fmt.Printf("Failed to create Edge %d histogram: %v\n", i+1, err)
-						continue
-					}
-					histWin := a.NewWindow(fmt.Sprintf("Monte Carlo — Edge %d Histogram", i+1))
-					histCanvas := canvas.NewImageFromImage(histImg)
-					histCanvas.FillMode = canvas.ImageFillContain
-					histWin.SetContent(histCanvas)
-					histWin.Resize(fyne.NewSize(950, 550))
-					histWin.Show()
-				}
-
-				// Show duration histogram if 2 edges
-				if result.numEdges == 2 && len(result.edgeAll[0]) >= 2 {
-					n := len(result.edgeAll[0])
-					durations := make([]float64, n)
-					for t := 0; t < n; t++ {
-						durations[t] = math.Abs(result.edgeAll[1][t] - result.edgeAll[0][t])
-					}
-					histImg, err := createHistogramImage(
-						durations,
-						"Event Duration",
-						"Duration (seconds)",
-						900, 500,
-					)
-					if err != nil {
-						fmt.Printf("Failed to create duration histogram: %v\n", err)
-					} else {
-						histWin := a.NewWindow("Monte Carlo — Duration Histogram")
+				// Show histograms if the checkbox is checked
+				if mcShowHistogramsCheck.Checked {
+					for i := 0; i < result.numEdges; i++ {
+						if len(result.edgeAll[i]) < 2 {
+							continue
+						}
+						histImg, err := createHistogramImage(
+							result.edgeAll[i],
+							fmt.Sprintf("Edge %d Times", i+1),
+							"Time (seconds)",
+							900, 500,
+						)
+						if err != nil {
+							fmt.Printf("Failed to create Edge %d histogram: %v\n", i+1, err)
+							continue
+						}
+						histWin := a.NewWindow(fmt.Sprintf("Monte Carlo — Edge %d Histogram", i+1))
 						histCanvas := canvas.NewImageFromImage(histImg)
 						histCanvas.FillMode = canvas.ImageFillContain
 						histWin.SetContent(histCanvas)
 						histWin.Resize(fyne.NewSize(950, 550))
 						histWin.Show()
+					}
+
+					// Show duration histogram if 2 edges
+					if result.numEdges == 2 && len(result.edgeAll[0]) >= 2 {
+						n := len(result.edgeAll[0])
+						durations := make([]float64, n)
+						for t := 0; t < n; t++ {
+							durations[t] = math.Abs(result.edgeAll[1][t] - result.edgeAll[0][t])
+						}
+						histImg, err := createHistogramImage(
+							durations,
+							"Event Duration",
+							"Duration (seconds)",
+							900, 500,
+						)
+						if err != nil {
+							fmt.Printf("Failed to create duration histogram: %v\n", err)
+						} else {
+							histWin := a.NewWindow("Monte Carlo — Duration Histogram")
+							histCanvas := canvas.NewImageFromImage(histImg)
+							histCanvas.FillMode = canvas.ImageFillContain
+							histWin.SetContent(histCanvas)
+							histWin.Resize(fyne.NewSize(950, 550))
+							histWin.Show()
+						}
 					}
 				}
 			})
@@ -3578,7 +3603,7 @@ func main() {
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
-		mcShowTrialsCheck,
+		container.NewHBox(mcShowTrialsCheck, mcShowHistogramsCheck),
 		mcBtn,
 		mcProgressBar,
 		widget.NewSeparator(),

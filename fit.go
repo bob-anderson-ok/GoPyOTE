@@ -298,10 +298,10 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 	if len(fr.edgeTimes) > 0 {
 		msg := fmt.Sprintf("Best fit: NCC=%.4f, time offset=%.4f sec\n", fr.bestNCC, fr.bestShift)
 		msg += fmt.Sprintf("Path offset=%.3f km\n\n", params.PathPerpendicularOffsetKm)
-		msg += "Edge times (seconds):\n"
+		msg += "Edge times:\n"
 		for i, et := range fr.edgeTimes {
 			edgeAbsTime := et + fr.bestShift
-			msg += fmt.Sprintf("  Edge %d: %.4f\n", i+1, edgeAbsTime)
+			msg += fmt.Sprintf("  Edge %d: %s\n", i+1, formatSecondsAsTimestamp(edgeAbsTime))
 		}
 		if len(fr.edgeTimes) == 2 {
 			duration := math.Abs((fr.edgeTimes[1] + fr.bestShift) - (fr.edgeTimes[0] + fr.bestShift))
@@ -312,7 +312,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 		// Log fit results
 		logAction(fmt.Sprintf("Fit result: NCC=%.4f, time offset=%.4f sec, path offset=%.3f km", fr.bestNCC, fr.bestShift, params.PathPerpendicularOffsetKm))
 		for i, et := range fr.edgeTimes {
-			logAction(fmt.Sprintf("  Edge %d: %.4f sec", i+1, et+fr.bestShift))
+			logAction(fmt.Sprintf("  Edge %d: %s", i+1, formatSecondsAsTimestamp(et+fr.bestShift)))
 		}
 		if len(fr.edgeTimes) == 2 {
 			duration := math.Abs((fr.edgeTimes[1] + fr.bestShift) - (fr.edgeTimes[0] + fr.bestShift))
@@ -421,7 +421,6 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 	pathStep := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
 	numSide := 25
 	var candidates []*precomputedCurve
-	noEdgeCount := 0
 	for s := -numSide; s <= numSide; s++ {
 		trialParams := *params
 		trialParams.PathPerpendicularOffsetKm = centerOffset + float64(s)*pathStep
@@ -430,20 +429,15 @@ func runMonteCarloTrials(params *OccultationParameters, fr *fitResult, noise []f
 			fmt.Printf("Pre-compute path offset %.3f km failed: %v\n", trialParams.PathPerpendicularOffsetKm, err)
 			continue
 		}
-		if len(pc.edgeTimes) != 2 {
-			fmt.Printf("  Path offset %.3f km rejected: %d edges (need exactly 2)\n", trialParams.PathPerpendicularOffsetKm, len(pc.edgeTimes))
-			noEdgeCount++
-			continue
-		}
 		candidates = append(candidates, pc)
 	}
 	if onPrecompute != nil {
 		onPrecompute(true)
 	}
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("failed to pre-compute any candidate curves with exactly 2 edges")
+		return nil, fmt.Errorf("failed to pre-compute any candidate curves")
 	}
-	fmt.Printf("Pre-computed %d candidate curves for Monte Carlo path offset search (%d rejected: not exactly 2 edges)\n", len(candidates), noEdgeCount)
+	fmt.Printf("Pre-computed %d candidate curves for Monte Carlo path offset search\n", len(candidates))
 
 	numEdges := len(fr.edgeTimes)
 	// edgeAccum[edgeIdx][trial] = absolute edge time for that trial
