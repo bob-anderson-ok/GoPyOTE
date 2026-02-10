@@ -99,8 +99,8 @@ func buildPrecomputedCurve(params *OccultationParameters) (*precomputedCurve, er
 		params.PathPerpendicularOffsetKm,
 		params.FundamentalPlaneWidthKm,
 		params.FundamentalPlaneWidthNumPoints,
-		"targetImage16bit.png",
-		"geometricShadow.png",
+		filepath.Join(appDir, "targetImage16bit.png"),
+		filepath.Join(appDir, "geometricShadow.png"),
 		"",
 	)
 	if err != nil {
@@ -268,7 +268,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 	overlayWindow.Resize(fyne.NewSize(1250, 550))
 	overlayWindow.Show()
 
-	displayImg, err := lightcurve.LoadImageFromFile("diffractionImage8bit.png")
+	displayImg, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "diffractionImage8bit.png"))
 	if err != nil {
 		fmt.Printf("Could not load diffractionImage8bit.png: %v\n", err)
 	} else {
@@ -711,7 +711,7 @@ func createPathOffsetPlotImage(results []searchResult, occultationTitle string, 
 	}
 
 	// Save to the results folder
-	peakNCCPath := "peakNCCvsPathOffset.png"
+	peakNCCPath := filepath.Join(appDir, "peakNCCvsPathOffset.png")
 	if resultsFolder != "" {
 		peakNCCPath = filepath.Join(resultsFolder, "peakNCCvsPathOffset.png")
 	}
@@ -1035,7 +1035,7 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	}
 
 	// Save to fitPlot.png in the results folder
-	fitPlotPath := "fitPlot.png"
+	fitPlotPath := filepath.Join(appDir, "fitPlot.png")
 	if resultsFolder != "" {
 		fitPlotPath = filepath.Join(resultsFolder, "fitPlot.png")
 	}
@@ -1284,7 +1284,7 @@ func createNoiseHistogramImage(noise []float64, occultationTitle string, plotWid
 	}
 
 	// Save to baselineNoiseHistogram.png in the results folder
-	noiseHistPath := "baselineNoiseHistogram.png"
+	noiseHistPath := filepath.Join(appDir, "baselineNoiseHistogram.png")
 	if resultsFolder != "" {
 		noiseHistPath = filepath.Join(resultsFolder, "baselineNoiseHistogram.png")
 	}

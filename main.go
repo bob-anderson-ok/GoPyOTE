@@ -53,7 +53,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.0.97"
+const Version = "1.0.98"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -67,6 +67,10 @@ var lastDiffractionTitle string
 // resultsFolder is the path to the -RESULTS folder created alongside the opened CSV file.
 // Various outputs (fit plots, histograms, etc.) are written here.
 var resultsFolder string
+
+// appDir is the directory containing the executable. Used to resolve relative file paths
+// (diffraction images, IOTAdiffraction.exe, etc.) regardless of the OS working directory.
+var appDir string
 
 // Maximum number of recent folders to keep
 const maxRecentFolders = 6
@@ -581,6 +585,15 @@ func showOccultationParametersDialog(w fyne.Window) {
 }
 
 func main() {
+	// Determine the directory containing the executable so that relative file
+	// references (diffraction images, IOTAdiffraction.exe, etc.) resolve correctly
+	// regardless of how the program is launched (e.g., from an IDE).
+	if exePath, err := os.Executable(); err == nil {
+		appDir = filepath.Dir(exePath)
+	} else {
+		appDir, _ = os.Getwd()
+	}
+
 	a := app.NewWithID("com.gopyote.app")
 	w := a.NewWindow("GoPyOTE Version: " + Version)
 	w.SetMaster() // Closing this window will quit the app and close all other windows
@@ -1022,8 +1035,9 @@ func main() {
 	// Create the startup overlay showing diffraction image and parameters file info
 	var startupOverlayCenter fyne.CanvasObject
 	if lastDiffractionParamsPath != "" {
-		if _, err := os.Stat("diffractionImage8bit.png"); err == nil {
-			diffImg := canvas.NewImageFromFile("diffractionImage8bit.png")
+		diffImgPath := filepath.Join(appDir, "diffractionImage8bit.png")
+		if _, err := os.Stat(diffImgPath); err == nil {
+			diffImg := canvas.NewImageFromFile(diffImgPath)
 			diffImg.FillMode = canvas.ImageFillContain
 			startupOverlayCenter = diffImg
 		}
@@ -1539,11 +1553,11 @@ func main() {
 				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
 			}
 
-			// Create a -RESULTS folder alongside the CSV file
+			// Create a -RESULTS folder in the application directory
 			base := filepath.Base(filePath)
 			ext := filepath.Ext(base)
 			nameWithoutExt := base[:len(base)-len(ext)]
-			resultsFolder = filepath.Join(filepath.Dir(filePath), nameWithoutExt+"-RESULTS")
+			resultsFolder = filepath.Join(appDir, nameWithoutExt+"-RESULTS")
 			if err := os.MkdirAll(resultsFolder, 0755); err != nil {
 				fmt.Printf("Warning: could not create results folder %s: %v\n", resultsFolder, err)
 				resultsFolder = ""
@@ -3276,7 +3290,7 @@ func main() {
 					})
 				}
 			}
-			baseImg, err := lightcurve.LoadImageFromFile("diffractionImage8bit.png")
+			baseImg, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "diffractionImage8bit.png"))
 			if err != nil {
 				return
 			}
@@ -3372,7 +3386,7 @@ func main() {
 		}
 
 		// Check 4: Diffraction image available
-		if _, err := os.Stat("targetImage16bit.png"); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(appDir, "targetImage16bit.png")); os.IsNotExist(err) {
 			issues = append(issues, "No diffraction image available (targetImage16bit.png not found)")
 		}
 
@@ -3823,20 +3837,13 @@ func main() {
 
 	// Helper function to run IOTAdiffraction with a given parameter file
 	runIOTAdiffraction := func(paramFilePath string) {
-		// Get the current working directory
-		cwd, err := os.Getwd()
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("could not determine current directory: %v", err), w)
-			return
-		}
-
-		// Build the path to IOTAdiffraction.exe
-		exePath := filepath.Join(cwd, "IOTAdiffraction.exe")
+		// Build the path to IOTAdiffraction.exe using the app directory
+		exePath := filepath.Join(appDir, "IOTAdiffraction.exe")
 
 		// Check if the file exists
 		if _, err := os.Stat(exePath); os.IsNotExist(err) {
 			dialog.ShowInformation("File Not Found",
-				"IOTAdiffraction.exe was not found in the current directory.\n\n"+
+				"IOTAdiffraction.exe was not found in the application directory.\n\n"+
 					"Please ensure the file is located at:\n"+exePath, w)
 			return
 		}
@@ -3853,7 +3860,7 @@ func main() {
 
 		// Set up the command with pipes using the selected file as a parameter
 		cmd := exec.Command(exePath, paramFilePath)
-		cmd.Dir = cwd
+		cmd.Dir = appDir
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {

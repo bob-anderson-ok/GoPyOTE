@@ -24,7 +24,10 @@ Figure 1 below gives an example where removing such effects was important. There
 
 ## 
 
-What we do is calculate a smooth curve through the tracking star lightcurve using a second degree Savitsky-Golay smoother. That routine needs to know which curve to use and how big the window should be (that is, how many points at a time should be inluded in the least squares fit of a second degree function). By selecing two points on the reference curve (here that is the tracking star curve) we specify both the curve to use and the window size. Figure 2 shows the selections I chose. You want the window to be wide enough that the smooth curve is not following scintillations, but not so wide that the light curve variation is not being tracked well.
+What we do is calculate a smooth curve through the tracking star lightcurve using a second degree Savitsky-Golay smoother. 
+That routine needs to know which curve to use and how big the window should be (that is, how many points at a time should
+be inluded in the least squares fit of a second degree function). 
+By selecting two points on the reference curve (here that is the tracking star curve) we specify both the curve to use and the window size. Figure 2 shows the selections I chose. You want the window to be wide enough that the smooth curve is not following scintillations, but not so wide that the light curve variation is not being tracked well.
 
 ## 
 

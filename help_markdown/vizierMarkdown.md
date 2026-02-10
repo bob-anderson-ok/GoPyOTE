@@ -146,7 +146,8 @@ Your light curve will be visible within Occult4 after it has been vetted - this 
 ## 
 
 - The .dat files use CRLF line endings for compatibility
-- After zipping, the original .dat files are automatically deleted (but they remain recoverable as they are in the zip folder jsut created)
+- After zipping, the original .dat files are automatically deleted (but they remain recoverable as they are in the zip folder just created)
+- In addition, a copy is always saved in the associated RESULTS folder.
 - The zip filename includes a timestamp for uniqueness
 
 ## 

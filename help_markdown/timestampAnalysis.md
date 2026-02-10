@@ -63,7 +63,7 @@ When timing errors are detected, a dialog appears showing:
 
 The image below shows how dropped frames and OCR errors appear on a light curve:
 
-![Plot showing dropped frames and OCR error markings](help_images/droppedFrameDemoPlot.png%20=800x600)
+![Plot showing dropped frames and OCR error markings](help_images/droppedFrameDemoPlot.png =800x600)
 
 ## 
 
