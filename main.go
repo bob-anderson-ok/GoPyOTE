@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"embed"
 	"fmt"
 	"image/color"
+	"image/png"
 	"math"
 	"os"
 	"os/exec"
@@ -51,7 +53,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.0.96"
+const Version = "1.0.97"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -61,6 +63,10 @@ var lastDiffractionParamsPath string
 
 // Title from the parameters file used for the last IOTAdiffraction run (for plot titles)
 var lastDiffractionTitle string
+
+// resultsFolder is the path to the -RESULTS folder created alongside the opened CSV file.
+// Various outputs (fit plots, histograms, etc.) are written here.
+var resultsFolder string
 
 // Maximum number of recent folders to keep
 const maxRecentFolders = 6
@@ -1531,6 +1537,16 @@ func main() {
 			filePath := reader.URI().Path()
 			if cerr := reader.Close(); cerr != nil {
 				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+			}
+
+			// Create a -RESULTS folder alongside the CSV file
+			base := filepath.Base(filePath)
+			ext := filepath.Ext(base)
+			nameWithoutExt := base[:len(base)-len(ext)]
+			resultsFolder = filepath.Join(filepath.Dir(filePath), nameWithoutExt+"-RESULTS")
+			if err := os.MkdirAll(resultsFolder, 0755); err != nil {
+				fmt.Printf("Warning: could not create results folder %s: %v\n", resultsFolder, err)
+				resultsFolder = ""
 			}
 
 			// Parse the CSV file
@@ -3293,6 +3309,16 @@ func main() {
 			annotatedImg, err = lightcurve.DrawObservationLineOnImage(annotatedImg, path2)
 			if err != nil {
 				return
+			}
+			// Save the search range image to the results folder
+			if resultsFolder != "" {
+				var buf bytes.Buffer
+				if err := png.Encode(&buf, annotatedImg); err == nil {
+					savePath := filepath.Join(resultsFolder, "searchRange.png")
+					if err := os.WriteFile(savePath, buf.Bytes(), 0644); err != nil {
+						fmt.Printf("Warning: could not save searchRange.png: %v\n", err)
+					}
+				}
 			}
 			fyne.Do(func() {
 				if searchPreviewWindow != nil {

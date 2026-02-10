@@ -20,12 +20,15 @@ func createActionLog(csvFilePath string) error {
 	// Close any existing log file
 	closeActionLog()
 
-	// Build log file path: same name as CSV but with .log extension
-	dir := filepath.Dir(csvFilePath)
+	// Build log file path: same name as CSV but with .log extension, in the results folder
 	base := filepath.Base(csvFilePath)
 	ext := filepath.Ext(base)
 	nameWithoutExt := strings.TrimSuffix(base, ext)
-	logPath := filepath.Join(dir, nameWithoutExt+".log")
+	logDir := filepath.Dir(csvFilePath)
+	if resultsFolder != "" {
+		logDir = resultsFolder
+	}
+	logPath := filepath.Join(logDir, nameWithoutExt+".log")
 
 	// Create/open the log file (append mode)
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)

@@ -529,12 +529,29 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 		return
 	}
 
-	statusLabel.SetText(fmt.Sprintf("VizieR file written to:\n%s", vizierFilePath))
+	// Copy to the results folder if available
+	resultsCopyMsg := ""
+	if resultsFolder != "" {
+		copyPath := filepath.Join(resultsFolder, filename)
+		if copyData, err := os.ReadFile(vizierFilePath); err == nil {
+			if err := os.WriteFile(copyPath, copyData, 0644); err != nil {
+				fmt.Printf("Warning: could not copy VizieR file to results folder: %v\n", err)
+			} else {
+				resultsCopyMsg = fmt.Sprintf("\nCopy written to:\n%s", copyPath)
+			}
+		}
+	}
+
+	statusLabel.SetText(fmt.Sprintf("VizieR file written to:\n%s%s", vizierFilePath, resultsCopyMsg))
 	dialog.ShowInformation("VizieR Export Complete",
-		fmt.Sprintf("Your VizieR lightcurve file was written to:\n\n%s", vizierFilePath), w)
+		fmt.Sprintf("Your VizieR lightcurve file was written to:\n\n%s%s", vizierFilePath, resultsCopyMsg), w)
 
 	// Log VizieR page entries
 	logAction(fmt.Sprintf("Generated VizieR file: %s", vizierFilePath))
+	logAction(fmt.Sprintf("  VizieR file written to: %s", vizierFilePath))
+	if resultsCopyMsg != "" {
+		logAction(fmt.Sprintf("  Copy written to results folder: %s", filepath.Join(resultsFolder, filename)))
+	}
 	logAction(fmt.Sprintf("  Date: %d-%02d-%02d", year, month, day))
 	logAction(fmt.Sprintf("  Timestamp: %s, Delta: %.2f sec, Readings: %d", vizierTimestamp, deltaTime, numReadings))
 	logAction(fmt.Sprintf("  Frame range: %d to %d", rangeStart, rangeEnd))

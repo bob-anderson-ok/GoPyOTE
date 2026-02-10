@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"GoPyOTE/lightcurve"
@@ -288,6 +289,16 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 				pathTitle := fmt.Sprintf("Observation Path on Diffraction Image (offset=%.3f km)", params.PathPerpendicularOffsetKm)
 				if params.Title != "" {
 					pathTitle = params.Title + " — " + pathTitle
+				}
+				// Save the observation path image to the results folder
+				if resultsFolder != "" {
+					var buf bytes.Buffer
+					if err := png.Encode(&buf, annotatedImg); err == nil {
+						savePath := filepath.Join(resultsFolder, "observationPath.png")
+						if err := os.WriteFile(savePath, buf.Bytes(), 0644); err != nil {
+							fmt.Printf("Warning: could not save observationPath.png: %v\n", err)
+						}
+					}
 				}
 				pathWindow := app.NewWindow(pathTitle)
 				pathCanvas := canvas.NewImageFromImage(annotatedImg)
@@ -698,6 +709,16 @@ func createPathOffsetPlotImage(results []searchResult, occultationTitle string, 
 	if err := png.Encode(&buf, img.Image()); err != nil {
 		return nil, fmt.Errorf("failed to encode plot PNG: %w", err)
 	}
+
+	// Save to the results folder
+	peakNCCPath := "peakNCCvsPathOffset.png"
+	if resultsFolder != "" {
+		peakNCCPath = filepath.Join(resultsFolder, "peakNCCvsPathOffset.png")
+	}
+	if err := os.WriteFile(peakNCCPath, buf.Bytes(), 0644); err != nil {
+		fmt.Printf("Warning: could not save peakNCCvsPathOffset.png: %v\n", err)
+	}
+
 	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode plot PNG: %w", err)
@@ -1013,8 +1034,12 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 		return nil, fmt.Errorf("failed to encode overlay PNG: %w", err)
 	}
 
-	// Save to fitPlot.png
-	if err := os.WriteFile("fitPlot.png", buf.Bytes(), 0644); err != nil {
+	// Save to fitPlot.png in the results folder
+	fitPlotPath := "fitPlot.png"
+	if resultsFolder != "" {
+		fitPlotPath = filepath.Join(resultsFolder, "fitPlot.png")
+	}
+	if err := os.WriteFile(fitPlotPath, buf.Bytes(), 0644); err != nil {
 		fmt.Printf("Warning: could not save fitPlot.png: %v\n", err)
 	}
 
@@ -1258,8 +1283,12 @@ func createNoiseHistogramImage(noise []float64, occultationTitle string, plotWid
 		return nil, 0, 0, fmt.Errorf("failed to encode histogram PNG: %w", err)
 	}
 
-	// Save to baselineNoiseHistogram.png
-	if err := os.WriteFile("baselineNoiseHistogram.png", buf.Bytes(), 0644); err != nil {
+	// Save to baselineNoiseHistogram.png in the results folder
+	noiseHistPath := "baselineNoiseHistogram.png"
+	if resultsFolder != "" {
+		noiseHistPath = filepath.Join(resultsFolder, "baselineNoiseHistogram.png")
+	}
+	if err := os.WriteFile(noiseHistPath, buf.Bytes(), 0644); err != nil {
 		fmt.Printf("Warning: could not save baselineNoiseHistogram.png: %v\n", err)
 	}
 
