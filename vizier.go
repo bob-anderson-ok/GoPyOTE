@@ -65,6 +65,9 @@ type VizieRTab struct {
 
 	// Load from the NA spreadsheet button
 	LoadXlsxBtn *widget.Button
+
+	// Tab background rectangle (exposed for dark mode toggling)
+	TabBg *canvas.Rectangle
 }
 
 // NewVizieRTab creates a new VizieR export tab with all its widgets
@@ -73,6 +76,7 @@ func NewVizieRTab() *VizieRTab {
 
 	// Background
 	tabBg := canvas.NewRectangle(color.RGBA{R: 210, G: 220, B: 210, A: 255})
+	vt.TabBg = tabBg
 
 	// Date fields
 	vt.DateYearEntry = NewFocusLossEntry()

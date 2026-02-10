@@ -20,6 +20,9 @@ import (
 	"gonum.org/v1/plot/vg/vgimg"
 )
 
+// GrayPlotBackground controls whether plots use a gray background instead of white.
+var GrayPlotBackground bool
+
 // PathPoint represents a point along the observation path with x, y coordinates
 // and distance from the start of the path.
 type PathPoint struct {
@@ -469,6 +472,9 @@ func (t StepTicks) Ticks(min, max float64) []plot.Tick {
 // Returns the plot as an image.Image.
 func PlotLightCurve(lightCurve []Point, edges []float64, path *ObservationPath, wPx, hPx float64) (image.Image, error) {
 	p := plot.New()
+	if GrayPlotBackground {
+		p.BackgroundColor = color.RGBA{R: 170, G: 170, B: 170, A: 255}
+	}
 
 	p.Y.Min = -0.2
 	p.Y.Max = 1.5

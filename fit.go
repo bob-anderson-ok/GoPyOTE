@@ -601,6 +601,9 @@ type searchResult struct {
 // createPathOffsetPlotImage renders peak NCC versus path offset.
 func createPathOffsetPlotImage(results []searchResult, occultationTitle string, plotWidth, plotHeight int) (image.Image, error) {
 	plt := plot.New()
+	if grayPlotBackground {
+		plt.BackgroundColor = plotBackgroundGray
+	}
 
 	plt.Title.TextStyle.Font.Typeface = "Liberation"
 	plt.Title.TextStyle.Font.Variant = "Sans"
@@ -747,6 +750,9 @@ func medianTimeDelta(times []float64) float64 {
 // createNCCPlotImage renders the NCC results as a gonum/plot image.
 func createNCCPlotImage(results []nccResult, occultationTitle string, plotWidth, plotHeight int) (image.Image, error) {
 	plt := plot.New()
+	if grayPlotBackground {
+		plt.BackgroundColor = plotBackgroundGray
+	}
 
 	// Font styling (same pattern as plot_widget.go)
 	plt.Title.TextStyle.Font.Typeface = "Liberation"
@@ -876,6 +882,9 @@ func createNCCPlotImage(results []nccResult, occultationTitle string, plotWidth,
 // shown as vertical dashed lines.
 func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes []float64, targetTimes, targetValues, sampledTimes, sampledVals []float64, bestNCC float64, occultationTitle string, plotWidth, plotHeight int) (image.Image, error) {
 	plt := plot.New()
+	if grayPlotBackground {
+		plt.BackgroundColor = plotBackgroundGray
+	}
 
 	// Font styling
 	plt.Title.TextStyle.Font.Typeface = "Liberation"
@@ -1072,6 +1081,9 @@ func createHistogramImage(values []float64, title, xLabel, occultationTitle stri
 	sigma := math.Sqrt(sumSq / (n - 1))
 
 	plt := plot.New()
+	if grayPlotBackground {
+		plt.BackgroundColor = plotBackgroundGray
+	}
 
 	plt.Title.TextStyle.Font.Typeface = "Liberation"
 	plt.Title.TextStyle.Font.Variant = "Sans"
@@ -1190,6 +1202,9 @@ func createNoiseHistogramImage(noise []float64, occultationTitle string, plotWid
 	sigma := math.Sqrt(sumSq / n)
 
 	plt := plot.New()
+	if grayPlotBackground {
+		plt.BackgroundColor = plotBackgroundGray
+	}
 
 	plt.Title.TextStyle.Font.Typeface = "Liberation"
 	plt.Title.TextStyle.Font.Variant = "Sans"

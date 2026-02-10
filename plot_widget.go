@@ -627,6 +627,9 @@ func (r *lightCurvePlotRenderer) Refresh() {
 
 	// Create gonum plot
 	plt := plot.New()
+	if grayPlotBackground {
+		plt.BackgroundColor = plotBackgroundGray
+	}
 	// Modify the font fields directly on existing styles
 	plt.Title.TextStyle.Font.Typeface = "Liberation"
 	plt.Title.TextStyle.Font.Variant = "Sans"

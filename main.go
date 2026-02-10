@@ -25,6 +25,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/storage"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/KevinWang15/go-json5"
@@ -53,7 +54,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.2"
+const Version = "1.1.3"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -71,6 +72,12 @@ var resultsFolder string
 // appDir is the directory containing the executable. Used to resolve relative file paths
 // (diffraction images, IOTAdiffraction.exe, etc.) regardless of the OS working directory.
 var appDir string
+
+// grayPlotBackground controls whether plots use a gray background instead of white.
+var grayPlotBackground bool
+
+// plotBackgroundColor returns the color to use for plot backgrounds based on the preference.
+var plotBackgroundGray = color.RGBA{R: 170, G: 170, B: 170, A: 255}
 
 // Maximum number of recent folders to keep
 const maxRecentFolders = 6
@@ -601,6 +608,17 @@ func main() {
 	// Load saved window geometry
 	prefs := a.Preferences()
 
+	// Apply persisted dark mode preference
+	if prefs.BoolWithFallback("darkMode", false) {
+		a.Settings().SetTheme(theme.DarkTheme())
+	} else {
+		a.Settings().SetTheme(theme.LightTheme())
+	}
+
+	// Apply persisted gray plot background preference
+	grayPlotBackground = prefs.BoolWithFallback("grayPlotBackground", false)
+	lightcurve.GrayPlotBackground = grayPlotBackground
+
 	// Initialize preferences on the first run to avoid EOF errors
 	if prefs.Int("initialized") == 0 {
 		prefs.SetInt("initialized", 1)
@@ -792,8 +810,49 @@ func main() {
 		hitDefectCheck,
 	)
 
-	tab2Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 200, B: 230, A: 255})
-	tab2Content := container.NewStack(tab2Bg, container.NewPadded(prefixCheckboxes))
+	// Track all tab background rectangles with their light/dark colors
+	type tabBgEntry struct {
+		rect       *canvas.Rectangle
+		lightColor color.RGBA
+		darkColor  color.RGBA
+	}
+	var tabBgs []tabBgEntry
+	makeTabBg := func(light, dark color.RGBA) *canvas.Rectangle {
+		rect := canvas.NewRectangle(light)
+		tabBgs = append(tabBgs, tabBgEntry{rect, light, dark})
+		return rect
+	}
+	applyTabBgTheme := func(isDark bool) {
+		for _, entry := range tabBgs {
+			if isDark {
+				entry.rect.FillColor = entry.darkColor
+			} else {
+				entry.rect.FillColor = entry.lightColor
+			}
+			entry.rect.Refresh()
+		}
+	}
+
+	darkModeCheck := widget.NewCheck("Dark mode", func(checked bool) {
+		if checked {
+			a.Settings().SetTheme(theme.DarkTheme())
+		} else {
+			a.Settings().SetTheme(theme.LightTheme())
+		}
+		applyTabBgTheme(checked)
+		prefs.SetBool("darkMode", checked)
+	})
+	darkModeCheck.Checked = prefs.BoolWithFallback("darkMode", false)
+
+	grayBgCheck := widget.NewCheck("Gray plot backgrounds", func(checked bool) {
+		grayPlotBackground = checked
+		lightcurve.GrayPlotBackground = checked
+		prefs.SetBool("grayPlotBackground", checked)
+	})
+	grayBgCheck.Checked = prefs.BoolWithFallback("grayPlotBackground", false)
+
+	tab2Bg := makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
+	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck)))
 	tab2 := container.NewTabItem("Settings", tab2Content)
 
 	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
@@ -984,6 +1043,8 @@ func main() {
 			logAction("Disabled timestamp tick format")
 		}
 	})
+	timestampTicksCheck.Checked = true
+	lightCurvePlot.SetUseTimestampTicks(true)
 
 	// Create a toolbar with X and Y range controls
 	rangeControls := container.NewHBox(
@@ -1077,7 +1138,7 @@ func main() {
 	)
 
 	// Tab 3: Data - Light curve list with click to toggle on/off plot
-	tab3Bg := canvas.NewRectangle(color.RGBA{R: 230, G: 220, B: 200, A: 255})
+	tab3Bg := makeTabBg(color.RGBA{R: 230, G: 220, B: 200, A: 255}, color.RGBA{R: 80, G: 70, B: 50, A: 255})
 
 	// Create a list to display light curve column names
 	var lightCurveListData []string       // Will be populated when CSV is loaded (filtered by prefixes)
@@ -1534,6 +1595,8 @@ func main() {
 
 	// Create VizieR tab early so it can be populated from RAVF headers during a file load
 	vizierTab := NewVizieRTab()
+	// Register vizier tab background for dark mode toggling
+	tabBgs = append(tabBgs, tabBgEntry{vizierTab.TabBg, color.RGBA{R: 210, G: 220, B: 210, A: 255}, color.RGBA{R: 60, G: 70, B: 60, A: 255}})
 
 	// Track if csv ops tab has been opened for the first time
 	csvOpsTabFirstOpen := true
@@ -1561,6 +1624,16 @@ func main() {
 			if err := os.MkdirAll(resultsFolder, 0755); err != nil {
 				fmt.Printf("Warning: could not create results folder %s: %v\n", resultsFolder, err)
 				resultsFolder = ""
+			}
+
+			// Copy the CSV file into the results folder
+			if resultsFolder != "" {
+				csvDest := filepath.Join(resultsFolder, base)
+				if srcBytes, err := os.ReadFile(filePath); err == nil {
+					if err := os.WriteFile(csvDest, srcBytes, 0644); err != nil {
+						fmt.Printf("Warning: could not copy CSV to results folder: %v\n", err)
+					}
+				}
 			}
 
 			// Parse the CSV file
@@ -1740,7 +1813,7 @@ func main() {
 	tab3 := container.NewTabItem("Csv", tab3Content)
 
 	// Tab 5: Block integration
-	tab5Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 220, B: 200, A: 255})
+	tab5Bg := makeTabBg(color.RGBA{R: 200, G: 220, B: 200, A: 255}, color.RGBA{R: 50, G: 70, B: 50, A: 255})
 
 	// Status label for block integration
 	blockIntStatusLabel := widget.NewLabel("Select two points on the plot to define a block size")
@@ -2013,7 +2086,7 @@ func main() {
 	tab5 := container.NewTabItem("BlockInt", tab5Content)
 
 	// Tab 6: Flash tags
-	tab6Bg := canvas.NewRectangle(color.RGBA{R: 220, G: 200, B: 220, A: 255})
+	tab6Bg := makeTabBg(color.RGBA{R: 220, G: 200, B: 220, A: 255}, color.RGBA{R: 70, G: 50, B: 70, A: 255})
 
 	// Alevel, Blevel display labels (read-only)
 	alevelValue := widget.NewLabel("---")
@@ -2324,7 +2397,7 @@ func main() {
 	tab6 := container.NewTabItem("Flash tags", tab6Content)
 
 	// Tab 7: Savitzky-Golay Smoothing
-	tab7Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 200, B: 230, A: 255})
+	tab7Bg := makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
 
 	// Status label for smoothing
 	smoothStatusLabel := widget.NewLabel("Click on a point to select the reference curve, then click another point to define window size")
@@ -2746,7 +2819,7 @@ func main() {
 	}
 
 	// Tab 9: Single Point
-	tab9Bg := canvas.NewRectangle(color.RGBA{R: 220, G: 210, B: 230, A: 255})
+	tab9Bg := makeTabBg(color.RGBA{R: 220, G: 210, B: 230, A: 255}, color.RGBA{R: 70, G: 60, B: 80, A: 255})
 	singlePointStatusLabel := widget.NewLabel("Select two points on the light curve to define a baseline region")
 	singlePointStatusLabel.Wrapping = fyne.TextWrapWord
 
@@ -3111,7 +3184,7 @@ func main() {
 	onSinglePointDropCalc = calculateSinglePointDrop
 
 	// Tab 10: Fit
-	tab10Bg := canvas.NewRectangle(color.RGBA{R: 200, G: 220, B: 240, A: 255})
+	tab10Bg := makeTabBg(color.RGBA{R: 200, G: 220, B: 240, A: 255}, color.RGBA{R: 50, G: 70, B: 90, A: 255})
 
 	// Status label for Fit tab
 	fitStatusLabel := widget.NewLabel("Select pairs of points to define baseline regions")
@@ -3740,6 +3813,11 @@ func main() {
 	tab10 := container.NewTabItem("Fit", tab10Content)
 
 	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, vizierTab.TabItem, tab9, tab10)
+
+	// Apply dark tab backgrounds if dark mode was persisted
+	if prefs.BoolWithFallback("darkMode", false) {
+		applyTabBgTheme(true)
+	}
 
 	// Track the previously selected tab for cleanup
 	var previousTab *container.TabItem
