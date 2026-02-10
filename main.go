@@ -54,7 +54,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.3"
+const Version = "1.1.4"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -78,6 +78,29 @@ var grayPlotBackground bool
 
 // plotBackgroundColor returns the color to use for plot backgrounds based on the preference.
 var plotBackgroundGray = color.RGBA{R: 170, G: 170, B: 170, A: 255}
+
+// ForcedVariantTheme delegates everything to Base, but forces Color() to use Variant.
+// This replaces deprecated theme.DarkTheme()/theme.LightTheme() calls.
+type ForcedVariantTheme struct {
+	Base    fyne.Theme
+	Variant fyne.ThemeVariant
+}
+
+func (t *ForcedVariantTheme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
+	return t.Base.Color(name, t.Variant)
+}
+
+func (t *ForcedVariantTheme) Font(style fyne.TextStyle) fyne.Resource {
+	return t.Base.Font(style)
+}
+
+func (t *ForcedVariantTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
+	return t.Base.Icon(name)
+}
+
+func (t *ForcedVariantTheme) Size(name fyne.ThemeSizeName) float32 {
+	return t.Base.Size(name)
+}
 
 // Maximum number of recent folders to keep
 const maxRecentFolders = 6
@@ -610,9 +633,9 @@ func main() {
 
 	// Apply persisted dark mode preference
 	if prefs.BoolWithFallback("darkMode", false) {
-		a.Settings().SetTheme(theme.DarkTheme())
+		a.Settings().SetTheme(&ForcedVariantTheme{Base: theme.DefaultTheme(), Variant: theme.VariantDark})
 	} else {
-		a.Settings().SetTheme(theme.LightTheme())
+		a.Settings().SetTheme(&ForcedVariantTheme{Base: theme.DefaultTheme(), Variant: theme.VariantLight})
 	}
 
 	// Apply persisted gray plot background preference
@@ -835,9 +858,9 @@ func main() {
 
 	darkModeCheck := widget.NewCheck("Dark mode", func(checked bool) {
 		if checked {
-			a.Settings().SetTheme(theme.DarkTheme())
+			a.Settings().SetTheme(&ForcedVariantTheme{Base: theme.DefaultTheme(), Variant: theme.VariantDark})
 		} else {
-			a.Settings().SetTheme(theme.LightTheme())
+			a.Settings().SetTheme(&ForcedVariantTheme{Base: theme.DefaultTheme(), Variant: theme.VariantLight})
 		}
 		applyTabBgTheme(checked)
 		prefs.SetBool("darkMode", checked)
