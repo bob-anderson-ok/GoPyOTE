@@ -54,7 +54,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.5"
+const Version = "1.1.6"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3215,10 +3215,11 @@ func main() {
 	// Stored baseline noise for later use
 	var extractedNoise []float64
 
-	// Stored last fit result, params, and candidate curves for Monte Carlo
+	// Stored last fit result, params, candidate curves, and target data for Monte Carlo
 	var lastFitResult *fitResult
 	var lastFitParams *OccultationParameters
 	var lastFitCandidates []*precomputedCurve
+	var lastFitTargetTimes, lastFitTargetValues []float64
 
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
 	calcBaselineMeanBtn := widget.NewButton("Calculate Baseline mean", func() {
@@ -3607,6 +3608,8 @@ func main() {
 								for _, sr := range fsr.results {
 									lastFitCandidates = append(lastFitCandidates, sr.pc)
 								}
+								lastFitTargetTimes = targetTimes
+								lastFitTargetValues = targetValues
 							}
 						}
 					})
@@ -3620,6 +3623,8 @@ func main() {
 					paramsCopy := *params
 					lastFitParams = &paramsCopy
 					lastFitCandidates = []*precomputedCurve{pc}
+					lastFitTargetTimes = targetTimes
+					lastFitTargetValues = targetValues
 				}
 			}
 		}
@@ -3674,23 +3679,23 @@ func main() {
 				}
 				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
 				for i := 0; i < result.numEdges; i++ {
-					msg += fmt.Sprintf("  Edge %d: std=%.4f sec (1 sigma)\n", i+1, result.edgeStds[i])
+					msg += fmt.Sprintf("  Edge %d: %.4f sec (3 sigma)\n", i+1, 3*result.edgeStds[i])
 				}
 				if result.numEdges == 2 {
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
-					msg += fmt.Sprintf("\n  Duration: std=%.4f sec (1 sigma)\n", durationStd)
+					msg += fmt.Sprintf("\n  Duration: %.4f sec (3 sigma)\n", 3*durationStd)
 				}
 				fmt.Print(msg)
 
 				// Log Monte Carlo results
 				logAction(fmt.Sprintf("Monte Carlo results (%d trials):", result.numTrials))
 				for i := 0; i < result.numEdges; i++ {
-					logAction(fmt.Sprintf("  Edge %d: mean=%.4f sec, std=%.4f sec", i+1, result.edgeMeans[i], result.edgeStds[i]))
+					logAction(fmt.Sprintf("  Edge %d: mean=%.4f sec, 3 sigma=%.4f sec", i+1, result.edgeMeans[i], 3*result.edgeStds[i]))
 				}
 				if result.numEdges == 2 {
 					durationMean := math.Abs(result.edgeMeans[1] - result.edgeMeans[0])
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
-					logAction(fmt.Sprintf("  Duration: mean=%.4f sec, std=%.4f sec", durationMean, durationStd))
+					logAction(fmt.Sprintf("  Duration: mean=%.4f sec, 3 sigma=%.4f sec", durationMean, 3*durationStd))
 				}
 
 				// Final report: fit edge times (as timestamps) with MC uncertainty
@@ -3700,7 +3705,7 @@ func main() {
 					absTime := et + lastFitResult.bestShift
 					ts := formatSecondsAsTimestamp(absTime)
 					if i < result.numEdges {
-						logAction(fmt.Sprintf("  Edge %d: %s +/- %.4f sec (1 sigma)", i+1, ts, result.edgeStds[i]))
+						logAction(fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)", i+1, ts, 3*result.edgeStds[i]))
 					} else {
 						logAction(fmt.Sprintf("  Edge %d: %s", i+1, ts))
 					}
@@ -3708,7 +3713,7 @@ func main() {
 				if len(lastFitResult.edgeTimes) == 2 && result.numEdges == 2 {
 					fitDuration := math.Abs((lastFitResult.edgeTimes[1] + lastFitResult.bestShift) - (lastFitResult.edgeTimes[0] + lastFitResult.bestShift))
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
-					logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec (1 sigma)", fitDuration, durationStd))
+					logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec (3 sigma)", fitDuration, 3*durationStd))
 				}
 				logAction("--- End Report ---")
 
@@ -3798,6 +3803,39 @@ func main() {
 							histWin.Resize(fyne.NewSize(950, 550))
 							histWin.Show()
 						}
+					}
+				}
+
+				// Create a fit overlay plot with ±3σ edge uncertainty lines
+				if len(lastFitTargetTimes) > 0 && len(lastFitTargetValues) > 0 {
+					mcOverlayImg, err := createOverlayPlotImage(
+						lastFitResult.curve, lastFitResult.bestShift, lastFitResult.edgeTimes,
+						lastFitTargetTimes, lastFitTargetValues,
+						lastFitResult.sampledTimes, lastFitResult.sampledVals,
+						lastFitResult.bestNCC, lastDiffractionTitle,
+						1200, 500, result.edgeStds,
+					)
+					if err != nil {
+						fmt.Printf("Failed to create MC overlay plot: %v\n", err)
+					} else {
+						// Save to the results folder
+						savePath := filepath.Join(appDir, "fitPlotMC.png")
+						if resultsFolder != "" {
+							savePath = filepath.Join(resultsFolder, "fitPlotMC.png")
+						}
+						var buf bytes.Buffer
+						if err := png.Encode(&buf, mcOverlayImg); err != nil {
+							fmt.Printf("Warning: could not encode fitPlotMC.png: %v\n", err)
+						} else if err := os.WriteFile(savePath, buf.Bytes(), 0644); err != nil {
+							fmt.Printf("Warning: could not save fitPlotMC.png: %v\n", err)
+						}
+
+						mcOverlayWin := a.NewWindow("Fit Result with Monte Carlo Edge Uncertainty (±3σ)")
+						mcOverlayCanvas := canvas.NewImageFromImage(mcOverlayImg)
+						mcOverlayCanvas.FillMode = canvas.ImageFillContain
+						mcOverlayWin.SetContent(mcOverlayCanvas)
+						mcOverlayWin.Resize(fyne.NewSize(1250, 550))
+						mcOverlayWin.Show()
 					}
 				}
 			})

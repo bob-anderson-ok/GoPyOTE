@@ -256,7 +256,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 
 	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", fr.bestShift, fr.bestNCC)
 
-	overlayImg, err := createOverlayPlotImage(fr.curve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, fr.sampledVals, fr.bestNCC, params.Title, 1200, 500)
+	overlayImg, err := createOverlayPlotImage(fr.curve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, fr.sampledVals, fr.bestNCC, params.Title, 1200, 500, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create overlay plot: %w", err)
 	}
@@ -869,7 +869,7 @@ func createNCCPlotImage(results []nccResult, occultationTitle string, plotWidth,
 // createOverlayPlotImage renders the target light curve and the theoretical curve
 // (shifted by bestOffset) together in a single plot, with geometric shadow edges
 // shown as vertical dashed lines.
-func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes []float64, targetTimes, targetValues, sampledTimes, sampledVals []float64, bestNCC float64, occultationTitle string, plotWidth, plotHeight int) (image.Image, error) {
+func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes []float64, targetTimes, targetValues, sampledTimes, sampledVals []float64, bestNCC float64, occultationTitle string, plotWidth, plotHeight int, edgeStds []float64) (image.Image, error) {
 	plt := plot.New()
 	if grayPlotBackground {
 		plt.BackgroundColor = plotBackgroundGray
@@ -1009,6 +1009,32 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 			vline.Width = vg.Points(1.5)
 			vline.Dashes = []vg.Length{vg.Points(6), vg.Points(4)}
 			plt.Add(vline)
+		}
+	}
+
+	// Edge uncertainty lines: ±3σ dashed red vertical lines
+	if len(edgeStds) > 0 {
+		for i, et := range edgeTimes {
+			if i >= len(edgeStds) {
+				break
+			}
+			sigma3 := 3.0 * edgeStds[i]
+			edgeX := et + bestOffset
+			for _, delta := range []float64{-sigma3, sigma3} {
+				x := edgeX + delta
+				pts := make(plotter.XYs, 2)
+				pts[0].X = x
+				pts[0].Y = minY
+				pts[1].X = x
+				pts[1].Y = maxY
+				vline, err := plotter.NewLine(pts)
+				if err == nil {
+					vline.Color = color.RGBA{R: 220, G: 30, B: 30, A: 255}
+					vline.Width = vg.Points(1.5)
+					vline.Dashes = []vg.Length{vg.Points(6), vg.Points(4)}
+					plt.Add(vline)
+				}
+			}
 		}
 	}
 
