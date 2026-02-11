@@ -54,7 +54,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.4"
+const Version = "1.1.5"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3215,9 +3215,10 @@ func main() {
 	// Stored baseline noise for later use
 	var extractedNoise []float64
 
-	// Stored last fit result and params for Monte Carlo
+	// Stored last fit result, params, and candidate curves for Monte Carlo
 	var lastFitResult *fitResult
 	var lastFitParams *OccultationParameters
+	var lastFitCandidates []*precomputedCurve
 
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
 	calcBaselineMeanBtn := widget.NewButton("Calculate Baseline mean", func() {
@@ -3601,18 +3602,24 @@ func main() {
 								lastFitResult = fr
 								paramsCopy := *params
 								lastFitParams = &paramsCopy
+								// Save all precomputed curves from the search for Monte Carlo
+								lastFitCandidates = make([]*precomputedCurve, 0, len(fsr.results))
+								for _, sr := range fsr.results {
+									lastFitCandidates = append(lastFitCandidates, sr.pc)
+								}
 							}
 						}
 					})
 				}()
 			} else {
-				fr, err := performFit(a, w, params, targetTimes, targetValues)
+				fr, pc, err := performFit(a, w, params, targetTimes, targetValues)
 				if err != nil {
 					dialog.ShowError(err, w)
 				} else {
 					lastFitResult = fr
 					paramsCopy := *params
 					lastFitParams = &paramsCopy
+					lastFitCandidates = []*precomputedCurve{pc}
 				}
 			}
 		}
@@ -3636,6 +3643,10 @@ func main() {
 			dialog.ShowError(fmt.Errorf("no fit result available — run a fit first"), w)
 			return
 		}
+		if len(lastFitCandidates) == 0 {
+			dialog.ShowError(fmt.Errorf("no candidate curves available — run a fit first"), w)
+			return
+		}
 		if len(extractedNoise) == 0 {
 			dialog.ShowError(fmt.Errorf("no baseline noise data — run Estimate Baseline first"), w)
 			return
@@ -3649,24 +3660,7 @@ func main() {
 		mcProgressBar.Show()
 		mcBtn.Disable()
 		go func() {
-			var precomputeDialog dialog.Dialog
-			result, err := runMonteCarloTrials(lastFitParams, lastFitResult, extractedNoise, numTrials, func(done bool) {
-				fyne.Do(func() {
-					if done {
-						if precomputeDialog != nil {
-							precomputeDialog.Hide()
-							precomputeDialog = nil
-						}
-					} else {
-						precomputeDialog = dialog.NewInformation(
-							"Pre-computing candidate curves",
-							"Building theoretical light curves for each path offset candidate...\nThis may take a moment.",
-							w,
-						)
-						precomputeDialog.Show()
-					}
-				})
-			}, func(progress float64) {
+			result, err := runMonteCarloTrials(lastFitCandidates, lastFitResult, extractedNoise, numTrials, func(progress float64) {
 				fyne.Do(func() {
 					mcProgressBar.SetValue(progress)
 				})
