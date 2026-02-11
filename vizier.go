@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bufio"
 	"fmt"
 	"image/color"
 	"io"
@@ -65,6 +66,9 @@ type VizieRTab struct {
 
 	// Load from the NA spreadsheet button
 	LoadXlsxBtn *widget.Button
+
+	// Load from the SODIS form button
+	LoadSodisBtn *widget.Button
 
 	// Tab background rectangle (exposed for dark mode toggling)
 	TabBg *canvas.Rectangle
@@ -168,6 +172,9 @@ func NewVizieRTab() *VizieRTab {
 	// Load from the NA spreadsheet button (callback set below, needs access to window)
 	vt.LoadXlsxBtn = widget.NewButton("Load from NA spreadsheet", func() {})
 
+	// Load from the SODIS form button (callback set below, needs access to window)
+	vt.LoadSodisBtn = widget.NewButton("Load from SODIS form", func() {})
+
 	// Build the tab content
 	tabContent := container.NewStack(tabBg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("VizieR Export"),
@@ -190,7 +197,7 @@ func NewVizieRTab() *VizieRTab {
 		container.NewHBox(widget.NewLabel("Output folder:"), outputFolderContainer),
 		widget.NewSeparator(),
 		container.NewHBox(vt.GenerateBtn, vt.ZipBtn),
-		container.NewHBox(clearBtn, vt.LoadXlsxBtn),
+		container.NewHBox(clearBtn, vt.LoadXlsxBtn, vt.LoadSodisBtn),
 		widget.NewSeparator(),
 		vt.StatusLabel,
 	)))
@@ -1082,9 +1089,15 @@ func (vt *VizieRTab) FillFromNASpreadsheet(w fyne.Window) {
 		if reader == nil {
 			return // User cancelled
 		}
-		filePath := reader.URI().Path()
+		selectedURI := reader.URI()
+		filePath := selectedURI.Path()
 		if cerr := reader.Close(); cerr != nil {
 			dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+		}
+
+		// Save the parent directory URI for next time
+		if parentURI, perr := storage.Parent(selectedURI); perr == nil {
+			fyne.CurrentApp().Preferences().SetString("lastNASpreadsheetDir", parentURI.String())
 		}
 
 		// Open the Excel file
@@ -1245,5 +1258,221 @@ func (vt *VizieRTab) FillFromNASpreadsheet(w fyne.Window) {
 
 	fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".xlsx"}))
 	fileDialog.Resize(fyne.NewSize(800, 600))
+
+	// Default to the last directory used by the NA spreadsheet dialog
+	if lastDir := fyne.CurrentApp().Preferences().String("lastNASpreadsheetDir"); lastDir != "" {
+		if parsed, err := storage.ParseURI(lastDir); err == nil {
+			if listable, err := storage.ListerForURI(parsed); err == nil {
+				fileDialog.SetLocation(listable)
+			}
+		}
+	}
+
 	fileDialog.Show()
+}
+
+// FillFromSodisForm opens a file dialog to select a SODIS form
+// and populates the VizieR tab fields from the spreadsheet
+func (vt *VizieRTab) FillFromSodisForm(w fyne.Window) {
+	fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		if reader == nil {
+			return // User cancelled
+		}
+		selectedURI := reader.URI()
+		filePath := selectedURI.Path()
+		if cerr := reader.Close(); cerr != nil {
+			dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+		}
+
+		// Save the parent directory URI for next time
+		if parentURI, perr := storage.Parent(selectedURI); perr == nil {
+			fyne.CurrentApp().Preferences().SetString("lastSodisFormDir", parentURI.String())
+		}
+
+		// Read and parse the SODIS form text file
+		if perr := vt.parseSodisFile(filePath, w); perr != nil {
+			dialog.ShowError(fmt.Errorf("error reading SODIS form: %w", perr), w)
+			return
+		}
+
+		logAction(fmt.Sprintf("SODIS form loaded: %s", filePath))
+	}, w)
+
+	fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
+	fileDialog.Resize(fyne.NewSize(800, 600))
+
+	// Default to the last directory used by the SODIS form dialog
+	if lastDir := fyne.CurrentApp().Preferences().String("lastSodisFormDir"); lastDir != "" {
+		if parsed, err := storage.ParseURI(lastDir); err == nil {
+			if listable, err := storage.ListerForURI(parsed); err == nil {
+				fileDialog.SetLocation(listable)
+			}
+		}
+	}
+
+	fileDialog.Show()
+}
+
+// parseSodisFile reads a SODIS form text file and fills VizieR tab fields
+func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := file.Close(); cerr != nil {
+			dialog.ShowError(fmt.Errorf("error closing SODIS form file: %w", cerr), w)
+		}
+	}()
+
+	vt.ClearInputs()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// #DATE: day month year (e.g. "15 January 2025")
+		if strings.HasPrefix(line, "#DATE:") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "#DATE:"))
+			parts := strings.Fields(value)
+			if len(parts) >= 3 {
+				vt.DateDayEntry.SetText(parts[0])
+				// Convert month name to number
+				months := map[string]string{
+					"january": "1", "february": "2", "march": "3", "april": "4",
+					"may": "5", "june": "6", "july": "7", "august": "8",
+					"september": "9", "october": "10", "november": "11", "december": "12",
+				}
+				if num, ok := months[strings.ToLower(parts[1])]; ok {
+					vt.DateMonthEntry.SetText(num)
+				}
+				vt.DateYearEntry.SetText(parts[2])
+			}
+			continue
+		}
+
+		// #Star designation (e.g. "TYC 1234-5678-1") — leave blank if "unknown"
+		if strings.HasPrefix(line, "#Star") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "#Star"))
+			// Remove the leading colon if present
+			value = strings.TrimSpace(strings.TrimPrefix(value, ":"))
+			if strings.EqualFold(value, "unknown") || value == "" {
+				continue
+			}
+			starFields := strings.Fields(value)
+			if len(starFields) >= 2 {
+				catalog := strings.ToUpper(starFields[0])
+				starID := starFields[1]
+				if strings.HasPrefix(catalog, "U") {
+					vt.StarUCAC4Entry.SetText(starID)
+				} else if strings.HasPrefix(catalog, "T") {
+					vt.StarTycho2Entry.SetText(starID)
+				} else if strings.HasPrefix(catalog, "H") {
+					vt.StarHipparcosEntry.SetText(starID)
+				}
+			}
+			continue
+		}
+
+		// #Longitude: +/-DDD MM SS.S
+		if strings.HasPrefix(line, "#Longitude:") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "#Longitude:"))
+			parts := strings.Fields(value)
+			if len(parts) >= 3 {
+				vt.SiteLongDegEntry.SetText(parts[0])
+				vt.SiteLongMinEntry.SetText(parts[1])
+				vt.SiteLongSecsEntry.SetText(parts[2])
+			}
+			continue
+		}
+
+		// #Latitude: +/-DD MM SS.S
+		if strings.HasPrefix(line, "#Latitude:") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "#Latitude:"))
+			parts := strings.Fields(value)
+			if len(parts) >= 3 {
+				vt.SiteLatDegEntry.SetText(parts[0])
+				vt.SiteLatMinEntry.SetText(parts[1])
+				vt.SiteLatSecsEntry.SetText(parts[2])
+			}
+			continue
+		}
+
+		// #Altitude: meters
+		if strings.HasPrefix(line, "#Altitude:") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "#Altitude:"))
+			if altVal, err := strconv.ParseFloat(value, 64); err == nil {
+				vt.SiteAltitudeEntry.SetText(fmt.Sprintf("%.0f", altVal))
+			}
+			continue
+		}
+
+		// #Observer1: observer name
+		if strings.HasPrefix(line, "#Observer1:") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "#Observer1:"))
+			vt.ObserverNameEntry.SetText(value)
+			continue
+		}
+
+		// #ASTEROID: asteroid name
+		if strings.HasPrefix(line, "#ASTEROID:") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "#ASTEROID:"))
+			vt.AsteroidNameEntry.SetText(value)
+			continue
+		}
+
+		// #Nr.: asteroid number (handles "#Nr.:", "#Nr.  :", "#Nr:" etc.)
+		if strings.HasPrefix(line, "#Nr") {
+			// Strip the "#Nr" prefix, then trim punctuation and whitespace
+			value := strings.TrimPrefix(line, "#Nr")
+			value = strings.TrimLeft(value, ".: \t")
+			value = strings.TrimSpace(value)
+			if value != "" {
+				vt.AsteroidNumberEntry.SetText(value)
+			}
+			continue
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// Log the fields that were filled
+	logAction(fmt.Sprintf("VizieR fields filled from SODIS form: %s", filePath))
+	if vt.DateYearEntry.Text != "" {
+		logAction(fmt.Sprintf("  Date: %s-%s-%s", vt.DateYearEntry.Text, vt.DateMonthEntry.Text, vt.DateDayEntry.Text))
+	}
+	if vt.ObserverNameEntry.Text != "" {
+		logAction(fmt.Sprintf("  Observer: %s", vt.ObserverNameEntry.Text))
+	}
+	if vt.SiteLatDegEntry.Text != "" {
+		logAction(fmt.Sprintf("  Latitude: %s° %s' %s\"", vt.SiteLatDegEntry.Text, vt.SiteLatMinEntry.Text, vt.SiteLatSecsEntry.Text))
+	}
+	if vt.SiteLongDegEntry.Text != "" {
+		logAction(fmt.Sprintf("  Longitude: %s° %s' %s\"", vt.SiteLongDegEntry.Text, vt.SiteLongMinEntry.Text, vt.SiteLongSecsEntry.Text))
+	}
+	if vt.SiteAltitudeEntry.Text != "" {
+		logAction(fmt.Sprintf("  Altitude: %s m", vt.SiteAltitudeEntry.Text))
+	}
+	if vt.AsteroidNumberEntry.Text != "" || vt.AsteroidNameEntry.Text != "" {
+		logAction(fmt.Sprintf("  Asteroid: (%s) %s", vt.AsteroidNumberEntry.Text, vt.AsteroidNameEntry.Text))
+	}
+	if vt.StarUCAC4Entry.Text != "" {
+		logAction(fmt.Sprintf("  UCAC4: %s", vt.StarUCAC4Entry.Text))
+	}
+	if vt.StarTycho2Entry.Text != "" {
+		logAction(fmt.Sprintf("  Tycho-2: %s", vt.StarTycho2Entry.Text))
+	}
+	if vt.StarHipparcosEntry.Text != "" {
+		logAction(fmt.Sprintf("  Hipparcos: %s", vt.StarHipparcosEntry.Text))
+	}
+
+	vt.StatusLabel.SetText("SODIS form data loaded successfully")
+	dialog.ShowInformation("Success", "SODIS form entries extracted successfully.", w)
+	return nil
 }

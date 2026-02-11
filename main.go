@@ -54,7 +54,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.6"
+const Version = "1.1.7"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2839,6 +2839,11 @@ func main() {
 	// Set up Load from NA spreadsheet button callback
 	vizierTab.LoadXlsxBtn.OnTapped = func() {
 		vizierTab.FillFromNASpreadsheet(w)
+	}
+
+	// Set up Load from SODIS form button callback
+	vizierTab.LoadSodisBtn.OnTapped = func() {
+		vizierTab.FillFromSodisForm(w)
 	}
 
 	// Tab 9: Single Point
