@@ -54,7 +54,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.9"
+const Version = "1.1.10"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -878,6 +878,62 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		fileDialog.Show()
 	})
 
+	// --- Calculate observer dX dY button ---
+	calcDxDyBtn := widget.NewButton("Calculate observer dX dY", func() {
+		xmlContent := strings.TrimSpace(pasteEntry.Text)
+		if xmlContent == "" {
+			dialog.ShowError(fmt.Errorf("please paste occelemnt XML content first"), w)
+			return
+		}
+		lat, err := strconv.ParseFloat(strings.TrimSpace(latDecimalEntry.Text), 64)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("invalid latitude (degrees): %v", err), w)
+			return
+		}
+		lon, err := strconv.ParseFloat(strings.TrimSpace(longDecimalEntry.Text), 64)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("invalid longitude (degrees): %v", err), w)
+			return
+		}
+		alt := 0.0
+		if strings.TrimSpace(altitudeEntry.Text) != "" {
+			alt, err = strconv.ParseFloat(strings.TrimSpace(altitudeEntry.Text), 64)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("invalid altitude: %v", err), w)
+				return
+			}
+		}
+
+		// Write pasted XML to a temp file
+		tmpFile, err := os.CreateTemp("", "occelemnt-*.xml")
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to create temp file: %v", err), w)
+			return
+		}
+		tmpPath := tmpFile.Name()
+		if _, err := tmpFile.WriteString(xmlContent); err != nil {
+			if cerr := tmpFile.Close(); cerr != nil {
+				fmt.Printf("Warning: failed to close temp file: %v\n", cerr)
+			}
+			if rerr := os.Remove(tmpPath); rerr != nil {
+				fmt.Printf("Warning: failed to remove temp file: %v\n", rerr)
+			}
+			dialog.ShowError(fmt.Errorf("failed to write temp file: %v", err), w)
+			return
+		}
+		if err := tmpFile.Close(); err != nil {
+			dialog.ShowError(fmt.Errorf("failed to close temp file: %v", err), w)
+			return
+		}
+		defer func() {
+			if rerr := os.Remove(tmpPath); rerr != nil {
+				fmt.Printf("Warning: failed to remove temp file: %v\n", rerr)
+			}
+		}()
+
+		testCalcObserverDxDy(tmpPath, lat, lon, alt)
+	})
+
 	// --- Assemble bottom sections ---
 	bottomSection := container.NewVBox(
 		widget.NewSeparator(),
@@ -885,12 +941,12 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		widget.NewSeparator(),
 		asteroidSection,
 		widget.NewSeparator(),
-		fillSodisBtn,
+		container.NewHBox(fillSodisBtn, calcDxDyBtn),
 	)
 
 	content := container.NewBorder(nil, bottomSection, nil, nil, scrollable)
 
-	d := dialog.NewCustom("Process occelemnt file", "Close", content, w)
+	d := dialog.NewCustom("Process OWC occelemnt file", "Close", content, w)
 	d.Resize(fyne.NewSize(840, 750))
 	d.Show()
 
@@ -4382,7 +4438,7 @@ func main() {
 	btnOccultParams := widget.NewButton("Edit/Enter Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
 	})
-	btnProcessOccelemnt := widget.NewButton("Process occelemnt file", func() {
+	btnProcessOccelemnt := widget.NewButton("Process OWC occelemnt file", func() {
 		showProcessOccelemntDialog(w)
 	})
 	buttons := container.NewHBox(btnIOTA, btnOccultParams, btnProcessOccelemnt)

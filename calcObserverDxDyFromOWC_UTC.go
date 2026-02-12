@@ -308,8 +308,10 @@ func timeFromYMDHoursUTC(y, m, d int, utcHours float64) (time.Time, error) {
 type Result struct {
 	t0UTC      time.Time
 	X0, Y0     float64
+	X1, Y1     float64
 	xObs, yObs float64
 	dX, dY     float64
+	pe         *ParsedElements
 }
 
 func computeDXDYAtT0(xmlPath string, latDeg, lonDeg, altMeters float64) (*Result, error) {
@@ -390,6 +392,7 @@ func computeDXDYAtT0(xmlPath string, latDeg, lonDeg, altMeters float64) (*Result
 	return &Result{
 		t0UTC: t0,
 		X0:    pe.X0, Y0: pe.Y0,
+		X1: pe.X1, Y1: pe.Y1,
 		xObs: xObs, yObs: yObs,
 		dX: dX, dY: dY,
 	}, nil
@@ -397,43 +400,31 @@ func computeDXDYAtT0(xmlPath string, latDeg, lonDeg, altMeters float64) (*Result
 
 // -------------------- CLI --------------------
 
-//func main() {
-//	var (
-//		inFile = flag.String("in", "", "Path to OWC occelmnt XML file")
-//		lat    = flag.Float64("lat", 0, "Observer latitude (deg, +N)")
-//		lon    = flag.Float64("lon", 0, "Observer longitude (deg, +E; use negative for West)")
-//		alt    = flag.Float64("alt", 0, "Observer altitude (meters)")
-//	)
-//	flag.Parse()
-//
-//	if *inFile == "" {
-//		if _, perr := fmt.Fprintln(os.Stderr, "usage: go run . -in event.xml -lat 34.05 -lon -118.25 -alt 200"); perr != nil {
-//			panic(perr)
-//		}
-//		os.Exit(2)
-//	}
-//
-//	res, err := computeDXDYAtT0(*inFile, *lat, *lon, *alt)
-//	must(err)
-//
-//	fmt.Printf("t0 (UTC): %s\n", res.t0UTC.Format(time.RFC3339Nano))
-//	fmt.Printf("X0, Y0 (Earth radii): %.10f, %.10f\n", res.X0, res.Y0)
-//	fmt.Printf("x_obs, y_obs (Earth radii): %.10f, %.10f\n", res.xObs, res.yObs)
-//	fmt.Printf("dX, dY = (X0-x_obs, Y0-y_obs) [Earth radii]: %.10f, %.10f\n", res.dX, res.dY)
-//
-//	// Helpful: convert dX and dY to km for intuition
-// const Re = 6378.137  // earth radius
-//
-// vx := pe.X1 * Re / 86400.0
-// vy := pe.Y1 * Re / 86400.0
-//
-// fmt.Printf("Shadow velocity (km/s): %.6f, %.6f\n", vx, vy)
-//
-//	fmt.Printf("impact parameter b = sqrt(dX^2 + dY^2): %.10f Re  (%.3f km)\n",
-//		math.Hypot(res.dX, res.dY), math.Hypot(res.dX, res.dY)*a)
-//
-//	fmt.Println("\nNOTE:")
-//	fmt.Println(" - This includes latitude/longitude/altitude via WGS-84 + Earth rotation (GMST).")
-//	fmt.Println(" - It does NOT include UT1-UTC, polar motion, precession/nutation, or topocentric star aberration.")
-//	fmt.Println("   For sub-10 ms work, you’ll want UT1 and a full IERS rotation model.")
-//}
+func testCalcObserverDxDy(inFile string, lat, lon, alt float64) {
+	res, err := computeDXDYAtT0(inFile, lat, lon, alt)
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+		return
+	}
+
+	fmt.Printf("t0 (UTC): %s\n", res.t0UTC.Format(time.RFC3339Nano))
+	fmt.Printf("X0, Y0 (Earth radii): %.10f, %.10f\n", res.X0, res.Y0)
+	fmt.Printf("x_obs, y_obs (Earth radii): %.10f, %.10f\n", res.xObs, res.yObs)
+	fmt.Printf("dX, dY = (X0-x_obs, Y0-y_obs) [Earth radii]: %.10f, %.10f\n", res.dX, res.dY)
+
+	// Helpful: convert dX and dY to km for intuition
+	const Re = 6378.137 // earth radius
+
+	vx := res.X1 * Re / 86400.0
+	vy := res.Y1 * Re / 86400.0
+
+	fmt.Printf("Shadow velocity (km/s): %.6f, %.6f\n", vx, vy)
+
+	//fmt.Printf("impact parameter b = sqrt(dX^2 + dY^2): %.10f Re  (%.3f km)\n",
+	//	math.Hypot(res.dX, res.dY), math.Hypot(res.dX, res.dY)*a)
+
+	fmt.Println("\nNOTE:")
+	fmt.Println(" - This includes latitude/longitude/altitude via WGS-84 + Earth rotation (GMST).")
+	fmt.Println(" - It does NOT include UT1-UTC, polar motion, precession/nutation, or topocentric star aberration.")
+	fmt.Println("   For sub-10 ms work, you’ll want UT1 and a full IERS rotation model.")
+}
