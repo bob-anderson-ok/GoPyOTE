@@ -55,7 +55,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.11"
+const Version = "1.1.12"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -968,10 +968,13 @@ func showProcessOccelemntDialog(w fyne.Window) {
 
 		// Build a parameters struct with the computed values
 		params := OccultationParameters{
-			Title:      titleStr,
-			DXKmPerSec: vx,
-			DYKmPerSec: vy,
-			DistanceAu: distanceAu,
+			Title:                          titleStr,
+			FundamentalPlaneWidthKm:        math.Ceil(3 * bodyDiamKm),
+			FundamentalPlaneWidthNumPoints: 2000,
+			DXKmPerSec:                     vx,
+			DYKmPerSec:                     vy,
+			DistanceAu:                     distanceAu,
+			ObservationWavelengthNm:        550,
 			MainBody: EllipseParams{
 				MajorAxisKm: bodyDiamKm,
 				MinorAxisKm: bodyDiamKm,
@@ -1525,38 +1528,45 @@ func main() {
 	)
 
 	// Create the startup overlay showing diffraction image and parameters file info
-	var startupOverlayCenter fyne.CanvasObject
-	if lastDiffractionParamsPath != "" {
-		diffImgPath := filepath.Join(appDir, "diffractionImage8bit.png")
-		if _, err := os.Stat(diffImgPath); err == nil {
-			diffImg := canvas.NewImageFromFile(diffImgPath)
-			diffImg.FillMode = canvas.ImageFillContain
-			startupOverlayCenter = diffImg
-		}
-	}
-	paramsInfo := "No diffraction image has been generated yet"
-	if lastDiffractionParamsPath != "" {
-		paramsInfo = "Current diffraction image as built from: " + filepath.Base(lastDiffractionParamsPath)
-		// Try to load the title from the parameters file
-		if f, err := os.Open(lastDiffractionParamsPath); err == nil {
-			if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
-				paramsInfo = p.Title + "\n" + paramsInfo
-			}
-			if err := f.Close(); err != nil {
-				fmt.Printf("Warning: failed to close parameters file: %v\n", err)
-			}
-		}
-	}
-	startupInfoLabel := widget.NewLabel(paramsInfo)
+	startupDiffImg := canvas.NewImageFromFile("")
+	startupDiffImg.FillMode = canvas.ImageFillContain
+	startupDiffImg.Hide()
+
+	startupInfoLabel := widget.NewLabel("")
 	startupInfoLabel.Alignment = fyne.TextAlignCenter
 	startupInfoLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	var startupOverlay *fyne.Container
-	if startupOverlayCenter != nil {
-		startupOverlay = container.NewBorder(nil, startupInfoLabel, nil, nil, startupOverlayCenter)
-	} else {
-		startupOverlay = container.NewCenter(startupInfoLabel)
+	refreshStartupOverlay := func() {
+		if lastDiffractionParamsPath != "" {
+			diffImgPath := filepath.Join(appDir, "diffractionImage8bit.png")
+			if _, err := os.Stat(diffImgPath); err == nil {
+				startupDiffImg.File = diffImgPath
+				startupDiffImg.Refresh()
+				startupDiffImg.Show()
+			} else {
+				startupDiffImg.Hide()
+			}
+		} else {
+			startupDiffImg.Hide()
+		}
+
+		paramsInfo := "No diffraction image has been generated yet"
+		if lastDiffractionParamsPath != "" {
+			paramsInfo = "Current diffraction image as built from: " + filepath.Base(lastDiffractionParamsPath)
+			if f, err := os.Open(lastDiffractionParamsPath); err == nil {
+				if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
+					paramsInfo = p.Title + "\n" + paramsInfo
+				}
+				if err := f.Close(); err != nil {
+					fmt.Printf("Warning: failed to close parameters file: %v\n", err)
+				}
+			}
+		}
+		startupInfoLabel.SetText(paramsInfo)
 	}
+	refreshStartupOverlay()
+
+	startupOverlay := container.NewBorder(nil, startupInfoLabel, nil, nil, startupDiffImg)
 
 	plotCenter := container.NewStack(lightCurvePlot, startupOverlay)
 
@@ -4466,6 +4476,10 @@ func main() {
 				appendOutput(fmt.Sprintf("\n[Error: %v]", err))
 			} else {
 				appendOutput("\n[Process completed successfully]")
+				fyne.Do(func() {
+					refreshStartupOverlay()
+					startupOverlay.Show()
+				})
 			}
 		}()
 	}
