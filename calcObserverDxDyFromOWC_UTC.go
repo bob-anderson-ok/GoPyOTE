@@ -171,6 +171,7 @@ type ParsedElements struct {
 	year, mon, day int
 	utcHours       float64
 	X0, Y0         float64 // Earth radii
+	X1, Y1         float64
 	// velocities and higher terms exist but aren't needed for dX, dY at t0
 }
 
@@ -231,6 +232,8 @@ func parseElements(elementsText string) (*ParsedElements, error) {
 	if err != nil {
 		return nil, fmt.Errorf("y0: %w", err)
 	}
+	pe.X1, _ = parseFloat(f[8]) // dX/dt
+	pe.Y1, _ = parseFloat(f[9]) // dY/dt
 
 	return pe, nil
 }
@@ -419,8 +422,13 @@ func computeDXDYAtT0(xmlPath string, latDeg, lonDeg, altMeters float64) (*Result
 //	fmt.Printf("dX, dY = (X0-x_obs, Y0-y_obs) [Earth radii]: %.10f, %.10f\n", res.dX, res.dY)
 //
 //	// Helpful: convert dX and dY to km for intuition
-//	const a = 6378.137
-//	fmt.Printf("dX, dY in km: %.3f, %.3f\n", res.dX*a, res.dY*a)
+// const Re = 6378.137  // earth radius
+//
+// vx := pe.X1 * Re / 86400.0
+// vy := pe.Y1 * Re / 86400.0
+//
+// fmt.Printf("Shadow velocity (km/s): %.6f, %.6f\n", vx, vy)
+//
 //	fmt.Printf("impact parameter b = sqrt(dX^2 + dY^2): %.10f Re  (%.3f km)\n",
 //		math.Hypot(res.dX, res.dY), math.Hypot(res.dX, res.dY)*a)
 //

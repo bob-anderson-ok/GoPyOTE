@@ -54,7 +54,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.8"
+const Version = "1.1.9"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -612,6 +612,290 @@ func showOccultationParametersDialog(w fyne.Window) {
 	customDialog = dialog.NewCustomWithoutButtons("Edit/Enter Occultation Parameters", content, w)
 	customDialog.Resize(fyne.NewSize(840, 750))
 	customDialog.Show()
+}
+
+func showProcessOccelemntDialog(w fyne.Window) {
+	pasteEntry := widget.NewMultiLineEntry()
+	pasteEntry.SetPlaceHolder("Paste occelemnt file contents here (Ctrl+V)")
+	pasteEntry.Wrapping = fyne.TextWrapOff
+
+	scrollable := container.NewVScroll(pasteEntry)
+	scrollable.SetMinSize(fyne.NewSize(800, 400))
+
+	// --- Site Location section ---
+	longDegEntry := widget.NewEntry()
+	longDegEntry.SetPlaceHolder("+/-deg")
+	longMinEntry := widget.NewEntry()
+	longMinEntry.SetPlaceHolder("min")
+	longSecsEntry := widget.NewEntry()
+	longSecsEntry.SetPlaceHolder("sec")
+	longDegContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(70, 36)), longDegEntry)
+	longMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(60, 36)), longMinEntry)
+	longSecsContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(70, 36)), longSecsEntry)
+
+	longDecimalEntry := widget.NewEntry()
+	longDecimalEntry.SetPlaceHolder("decimal")
+	longDecimalContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), longDecimalEntry)
+
+	longUpdating := false
+
+	updateLongDecimal := func() {
+		if longUpdating {
+			return
+		}
+		longUpdating = true
+		defer func() { longUpdating = false }()
+		degVal, err1 := strconv.ParseFloat(strings.TrimSpace(longDegEntry.Text), 64)
+		minVal, err2 := strconv.ParseFloat(strings.TrimSpace(longMinEntry.Text), 64)
+		secVal, err3 := strconv.ParseFloat(strings.TrimSpace(longSecsEntry.Text), 64)
+		if err1 != nil || err2 != nil || err3 != nil {
+			longDecimalEntry.SetText("")
+			return
+		}
+		sign := 1.0
+		if degVal < 0 {
+			sign = -1.0
+			degVal = -degVal
+		}
+		decimal := sign * (degVal + minVal/60.0 + secVal/3600.0)
+		longDecimalEntry.SetText(fmt.Sprintf("%.6f", decimal))
+	}
+
+	updateLongDMS := func() {
+		if longUpdating {
+			return
+		}
+		longUpdating = true
+		defer func() { longUpdating = false }()
+		decVal, err := strconv.ParseFloat(strings.TrimSpace(longDecimalEntry.Text), 64)
+		if err != nil {
+			longDegEntry.SetText("")
+			longMinEntry.SetText("")
+			longSecsEntry.SetText("")
+			return
+		}
+		deg, minute, sec := decimalToDMS(decVal)
+		longDegEntry.SetText(deg)
+		longMinEntry.SetText(minute)
+		longSecsEntry.SetText(sec)
+	}
+
+	longDegEntry.OnChanged = func(_ string) { updateLongDecimal() }
+	longMinEntry.OnChanged = func(_ string) { updateLongDecimal() }
+	longSecsEntry.OnChanged = func(_ string) { updateLongDecimal() }
+	longDecimalEntry.OnChanged = func(_ string) { updateLongDMS() }
+
+	latDegEntry := widget.NewEntry()
+	latDegEntry.SetPlaceHolder("+/-deg")
+	latMinEntry := widget.NewEntry()
+	latMinEntry.SetPlaceHolder("min")
+	latSecsEntry := widget.NewEntry()
+	latSecsEntry.SetPlaceHolder("sec")
+	latDegContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(70, 36)), latDegEntry)
+	latMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(60, 36)), latMinEntry)
+	latSecsContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(70, 36)), latSecsEntry)
+
+	latDecimalEntry := widget.NewEntry()
+	latDecimalEntry.SetPlaceHolder("decimal")
+	latDecimalContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), latDecimalEntry)
+
+	latUpdating := false
+
+	updateLatDecimal := func() {
+		if latUpdating {
+			return
+		}
+		latUpdating = true
+		defer func() { latUpdating = false }()
+		degVal, err1 := strconv.ParseFloat(strings.TrimSpace(latDegEntry.Text), 64)
+		minVal, err2 := strconv.ParseFloat(strings.TrimSpace(latMinEntry.Text), 64)
+		secVal, err3 := strconv.ParseFloat(strings.TrimSpace(latSecsEntry.Text), 64)
+		if err1 != nil || err2 != nil || err3 != nil {
+			latDecimalEntry.SetText("")
+			return
+		}
+		sign := 1.0
+		if degVal < 0 {
+			sign = -1.0
+			degVal = -degVal
+		}
+		decimal := sign * (degVal + minVal/60.0 + secVal/3600.0)
+		latDecimalEntry.SetText(fmt.Sprintf("%.6f", decimal))
+	}
+
+	updateLatDMS := func() {
+		if latUpdating {
+			return
+		}
+		latUpdating = true
+		defer func() { latUpdating = false }()
+		decVal, err := strconv.ParseFloat(strings.TrimSpace(latDecimalEntry.Text), 64)
+		if err != nil {
+			latDegEntry.SetText("")
+			latMinEntry.SetText("")
+			latSecsEntry.SetText("")
+			return
+		}
+		deg, minute, sec := decimalToDMS(decVal)
+		latDegEntry.SetText(deg)
+		latMinEntry.SetText(minute)
+		latSecsEntry.SetText(sec)
+	}
+
+	latDegEntry.OnChanged = func(_ string) { updateLatDecimal() }
+	latMinEntry.OnChanged = func(_ string) { updateLatDecimal() }
+	latSecsEntry.OnChanged = func(_ string) { updateLatDecimal() }
+	latDecimalEntry.OnChanged = func(_ string) { updateLatDMS() }
+
+	altitudeEntry := widget.NewEntry()
+	altitudeEntry.SetPlaceHolder("meters")
+	altitudeContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(80, 36)), altitudeEntry)
+
+	siteLocationSection := container.NewVBox(
+		widget.NewLabel("Site Location:"),
+		container.NewHBox(widget.NewLabel("Longitude(DMS):"), longDegContainer, widget.NewLabel("\u00b0"), longMinContainer, widget.NewLabel("'"), longSecsContainer, widget.NewLabel("\""), layout.NewSpacer(), widget.NewLabel("Longitude(degrees):"), longDecimalContainer),
+		container.NewHBox(widget.NewLabel("Latitude(DMS):"), latDegContainer, widget.NewLabel("\u00b0"), latMinContainer, widget.NewLabel("'"), latSecsContainer, widget.NewLabel("\""), layout.NewSpacer(), widget.NewLabel("Latitude(degrees):"), latDecimalContainer),
+		container.NewHBox(widget.NewLabel("Altitude (m):"), altitudeContainer),
+	)
+
+	// --- Asteroid section ---
+	asteroidNumberEntry := widget.NewEntry()
+	asteroidNumberEntry.SetPlaceHolder("number")
+	asteroidNameEntry := widget.NewEntry()
+	asteroidNameEntry.SetPlaceHolder("name")
+	asteroidNumberContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(80, 36)), asteroidNumberEntry)
+	asteroidNameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), asteroidNameEntry)
+
+	asteroidSection := container.NewVBox(
+		widget.NewLabel("Asteroid:"),
+		container.NewHBox(widget.NewLabel("Number:"), asteroidNumberContainer, widget.NewLabel("Name:"), asteroidNameContainer),
+	)
+
+	// --- Fill from SODIS form button ---
+	fillSodisBtn := widget.NewButton("Fill from SODIS form", func() {
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if reader == nil {
+				return // User cancelled
+			}
+			selectedURI := reader.URI()
+			filePath := selectedURI.Path()
+			if cerr := reader.Close(); cerr != nil {
+				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+			}
+
+			// Save the parent directory URI for next time
+			if parentURI, perr := storage.Parent(selectedURI); perr == nil {
+				fyne.CurrentApp().Preferences().SetString("lastSodisFormDir", parentURI.String())
+			}
+
+			// Parse the SODIS form and fill the entry fields
+			file, ferr := os.Open(filePath)
+			if ferr != nil {
+				dialog.ShowError(fmt.Errorf("error opening SODIS form: %w", ferr), w)
+				return
+			}
+			defer func() {
+				if cerr := file.Close(); cerr != nil {
+					dialog.ShowError(fmt.Errorf("error closing SODIS form file: %w", cerr), w)
+				}
+			}()
+
+			scanner := bufio.NewScanner(file)
+			for scanner.Scan() {
+				line := scanner.Text()
+
+				if strings.HasPrefix(line, "#Longitude:") {
+					value := strings.TrimSpace(strings.TrimPrefix(line, "#Longitude:"))
+					parts := strings.Fields(value)
+					if len(parts) >= 3 {
+						longDegEntry.SetText(parts[0])
+						longMinEntry.SetText(parts[1])
+						longSecsEntry.SetText(parts[2])
+					}
+					continue
+				}
+
+				if strings.HasPrefix(line, "#Latitude:") {
+					value := strings.TrimSpace(strings.TrimPrefix(line, "#Latitude:"))
+					parts := strings.Fields(value)
+					if len(parts) >= 3 {
+						latDegEntry.SetText(parts[0])
+						latMinEntry.SetText(parts[1])
+						latSecsEntry.SetText(parts[2])
+					}
+					continue
+				}
+
+				if strings.HasPrefix(line, "#Altitude:") {
+					value := strings.TrimSpace(strings.TrimPrefix(line, "#Altitude:"))
+					if altVal, aerr := strconv.ParseFloat(value, 64); aerr == nil {
+						altitudeEntry.SetText(fmt.Sprintf("%.0f", altVal))
+					}
+					continue
+				}
+
+				if strings.HasPrefix(line, "#ASTEROID:") {
+					value := strings.TrimSpace(strings.TrimPrefix(line, "#ASTEROID:"))
+					asteroidNameEntry.SetText(value)
+					continue
+				}
+
+				if strings.HasPrefix(line, "#Nr") {
+					value := strings.TrimPrefix(line, "#Nr")
+					value = strings.TrimLeft(value, ".: \t")
+					value = strings.TrimSpace(value)
+					if value != "" {
+						asteroidNumberEntry.SetText(value)
+					}
+					continue
+				}
+			}
+
+			if serr := scanner.Err(); serr != nil {
+				dialog.ShowError(fmt.Errorf("error reading SODIS form: %w", serr), w)
+				return
+			}
+
+			logAction(fmt.Sprintf("Occelemnt dialog: SODIS form loaded: %s", filePath))
+			dialog.ShowInformation("Success", "SODIS form entries extracted successfully.", w)
+		}, w)
+
+		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
+		fileDialog.Resize(fyne.NewSize(800, 600))
+
+		if lastDir := fyne.CurrentApp().Preferences().String("lastSodisFormDir"); lastDir != "" {
+			if parsed, perr := storage.ParseURI(lastDir); perr == nil {
+				if listable, lerr := storage.ListerForURI(parsed); lerr == nil {
+					fileDialog.SetLocation(listable)
+				}
+			}
+		}
+
+		fileDialog.Show()
+	})
+
+	// --- Assemble bottom sections ---
+	bottomSection := container.NewVBox(
+		widget.NewSeparator(),
+		siteLocationSection,
+		widget.NewSeparator(),
+		asteroidSection,
+		widget.NewSeparator(),
+		fillSodisBtn,
+	)
+
+	content := container.NewBorder(nil, bottomSection, nil, nil, scrollable)
+
+	d := dialog.NewCustom("Process occelemnt file", "Close", content, w)
+	d.Resize(fyne.NewSize(840, 750))
+	d.Show()
+
+	// Focus the entry so the user can immediately paste
+	w.Canvas().Focus(pasteEntry)
 }
 
 func main() {
@@ -4098,7 +4382,10 @@ func main() {
 	btnOccultParams := widget.NewButton("Edit/Enter Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
 	})
-	buttons := container.NewHBox(btnIOTA, btnOccultParams)
+	btnProcessOccelemnt := widget.NewButton("Process occelemnt file", func() {
+		showProcessOccelemntDialog(w)
+	})
+	buttons := container.NewHBox(btnIOTA, btnOccultParams, btnProcessOccelemnt)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
