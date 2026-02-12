@@ -22,6 +22,8 @@ type Occultations struct {
 type Event struct {
 	Elements string `xml:"Elements"`
 	Star     string `xml:"Star"`
+	Object   string `xml:"Object"`
+	ObjectLC string `xml:"object"`
 }
 
 // -------------------- Utilities --------------------
@@ -400,7 +402,7 @@ func computeDXDYAtT0(xmlPath string, latDeg, lonDeg, altMeters float64) (*Result
 
 // -------------------- CLI --------------------
 
-func testCalcObserverDxDy(inFile string, lat, lon, alt float64) {
+func testCalcObserverDxDy(inFile string, lat, lon, alt float64) (vx, vy, timeShiftSeconds float64) {
 	res, err := computeDXDYAtT0(inFile, lat, lon, alt)
 	if err != nil {
 		fmt.Printf("error: %v\n", err)
@@ -412,13 +414,17 @@ func testCalcObserverDxDy(inFile string, lat, lon, alt float64) {
 	fmt.Printf("x_obs, y_obs (Earth radii): %.10f, %.10f\n", res.xObs, res.yObs)
 	fmt.Printf("dX, dY = (X0-x_obs, Y0-y_obs) [Earth radii]: %.10f, %.10f\n", res.dX, res.dY)
 
+	timeShiftHours := (res.dX*res.X1 + res.dY*res.Y1) / (res.X1*res.X1 + res.Y1*res.Y1)
+	timeShiftSeconds = timeShiftHours * 3600.0
+	fmt.Printf("time shift (secs): %0.6f\n", timeShiftSeconds)
+
 	// Helpful: convert dX and dY to km for intuition
-	const Re = 6378.137 // earth radius
+	const Re = 6378.137 // earth radius (km)
 
-	vx := res.X1 * Re / 86400.0
-	vy := res.Y1 * Re / 86400.0
+	vx = res.X1 * Re / 3600.0 // km/sec
+	vy = res.Y1 * Re / 3600.0 // km/sec
 
-	fmt.Printf("Shadow velocity (km/s): %.6f, %.6f\n", vx, vy)
+	fmt.Printf("Shadow velocity (km/sec): %.6f, %.6f\n", vx, vy)
 
 	//fmt.Printf("impact parameter b = sqrt(dX^2 + dY^2): %.10f Re  (%.3f km)\n",
 	//	math.Hypot(res.dX, res.dY), math.Hypot(res.dX, res.dY)*a)
@@ -427,4 +433,5 @@ func testCalcObserverDxDy(inFile string, lat, lon, alt float64) {
 	fmt.Println(" - This includes latitude/longitude/altitude via WGS-84 + Earth rotation (GMST).")
 	fmt.Println(" - It does NOT include UT1-UTC, polar motion, precession/nutation, or topocentric star aberration.")
 	fmt.Println("   For sub-10 ms work, you’ll want UT1 and a full IERS rotation model.")
+	return
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"embed"
+	"encoding/xml"
 	"fmt"
 	"image/color"
 	"image/png"
@@ -54,7 +55,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.10"
+const Version = "1.1.11"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -931,7 +932,74 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			}
 		}()
 
-		testCalcObserverDxDy(tmpPath, lat, lon, alt)
+		vx, vy, _ := testCalcObserverDxDy(tmpPath, lat, lon, alt)
+
+		// Parse <Object> or <object> for distance_au (index 6) and body diameter (index 3)
+		var occ Occultations
+		if xmlErr := xml.Unmarshal([]byte(xmlContent), &occ); xmlErr != nil {
+			dialog.ShowError(fmt.Errorf("failed to parse XML for Object: %v", xmlErr), w)
+			return
+		}
+		distanceAu := 0.0
+		bodyDiamKm := 0.0
+		titleStr := ""
+		if len(occ.Events) > 0 {
+			objectText := occ.Events[0].Object
+			if objectText == "" {
+				objectText = occ.Events[0].ObjectLC
+			}
+			if objectText != "" {
+				objFields := splitCSVLoose(objectText)
+				if len(objFields) > 4 {
+					if d, derr := strconv.ParseFloat(objFields[4], 64); derr == nil {
+						distanceAu = d
+					}
+				}
+				if len(objFields) > 3 {
+					if d, derr := strconv.ParseFloat(objFields[3], 64); derr == nil {
+						bodyDiamKm = d
+					}
+				}
+				if len(objFields) > 1 {
+					titleStr = fmt.Sprintf("(%s) %s", objFields[0], objFields[1])
+				}
+			}
+		}
+
+		// Build a parameters struct with the computed values
+		params := OccultationParameters{
+			Title:      titleStr,
+			DXKmPerSec: vx,
+			DYKmPerSec: vy,
+			DistanceAu: distanceAu,
+			MainBody: EllipseParams{
+				MajorAxisKm: bodyDiamKm,
+				MinorAxisKm: bodyDiamKm,
+			},
+		}
+
+		// Marshal to JSON5 and write to the from_occelemnt file
+		data, jerr := json5.Marshal(params)
+		if jerr != nil {
+			dialog.ShowError(fmt.Errorf("failed to encode parameters: %v", jerr), w)
+			return
+		}
+		var indented []byte
+		if ierr := json5.Indent(&indented, data, "", "  "); ierr != nil {
+			dialog.ShowError(fmt.Errorf("failed to format parameters: %v", ierr), w)
+			return
+		}
+
+		paramsPath := filepath.Join(appDir, "from_occelemnt")
+		if werr := os.WriteFile(paramsPath, indented, 0644); werr != nil {
+			dialog.ShowError(fmt.Errorf("failed to write parameters file: %v", werr), w)
+			return
+		}
+
+		// Set as the loaded parameters path and open the dialog
+		lastLoadedParamsPath = paramsPath
+		fyne.CurrentApp().Preferences().SetString("lastLoadedParamsPath", lastLoadedParamsPath)
+		showOccultationParametersDialog(w)
 	})
 
 	// --- Assemble bottom sections ---
