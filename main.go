@@ -54,8 +54,17 @@ var singlePointAnalysisMarkdown embed.FS
 //go:embed help_markdown/fitMarkdown.md
 var fitExplanationMarkdown embed.FS
 
+//go:embed help_markdown/occelemntOWC.md
+var occelemntButtonExplanation embed.FS
+
+//go:embed help_markdown/editOccParams.md
+var editOccParamsExplanation embed.FS
+
+//go:embed help_markdown/runIOTAdiffraction.md
+var runIOTAdiffractionExplanation embed.FS
+
 // Version information
-const Version = "1.1.13"
+const Version = "1.1.14"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1112,6 +1121,30 @@ func main() {
 				return
 			}
 			ShowMarkdownDialogWithImages("Fit explanation", string(content), &fitExplanationMarkdown, w)
+		}),
+		fyne.NewMenuItem("Process OWC occelemnt file", func() {
+			content, err := occelemntButtonExplanation.ReadFile("help_markdown/occelemntOWC.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load occelemntOWC.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Process OWC occelemnt file", string(content), &occelemntButtonExplanation, w)
+		}),
+		fyne.NewMenuItem("Edit/Enter Occ Params", func() {
+			content, err := editOccParamsExplanation.ReadFile("help_markdown/editOccParams.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load editOccParams.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Edit/Enter Occ Params", string(content), &editOccParamsExplanation, w)
+		}),
+		fyne.NewMenuItem("Run IOTAdiffraction", func() {
+			content, err := runIOTAdiffractionExplanation.ReadFile("help_markdown/runIOTAdiffraction.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load runIOTAdiffraction.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Run IOTAdiffraction", string(content), &runIOTAdiffractionExplanation, w)
 		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About GoPyOTE", func() {
