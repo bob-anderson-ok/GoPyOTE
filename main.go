@@ -55,7 +55,7 @@ var singlePointAnalysisMarkdown embed.FS
 var fitExplanationMarkdown embed.FS
 
 // Version information
-const Version = "1.1.12"
+const Version = "1.1.13"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -905,36 +905,13 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			}
 		}
 
-		// Write pasted XML to a temp file
-		tmpFile, err := os.CreateTemp("", "occelemnt-*.xml")
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to create temp file: %v", err), w)
+		vx, vy, calcErr := ShadowVelocityFromOWCEventKmPerSec(xmlContent, lat, lon, alt, 0.0, 0.0, 0.0)
+		if calcErr != nil {
+			dialog.ShowError(fmt.Errorf("calculation error: %v", calcErr), w)
 			return
 		}
-		tmpPath := tmpFile.Name()
-		if _, err := tmpFile.WriteString(xmlContent); err != nil {
-			if cerr := tmpFile.Close(); cerr != nil {
-				fmt.Printf("Warning: failed to close temp file: %v\n", cerr)
-			}
-			if rerr := os.Remove(tmpPath); rerr != nil {
-				fmt.Printf("Warning: failed to remove temp file: %v\n", rerr)
-			}
-			dialog.ShowError(fmt.Errorf("failed to write temp file: %v", err), w)
-			return
-		}
-		if err := tmpFile.Close(); err != nil {
-			dialog.ShowError(fmt.Errorf("failed to close temp file: %v", err), w)
-			return
-		}
-		defer func() {
-			if rerr := os.Remove(tmpPath); rerr != nil {
-				fmt.Printf("Warning: failed to remove temp file: %v\n", rerr)
-			}
-		}()
 
-		vx, vy, _ := testCalcObserverDxDy(tmpPath, lat, lon, alt)
-
-		// Parse <Object> or <object> for distance_au (index 6) and body diameter (index 3)
+		// Parse <Object> or <object> for distance_au (index 4) and body diameter (index 3)
 		var occ Occultations
 		if xmlErr := xml.Unmarshal([]byte(xmlContent), &occ); xmlErr != nil {
 			dialog.ShowError(fmt.Errorf("failed to parse XML for Object: %v", xmlErr), w)
@@ -949,7 +926,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 				objectText = occ.Events[0].ObjectLC
 			}
 			if objectText != "" {
-				objFields := splitCSVLoose(objectText)
+				objFields := splitCSVPreserveEmpty(objectText)
 				if len(objFields) > 4 {
 					if d, derr := strconv.ParseFloat(objFields[4], 64); derr == nil {
 						distanceAu = d
