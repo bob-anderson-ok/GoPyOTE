@@ -65,7 +65,7 @@ var editOccParamsExplanation embed.FS
 var runIOTAdiffractionExplanation embed.FS
 
 // Version information
-const Version = "1.1.15"
+const Version = "1.1.16"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1296,8 +1296,12 @@ func main() {
 	})
 	grayBgCheck.Checked = prefs.BoolWithFallback("grayPlotBackground", false)
 
+	// Checkbox for timestamp tick format (callback set later after lightCurvePlot is created)
+	timestampTicksCheck := widget.NewCheck("Use timestamp format to display time value", nil)
+	timestampTicksCheck.Checked = true
+
 	tab2Bg := makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
-	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck)))
+	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck)))
 	tab2 := container.NewTabItem("Settings", tab2Content)
 
 	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
@@ -1311,11 +1315,9 @@ func main() {
 	endFrameEntry.SetPlaceHolder("End Frame")
 	startFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), startFrameEntry)
 	endFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), endFrameEntry)
-	frameRangeRow := container.NewHBox(
-		widget.NewLabel("Start Frame:"),
-		startFrameContainer,
-		widget.NewLabel("End Frame:"),
-		endFrameContainer,
+	frameRangeRow := container.NewVBox(
+		container.NewHBox(widget.NewLabel("Start Frame:"), startFrameContainer),
+		container.NewHBox(widget.NewLabel("End Frame:"), endFrameContainer),
 	)
 
 	// Track the current x-axis label for click callback
@@ -1377,10 +1379,6 @@ func main() {
 
 	// Track if the user has manually set any bounds (don't reset on curve toggle)
 	userSetBounds := false
-
-	// Function to reset frame range (assigned later after entry boxes are defined)
-	// Returns true if the frame range was zoomed and got reset, false if already at original values
-	var resetFrameRange func() bool
 
 	// Update entries when plot bounds change
 	updateRangeEntries := func() {
@@ -1475,8 +1473,8 @@ func main() {
 	yMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMinEntry)
 	yMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMaxEntry)
 
-	// Checkbox for timestamp tick format
-	timestampTicksCheck := widget.NewCheck("use timestamps", func(checked bool) {
+	// Set the timestamp ticks callback now that lightCurvePlot and updateRangeEntries exist
+	timestampTicksCheck.OnChanged = func(checked bool) {
 		lightCurvePlot.SetUseTimestampTicks(checked)
 		// Update the entry box format to match the new mode
 		if len(lightCurvePlot.series) > 0 {
@@ -1487,8 +1485,7 @@ func main() {
 		} else {
 			logAction("Disabled timestamp tick format")
 		}
-	})
-	timestampTicksCheck.Checked = true
+	}
 	lightCurvePlot.SetUseTimestampTicks(true)
 
 	// Create a toolbar with X and Y range controls
@@ -1501,32 +1498,31 @@ func main() {
 		yMinContainer,
 		widget.NewLabel("Y Max:"),
 		yMaxContainer,
-		widget.NewButton("Reset", func() {
-			// Check if the frame range was zoomed and reset it
-			wasZoomed := false
-			if resetFrameRange != nil {
-				wasZoomed = resetFrameRange()
-			}
-			// Only reset X/Y bounds if the frame range was not zoomed
-			if !wasZoomed {
-				userSetBounds = false
-				lightCurvePlot.calculateBounds()
-				lightCurvePlot.Refresh()
-				// Clear entries if no curves selected, otherwise update with calculated bounds
-				if len(lightCurvePlot.series) == 0 {
-					xMinEntry.SetText("")
-					xMaxEntry.SetText("")
-					yMinEntry.SetText("")
-					yMaxEntry.SetText("")
-				} else {
-					updateRangeEntries()
-				}
-				logAction("Reset axis bounds to default")
-			} else {
-				logAction("Reset frame range to default")
-			}
+		widget.NewButton("Clear marked points", func() {
+			// Clear selected point 1
+			lightCurvePlot.selectedSeries = -1
+			lightCurvePlot.selectedIndex = -1
+			lightCurvePlot.selectedPointDataIndex = -1
+			lightCurvePlot.selectedSeriesName = ""
+			lightCurvePlot.SelectedPoint1Valid = false
+			lightCurvePlot.SelectedPoint1Frame = 0
+			lightCurvePlot.SelectedPoint1Value = 0
+
+			// Clear selected point 2
+			lightCurvePlot.selectedSeries2 = -1
+			lightCurvePlot.selectedIndex2 = -1
+			lightCurvePlot.selectedPointDataIndex2 = -1
+			lightCurvePlot.selectedSeriesName2 = ""
+			lightCurvePlot.SelectedPoint2Valid = false
+			lightCurvePlot.SelectedPoint2Frame = 0
+			lightCurvePlot.SelectedPoint2Value = 0
+
+			// Clear all selected pairs
+			lightCurvePlot.SelectedPairs = nil
+
+			lightCurvePlot.Refresh()
+			logAction("Cleared all marked points")
 		}),
-		timestampTicksCheck,
 	)
 
 	// Bottom section with frame range controls on the left and status label on the right
@@ -1908,24 +1904,6 @@ func main() {
 			rebuildPlot()
 			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 		}
-	}
-
-	// Assign the resetFrameRange function now that entry boxes are defined
-	// Returns true if the frame range was zoomed and got reset, false otherwise
-	resetFrameRange = func() bool {
-		if minFrameNum == 0 && maxFrameNum == 0 {
-			return false // No data loaded
-		}
-		// Check if currently zoomed (frame range differs from the original)
-		wasZoomed := frameRangeStart != minFrameNum || frameRangeEnd != maxFrameNum
-		if wasZoomed {
-			frameRangeStart = minFrameNum
-			frameRangeEnd = maxFrameNum
-			startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
-			endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
-			rebuildPlot()
-		}
-		return wasZoomed
 	}
 
 	// Set the occultation title on the main plot from the last diffraction run
