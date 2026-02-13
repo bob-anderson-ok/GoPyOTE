@@ -1,6 +1,6 @@
-# Process OWC occelemnt file
+# Process OWC occelmnt file
 
-The **Process OWC occelemnt file** button, located at the bottom of the main window, opens a dialog for computing observer-relative shadow velocities from an OWC (Occult Watcher Cloud) occelemnt XML file.
+The **Process OWC occelmnt file** button, located at the bottom of the main window, opens a dialog for computing observer-relative shadow velocities from an OWC (Occult Watcher Cloud) occelmnt XML file.
 
 ## 
 
@@ -12,7 +12,7 @@ The dialog contains the following sections from top to bottom:
 
 ### Paste Area
 
-A large multi-line text box where you paste the contents of an OWC occelemnt XML file using Ctrl+V. The text box is auto-focused when the dialog opens so you can paste immediately.
+A large multi-line text box where you paste the contents of an OWC occelmnt XML file using Ctrl+V. The text box is auto-focused when the dialog opens so you can paste immediately.
 
 ## 
 
@@ -47,7 +47,7 @@ Use negative degrees for West longitude and South latitude.
 
 ## Workflow
 
-1. **Paste the occelemnt XML** into the text box (Ctrl+V).
+1. **Paste the occelmnt XML** into the text box (Ctrl+V).
 
 2. **Enter your observer location.** Either type the coordinates manually, or click **Fill from SODIS form** to load them from a SODIS observation form.
 
@@ -58,7 +58,7 @@ Use negative degrees for West longitude and South latitude.
      - **Index 0, 1:** asteroid number and name, used to set the `title` field as `(number) name`
      - **Index 3:** body diameter in km, used to set `major_axis_km` and `minor_axis_km`
      - **Index 4:** distance in AU, used to set `distance_au`
-   - Create a parameters file named `from_occelemnt` in the application directory with:
+   - Create a parameters file named `from_occelmnt` in the application directory with:
      - `title` — from the asteroid number and name
      - `dX_km_per_sec` — computed vx
      - `dY_km_per_sec` — computed vy
@@ -67,14 +67,14 @@ Use negative degrees for West longitude and South latitude.
      - `fundamental_plane_width_num_points` — defaulted to 2000
      - `observation_wavelength_nm` — defaulted to 550
      - `main_body.major_axis_km` and `main_body.minor_axis_km` — body diameter
-   - Open the **Edit/Enter Occultation Parameters** dialog with the `from_occelemnt` file loaded, so you can review, adjust, and save the parameters before running IOTAdiffraction.
+   - Open the **Edit/Enter Occultation Parameters** dialog with the `from_occelmnt` file loaded, so you can review, adjust, and save the parameters before running IOTAdiffraction.
    
    ## 
 
 ## Notes
 
 - The calculation uses `dut1Seconds = 0`, `xpArcsec = 0`, and `ypArcsec = 0` by default. For sub-10 ms precision work, you would need actual UT1-UTC and polar motion values from the IERS.
-- The `from_occelemnt` file is overwritten each time you click Calculate. To preserve a set of parameters, use the Write button in the Parameters dialog to save to a named file.
+- The `from_occelmnt` file is overwritten each time you click Calculate. To preserve a set of parameters, use the Write button in the Parameters dialog to save to a named file.
 - The SODIS form directory preference is shared with the VizieR tab's "Load from SODIS form" button.
 
 ## 

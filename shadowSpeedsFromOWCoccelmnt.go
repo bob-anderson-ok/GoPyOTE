@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// ShadowVelocityFromOWCEventKmPerSec parses a single OWC-style occelemnt XML string
+// ShadowVelocityFromOWCEventKmPerSec parses a single OWC-style occelmnt XML string
 // and returns the relative shadow velocity (vx, vy) experienced by the observer
 // on the fundamental plane, in km/s.
 //
@@ -24,7 +24,7 @@ import (
 //	ypArcsec     – polar motion y (arcsec). If unused, pass 0.
 //
 // Assumptions:
-//   - dX, dY in occelemnt are Earth radii per hour
+//   - dX, dY in occelmnt are Earth radii per hour
 //   - RA in <Star> is hours
 //   - Dec in <Star> is degrees
 func ShadowVelocityFromOWCEventKmPerSec(
@@ -89,7 +89,7 @@ func ShadowVelocityFromOWCEventKmPerSec(
 
 	tUTC := time.Date(int(yearF), time.Month(int(monthF)), int(dayF), h, m, s, ns, time.UTC)
 
-	// ---------------- Shadow velocity from occelemnt (km/s) ----------------
+	// ---------------- Shadow velocity from occelmnt (km/s) ----------------
 	// dX,dY are Earth radii/hour
 	vshadowKms := earthRadiiPerHourToKmPerSec(pe.dX, pe.dY)
 
@@ -114,7 +114,7 @@ const (
 	omegaEarth = 7.2921150e-5 // rad/s (nominal)
 
 	// ReKm Earth radius is used by many occultation element sets (km).
-	// If your occelemnt elements assume a different Earth radius, change this constant.
+	// If your occelmnt elements assume a different Earth radius, change this constant.
 	ReKm = 6378.1366
 )
 
@@ -284,7 +284,7 @@ func projectToPlane(v Vec3, e1, e2 Vec3) (vx, vy float64) {
 	return Dot(v, e1), Dot(v, e2)
 }
 
-// --------------------- occelemnt parsing ---------------------
+// --------------------- occelmnt parsing ---------------------
 
 type Occultations struct {
 	XMLName xml.Name `xml:"Occultations"`

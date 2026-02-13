@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 
 	"GoPyOTE/lightcurve"
 
@@ -423,7 +424,7 @@ type mcTrialsResult struct {
 // runMonteCarloTrials runs numTrials Monte Carlo re-noise refits and computes
 // the mean and standard deviation of the edge times. Safe to call from a goroutine.
 // Candidates are the precomputed theoretical light curves from the fit search.
-func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noise []float64, numTrials int, onProgress func(float64)) (*mcTrialsResult, error) {
+func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noise []float64, numTrials int, abort *atomic.Bool, onProgress func(float64)) (*mcTrialsResult, error) {
 	if len(fr.sampledTimes) == 0 || len(fr.sampledVals) == 0 {
 		return nil, fmt.Errorf("no sampled theoretical curve available — run a fit first")
 	}
@@ -447,6 +448,10 @@ func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noise []
 	pathOffsets := make([]float64, 0, numTrials)
 
 	for trial := 0; trial < numTrials; trial++ {
+		if abort != nil && abort.Load() {
+			fmt.Printf("Monte Carlo aborted after %d trials\n", trial)
+			break
+		}
 		mcResult, err := runMonteCarloRefit(candidates, fr, noise)
 		if err != nil {
 			fmt.Printf("Monte Carlo trial %d failed: %v\n", trial+1, err)
@@ -489,8 +494,13 @@ func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noise []
 		}
 	}
 
+	completedTrials := len(pathOffsets)
+	if completedTrials == 0 {
+		return nil, fmt.Errorf("no Monte Carlo trials completed successfully")
+	}
+
 	return &mcTrialsResult{
-		numTrials:   numTrials,
+		numTrials:   completedTrials,
 		numEdges:    numEdges,
 		edgeMeans:   edgeMeans,
 		edgeStds:    edgeStds,
@@ -508,10 +518,15 @@ type fitSearchResult struct {
 
 // runFitSearch computes the NCC fit for a range of path perpendicular offsets.
 // It is safe to call from a goroutine. UI display is handled separately.
-func runFitSearch(params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int, onProgress func(float64)) (*fitSearchResult, error) {
+func runFitSearch(params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int, abort *atomic.Bool, onProgress func(float64)) (*fitSearchResult, error) {
 	results := make([]searchResult, 0, numSteps)
 
 	for step := 0; step < numSteps; step++ {
+		if abort != nil && abort.Load() {
+			fmt.Printf("Fit search aborted after %d of %d steps\n", step, numSteps)
+			break
+		}
+
 		var offset float64
 		if numSteps == 1 {
 			offset = initialOffset

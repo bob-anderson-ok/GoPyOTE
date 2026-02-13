@@ -8,6 +8,7 @@ require (
 	fyne.io/fyne/v2 v2.7.2
 	github.com/KevinWang15/go-json5 v0.0.0-20250617120459-0bb7d90bf15f
 	github.com/pconstantinou/savitzkygolay v0.0.1
+	github.com/xuri/excelize/v2 v2.10.0
 	gonum.org/v1/plot v0.16.0
 )
 
@@ -49,7 +50,6 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tiendc/go-deepcopy v1.7.1 // indirect
 	github.com/xuri/efp v0.0.1 // indirect
-	github.com/xuri/excelize/v2 v2.10.0 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	github.com/yuin/goldmark v1.7.8 // indirect
 	golang.org/x/crypto v0.43.0 // indirect

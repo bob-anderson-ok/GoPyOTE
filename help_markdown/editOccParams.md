@@ -1,6 +1,6 @@
 # Edit/Enter Occultation Parameters
 
-The **Edit/Enter Occultation Parameters** dialog is used to create and edit the JSON5 parameter files that drive the IOTAdiffraction external diffraction-image generator. It is opened by clicking the **Edit/Enter Occultation Parameters** button at the bottom of the main window, or automatically after computing shadow velocities from the **Process OWC occelemnt file** dialog.
+The **Edit/Enter Occultation Parameters** dialog is used to create and edit the JSON5 parameter files that drive the IOTAdiffraction external diffraction-image generator. It is opened by clicking the **Edit/Enter Occultation Parameters** button at the bottom of the main window, or automatically after computing shadow velocities from the **Process OWC occelmnt file** dialog.
 
 ## 
 
@@ -18,7 +18,7 @@ The **Edit/Enter Occultation Parameters** dialog is used to create and edit the 
 
 When the dialog opens, it automatically loads the most recently used parameters file (persisted across sessions). This means you can close and reopen the dialog without losing your last set of parameters.
 
-The **Process OWC occelemnt file** dialog also creates a parameters file (named `from_occelemnt`) and sets it as the auto-load target before opening this dialog, so computed values appear pre-filled.
+The **Process OWC occelmnt file** dialog also creates a parameters file (named `from_occelmnt`) and sets it as the auto-load target before opening this dialog, so computed values appear pre-filled.
 
 ## 
 

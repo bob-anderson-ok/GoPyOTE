@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"GoPyOTE/lightcurve"
@@ -54,8 +55,8 @@ var singlePointAnalysisMarkdown embed.FS
 //go:embed help_markdown/fitMarkdown.md
 var fitExplanationMarkdown embed.FS
 
-//go:embed help_markdown/occelemntOWC.md
-var occelemntButtonExplanation embed.FS
+//go:embed help_markdown/occelmntOWC.md
+var occelmntButtonExplanation embed.FS
 
 //go:embed help_markdown/editOccParams.md
 var editOccParamsExplanation embed.FS
@@ -64,7 +65,7 @@ var editOccParamsExplanation embed.FS
 var runIOTAdiffractionExplanation embed.FS
 
 // Version information
-const Version = "1.1.14"
+const Version = "1.1.15"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -626,7 +627,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 
 func showProcessOccelemntDialog(w fyne.Window) {
 	pasteEntry := widget.NewMultiLineEntry()
-	pasteEntry.SetPlaceHolder("Paste occelemnt file contents here (Ctrl+V)")
+	pasteEntry.SetPlaceHolder("Paste occelmnt file contents here (Ctrl+V)")
 	pasteEntry.Wrapping = fyne.TextWrapOff
 
 	scrollable := container.NewVScroll(pasteEntry)
@@ -892,7 +893,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 	calcDxDyBtn := widget.NewButton("Calculate observer dX dY", func() {
 		xmlContent := strings.TrimSpace(pasteEntry.Text)
 		if xmlContent == "" {
-			dialog.ShowError(fmt.Errorf("please paste occelemnt XML content first"), w)
+			dialog.ShowError(fmt.Errorf("please paste occelmnt XML content first"), w)
 			return
 		}
 		lat, err := strconv.ParseFloat(strings.TrimSpace(latDecimalEntry.Text), 64)
@@ -967,7 +968,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			},
 		}
 
-		// Marshal to JSON5 and write to the from_occelemnt file
+		// Marshal to JSON5 and write to the from_occelmnt file
 		data, jerr := json5.Marshal(params)
 		if jerr != nil {
 			dialog.ShowError(fmt.Errorf("failed to encode parameters: %v", jerr), w)
@@ -979,7 +980,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			return
 		}
 
-		paramsPath := filepath.Join(appDir, "from_occelemnt")
+		paramsPath := filepath.Join(appDir, "from_occelmnt")
 		if werr := os.WriteFile(paramsPath, indented, 0644); werr != nil {
 			dialog.ShowError(fmt.Errorf("failed to write parameters file: %v", werr), w)
 			return
@@ -1003,7 +1004,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 
 	content := container.NewBorder(nil, bottomSection, nil, nil, scrollable)
 
-	d := dialog.NewCustom("Process OWC occelemnt file", "Close", content, w)
+	d := dialog.NewCustom("Process OWC occelmnt file", "Close", content, w)
 	d.Resize(fyne.NewSize(840, 750))
 	d.Show()
 
@@ -1122,13 +1123,13 @@ func main() {
 			}
 			ShowMarkdownDialogWithImages("Fit explanation", string(content), &fitExplanationMarkdown, w)
 		}),
-		fyne.NewMenuItem("Process OWC occelemnt file", func() {
-			content, err := occelemntButtonExplanation.ReadFile("help_markdown/occelemntOWC.md")
+		fyne.NewMenuItem("Process OWC occelmnt file", func() {
+			content, err := occelmntButtonExplanation.ReadFile("help_markdown/occelmntOWC.md")
 			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load occelemntOWC.md: %w", err), w)
+				dialog.ShowError(fmt.Errorf("failed to load occelmntOWC.md: %w", err), w)
 				return
 			}
-			ShowMarkdownDialogWithImages("Process OWC occelemnt file", string(content), &occelemntButtonExplanation, w)
+			ShowMarkdownDialogWithImages("Process OWC occelmnt file", string(content), &occelmntButtonExplanation, w)
 		}),
 		fyne.NewMenuItem("Edit/Enter Occ Params", func() {
 			content, err := editOccParamsExplanation.ReadFile("help_markdown/editOccParams.md")
@@ -3896,6 +3897,16 @@ func main() {
 	fitProgressBar := widget.NewProgressBar()
 	fitProgressBar.Hide()
 
+	// Fit abort button
+	var fitAbortFlag atomic.Bool
+	var fitAbortBtn *widget.Button
+	fitAbortBtn = widget.NewButton("Abort", func() {
+		fitAbortFlag.Store(true)
+		fitAbortBtn.Disable()
+	})
+	fitAbortBtn.Importance = widget.DangerImportance
+	fitAbortBtn.Hide()
+
 	// Fit button - checks preconditions and reports readiness
 	var fitBtn *widget.Button
 	fitBtn = widget.NewButton("Fit", func() {
@@ -4017,14 +4028,18 @@ func main() {
 				fitProgressBar.SetValue(0)
 				fitProgressBar.Show()
 				fitBtn.Disable()
+				fitAbortFlag.Store(false)
+				fitAbortBtn.Show()
+				fitAbortBtn.Enable()
 				go func() {
-					fsr, err := runFitSearch(params, targetTimes, targetValues, initVal, finalVal, stepsVal, func(progress float64) {
+					fsr, err := runFitSearch(params, targetTimes, targetValues, initVal, finalVal, stepsVal, &fitAbortFlag, func(progress float64) {
 						fyne.Do(func() {
 							fitProgressBar.SetValue(progress)
 						})
 					})
 					fyne.Do(func() {
 						fitProgressBar.Hide()
+						fitAbortBtn.Hide()
 						fitBtn.Enable()
 						if err != nil {
 							dialog.ShowError(err, w)
@@ -4075,6 +4090,15 @@ func main() {
 	mcProgressBar := widget.NewProgressBar()
 	mcProgressBar.Hide()
 
+	var mcAbortFlag atomic.Bool
+	var mcAbortBtn *widget.Button
+	mcAbortBtn = widget.NewButton("Abort", func() {
+		mcAbortFlag.Store(true)
+		mcAbortBtn.Disable()
+	})
+	mcAbortBtn.Importance = widget.DangerImportance
+	mcAbortBtn.Hide()
+
 	var mcBtn *widget.Button
 	mcBtn = widget.NewButton("Run Monte Carlo", func() {
 		if lastFitResult == nil || lastFitParams == nil {
@@ -4097,14 +4121,18 @@ func main() {
 		mcProgressBar.SetValue(0)
 		mcProgressBar.Show()
 		mcBtn.Disable()
+		mcAbortFlag.Store(false)
+		mcAbortBtn.Show()
+		mcAbortBtn.Enable()
 		go func() {
-			result, err := runMonteCarloTrials(lastFitCandidates, lastFitResult, extractedNoise, numTrials, func(progress float64) {
+			result, err := runMonteCarloTrials(lastFitCandidates, lastFitResult, extractedNoise, numTrials, &mcAbortFlag, func(progress float64) {
 				fyne.Do(func() {
 					mcProgressBar.SetValue(progress)
 				})
 			})
 			fyne.Do(func() {
 				mcProgressBar.Hide()
+				mcAbortBtn.Hide()
 				mcBtn.Enable()
 				if err != nil {
 					dialog.ShowError(err, w)
@@ -4287,12 +4315,12 @@ func main() {
 		fitOffsetLabel,
 		fitOffsetEntry,
 		searchRangeCard,
-		fitBtn,
+		container.NewHBox(fitBtn, fitAbortBtn),
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
 		container.NewHBox(mcShowTrialsCheck, mcShowHistogramsCheck),
-		mcBtn,
+		container.NewHBox(mcBtn, mcAbortBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
 		fitStatusLabel,
@@ -4530,7 +4558,7 @@ func main() {
 	btnOccultParams := widget.NewButton("Edit/Enter Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
 	})
-	btnProcessOccelemnt := widget.NewButton("Process OWC occelemnt file", func() {
+	btnProcessOccelemnt := widget.NewButton("Process OWC occelmnt file", func() {
 		showProcessOccelemntDialog(w)
 	})
 	buttons := container.NewHBox(btnIOTA, btnOccultParams, btnProcessOccelemnt)
