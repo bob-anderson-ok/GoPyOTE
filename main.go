@@ -64,8 +64,11 @@ var editOccParamsExplanation embed.FS
 //go:embed help_markdown/runIOTAdiffraction.md
 var runIOTAdiffractionExplanation embed.FS
 
+//go:embed help_markdown/fresnelScaleResolution.md
+var fresnelScaleResolutionMarkdown embed.FS
+
 // Version information
-const Version = "1.1.18"
+const Version = "1.1.19"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1022,6 +1025,26 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			occelmntDialog.Hide()
 		}
 		showOccultationParametersDialog(w)
+
+		// Calculate and display Fresnel scale
+		wavelength := float64(params.ObservationWavelengthNm)
+		if wavelength == 0 {
+			wavelength = 550
+		}
+		if params.DistanceAu > 0 {
+			fresnelKm := FresnelScale(wavelength, params.DistanceAu)
+			fresnelM := fresnelKm * 1000
+			msg := fmt.Sprintf("Fresnel scale: %.4f km (%.1f m)\n\nWavelength: %.0f nm\nDistance: %.4f AU",
+				fresnelKm, fresnelM, wavelength, params.DistanceAu)
+			if params.FundamentalPlaneWidthKm > 0 && params.FundamentalPlaneWidthNumPoints > 0 {
+				samplesPerFresnel := int(float64(params.FundamentalPlaneWidthNumPoints) * fresnelKm / params.FundamentalPlaneWidthKm)
+				msg += fmt.Sprintf("\n\nSamples per Fresnel scale: %d", samplesPerFresnel)
+			}
+			msg += "\n\nIf your observation exhibits diffraction effects (sloped D and R transitions), " +
+				"you will need the Samples per Fresnel scale to be 5 or 6 at a minimum. " +
+				"See the Help Topics entry titled 'Fresnel scale resolution' for more information."
+			dialog.ShowInformation("Fresnel Scale", msg, w)
+		}
 	})
 
 	// --- Assemble bottom sections ---
@@ -1182,6 +1205,14 @@ func main() {
 				return
 			}
 			ShowMarkdownDialogWithImages("Run IOTAdiffraction", string(content), &runIOTAdiffractionExplanation, w)
+		}),
+		fyne.NewMenuItem("Fresnel scale resolution", func() {
+			content, err := fresnelScaleResolutionMarkdown.ReadFile("help_markdown/fresnelScaleResolution.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load fresnelScaleResolution.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Fresnel scale resolution", string(content), &fresnelScaleResolutionMarkdown, w)
 		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About GoPyOTE", func() {

@@ -429,6 +429,15 @@ func earthRadiiPerHourToKmPerSec(dxErph, dyErph float64) PlaneVel {
 	return PlaneVel{Vx: dxErph * scale, Vy: dyErph * scale}
 }
 
+// FresnelScale returns the Fresnel scale in km for the given observation wavelength (nm) and distance (AU).
+func FresnelScale(wavelengthNm, ZAu float64) float64 {
+	auToKm := 1.495979e+8 // Convert distance expressed in AU to km
+	nmToKm := 1e-9 * 1e-3 // Convert nm to km
+	wavelengthKm := wavelengthNm * nmToKm
+	ZKm := ZAu * auToKm
+	return math.Sqrt(wavelengthKm * ZKm / 2)
+}
+
 // Compute relative shadow velocity on the plane: vRel = vShadow - vObs (both on the same plane basis).
 func relativeShadowVelocityFromEvent(
 	tUTC time.Time,
