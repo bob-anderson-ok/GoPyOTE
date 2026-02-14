@@ -27,6 +27,7 @@ type LightCurvePlot struct {
 	onPointClicked    func(point PlotPoint)
 	onScroll          func(position fyne.Position, scrollDelta float32) // Callback for scroll events
 	onWarning         func(message string)                              // Callback for warnings
+	onSecondaryTapped func()                                            // Callback for right-click
 	selectedSeries    int
 	selectedIndex     int
 	selectedSeries2   int
@@ -331,6 +332,18 @@ func (p *LightCurvePlot) CreateRenderer() fyne.WidgetRenderer {
 // Tapped handles tap/click events
 func (p *LightCurvePlot) Tapped(ev *fyne.PointEvent) {
 	p.handleClick(ev.Position)
+}
+
+// TappedSecondary handles right-click events
+func (p *LightCurvePlot) TappedSecondary(_ *fyne.PointEvent) {
+	if p.onSecondaryTapped != nil {
+		p.onSecondaryTapped()
+	}
+}
+
+// SetOnSecondaryTapped sets the callback for right-click events
+func (p *LightCurvePlot) SetOnSecondaryTapped(fn func()) {
+	p.onSecondaryTapped = fn
 }
 
 // MouseDown handles mouse down events for desktop
@@ -884,7 +897,7 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		}
 	}
 
-	// Draw baseline horizontal line if enabled
+	// Draw the baseline horizontal line if enabled
 	if p.ShowBaselineLine {
 		baselinePts := make(plotter.XYs, 2)
 		baselinePts[0].X = p.minX

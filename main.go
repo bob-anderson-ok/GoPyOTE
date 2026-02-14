@@ -65,7 +65,7 @@ var editOccParamsExplanation embed.FS
 var runIOTAdiffractionExplanation embed.FS
 
 // Version information
-const Version = "1.1.16"
+const Version = "1.1.17"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1315,9 +1315,42 @@ func main() {
 	endFrameEntry.SetPlaceHolder("End Frame")
 	startFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), startFrameEntry)
 	endFrameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), endFrameEntry)
-	frameRangeRow := container.NewVBox(
-		container.NewHBox(widget.NewLabel("Start Frame:"), startFrameContainer),
-		container.NewHBox(widget.NewLabel("End Frame:"), endFrameContainer),
+
+	// Trim entry boxes
+	trimStartEntry := NewFocusLossEntry()
+	trimStartEntry.SetPlaceHolder("Trim start")
+	trimEndEntry := NewFocusLossEntry()
+	trimEndEntry.SetPlaceHolder("Trim end")
+	trimStartContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), trimStartEntry)
+	trimEndContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(120, 36)), trimEndEntry)
+
+	// Use a fixed-width label container so labels align vertically
+	labelWidth := fyne.NewSize(80, 36)
+
+	setTrimBtn := widget.NewButton("Set\ntrim", nil)
+	setTrimBtn.Importance = widget.HighImportance
+
+	trimStack := container.NewVBox(
+		container.NewHBox(container.New(layout.NewGridWrapLayout(labelWidth), widget.NewLabel("Trim start:")), trimStartContainer),
+		container.NewHBox(container.New(layout.NewGridWrapLayout(labelWidth), widget.NewLabel("Trim end:")), trimEndContainer),
+	)
+	applyTrimBtn := widget.NewButton("Apply trim", nil)
+	applyTrimBtn.Importance = widget.HighImportance
+	showAllBtn := widget.NewButton("Show all", nil)
+	showAllBtn.Importance = widget.HighImportance
+
+	trimStackWithBtn := container.NewHBox(
+		trimStack,
+		container.New(layout.NewGridWrapLayout(fyne.NewSize(76, 76)), setTrimBtn),
+		container.NewVBox(applyTrimBtn, showAllBtn),
+	)
+
+	frameRangeRow := container.NewHBox(
+		container.NewVBox(
+			container.NewHBox(container.New(layout.NewGridWrapLayout(labelWidth), widget.NewLabel("Start frame:")), startFrameContainer),
+			container.NewHBox(container.New(layout.NewGridWrapLayout(labelWidth), widget.NewLabel("End frame:")), endFrameContainer),
+		),
+		trimStackWithBtn,
 	)
 
 	// Track the current x-axis label for click callback
@@ -1521,6 +1554,7 @@ func main() {
 			lightCurvePlot.SelectedPairs = nil
 
 			lightCurvePlot.Refresh()
+			plotStatusLabel.SetText("Click on a point to see details")
 			logAction("Cleared all marked points")
 		}),
 	)
@@ -1906,6 +1940,109 @@ func main() {
 		}
 	}
 
+	// Set the Set trim button callback now that lightCurvePlot, frameRangeStart/End, and rebuildPlot exist
+	setTrimBtn.OnTapped = func() {
+		if !lightCurvePlot.SelectedPoint1Valid || !lightCurvePlot.SelectedPoint2Valid {
+			dialog.ShowError(fmt.Errorf("select exactly two points on the plot first"), w)
+			return
+		}
+		// Get frame numbers from loaded data using the data indices
+		idx1 := lightCurvePlot.selectedPointDataIndex
+		idx2 := lightCurvePlot.selectedPointDataIndex2
+		var frame1, frame2 float64
+		if loadedLightCurveData != nil && idx1 < len(loadedLightCurveData.FrameNumbers) {
+			frame1 = loadedLightCurveData.FrameNumbers[idx1]
+		} else {
+			frame1 = float64(idx1)
+		}
+		if loadedLightCurveData != nil && idx2 < len(loadedLightCurveData.FrameNumbers) {
+			frame2 = loadedLightCurveData.FrameNumbers[idx2]
+		} else {
+			frame2 = float64(idx2)
+		}
+		// Put the smaller frame in Trim start, larger in the Trim end
+		if frame1 > frame2 {
+			frame1, frame2 = frame2, frame1
+		}
+		trimStartEntry.SetText(fmt.Sprintf("%.0f", frame1))
+		trimEndEntry.SetText(fmt.Sprintf("%.0f", frame2))
+		startFrameEntry.SetText(fmt.Sprintf("%.0f", frame1))
+		endFrameEntry.SetText(fmt.Sprintf("%.0f", frame2))
+
+		// Update the plot display range
+		frameRangeStart = frame1
+		frameRangeEnd = frame2
+		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+		rebuildPlot()
+		lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+
+		// Clear selected points
+		lightCurvePlot.selectedSeries = -1
+		lightCurvePlot.selectedIndex = -1
+		lightCurvePlot.selectedPointDataIndex = -1
+		lightCurvePlot.selectedSeriesName = ""
+		lightCurvePlot.SelectedPoint1Valid = false
+		lightCurvePlot.SelectedPoint1Frame = 0
+		lightCurvePlot.SelectedPoint1Value = 0
+		lightCurvePlot.selectedSeries2 = -1
+		lightCurvePlot.selectedIndex2 = -1
+		lightCurvePlot.selectedPointDataIndex2 = -1
+		lightCurvePlot.selectedSeriesName2 = ""
+		lightCurvePlot.SelectedPoint2Valid = false
+		lightCurvePlot.SelectedPoint2Frame = 0
+		lightCurvePlot.SelectedPoint2Value = 0
+		lightCurvePlot.Refresh()
+		plotStatusLabel.SetText("Click on a point to see details")
+
+		logAction(fmt.Sprintf("Set trim range: %.0f to %.0f", frame1, frame2))
+	}
+
+	// Set the Apply trim button callback
+	applyTrimBtn.OnTapped = func() {
+		trimStartText := strings.TrimSpace(trimStartEntry.Text)
+		trimEndText := strings.TrimSpace(trimEndEntry.Text)
+		if trimStartText == "" || trimEndText == "" {
+			dialog.ShowError(fmt.Errorf("trim start and trim end values must be set first"), w)
+			return
+		}
+		startVal, err := strconv.ParseFloat(trimStartText, 64)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("invalid Trim start value: %v", err), w)
+			return
+		}
+		endVal, err := strconv.ParseFloat(trimEndText, 64)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("invalid Trim end value: %v", err), w)
+			return
+		}
+		frameRangeStart = startVal
+		frameRangeEnd = endVal
+		startFrameEntry.SetText(fmt.Sprintf("%.0f", startVal))
+		endFrameEntry.SetText(fmt.Sprintf("%.0f", endVal))
+		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+		rebuildPlot()
+		lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		logAction(fmt.Sprintf("Applied trim: %.0f to %.0f", startVal, endVal))
+	}
+
+	// Set the Show all button callback
+	showAllBtn.OnTapped = func() {
+		if minFrameNum == 0 && maxFrameNum == 0 {
+			return
+		}
+		frameRangeStart = minFrameNum
+		frameRangeEnd = maxFrameNum
+		startFrameEntry.SetText(fmt.Sprintf("%.0f", minFrameNum))
+		endFrameEntry.SetText(fmt.Sprintf("%.0f", maxFrameNum))
+		rebuildPlot()
+		logAction("Show all: reset frame range to full extent")
+	}
+
+	// Right-click on the plot shows all
+	lightCurvePlot.SetOnSecondaryTapped(func() {
+		showAllBtn.OnTapped()
+	})
+
 	// Set the occultation title on the main plot from the last diffraction run
 	lightCurvePlot.occultationTitle = lastDiffractionTitle
 
@@ -1914,7 +2051,8 @@ func main() {
 		dialog.ShowInformation("Warning", message, w)
 	})
 
-	// Set up scroll wheel zoom on the plot
+	// Set up scroll wheel zoom on the plot with a debounced re-draw
+	var scrollDebounceTimer *time.Timer
 	lightCurvePlot.SetOnScroll(func(position fyne.Position, scrollDelta float32) {
 		if loadedLightCurveData == nil || maxFrameNum == minFrameNum {
 			return
@@ -2015,11 +2153,18 @@ func main() {
 			startFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeStart))
 			endFrameEntry.SetText(fmt.Sprintf("%.0f", frameRangeEnd))
 
-			// Save Y bounds before rebuild to preserve Y axis scaling during zoom
-			savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
-			rebuildPlot()
-			// Restore Y bounds after rebuild
-			lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+			// Debounce: reset the timer on each scroll event so we only
+			// rebuild the plot once the scroll wheel has stopped.
+			if scrollDebounceTimer != nil {
+				scrollDebounceTimer.Stop()
+			}
+			scrollDebounceTimer = time.AfterFunc(150*time.Millisecond, func() {
+				fyne.Do(func() {
+					savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
+					rebuildPlot()
+					lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+				})
+			})
 		}
 	})
 
@@ -2187,8 +2332,7 @@ func main() {
 				toggleLightCurve(listIndexToColumnIndex[0])
 			}
 
-			plotStatusLabel.SetText(fmt.Sprintf("Loaded %d light curves (%d shown) with %d data points. Click to toggle display.",
-				len(data.Columns), len(displayedCurves), len(data.TimeValues)))
+			plotStatusLabel.SetText("Click on a point to see details")
 
 			// Clear VizieR fields, then populate from RAVF or ADV headers if applicable
 			vizierTab.ClearInputs()
