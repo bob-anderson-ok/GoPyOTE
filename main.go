@@ -65,7 +65,7 @@ var editOccParamsExplanation embed.FS
 var runIOTAdiffractionExplanation embed.FS
 
 // Version information
-const Version = "1.1.17"
+const Version = "1.1.18"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -440,7 +440,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 
 	// File open button
 	loadBtn := widget.NewButton("Browse", func() {
-		showFileOpenWithRecents(w, fyne.CurrentApp().Preferences(), "Select Parameters File", nil, func(reader fyne.URIReadCloser, err error) {
+		showFileOpenWithRecents(w, fyne.CurrentApp().Preferences(), "Select Parameters File", storage.NewExtensionFileFilter([]string{".occparams"}), func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -534,6 +534,20 @@ func showOccultationParametersDialog(w fyne.Window) {
 				}
 			}()
 
+			// Enforce .occparams extension
+			savePath := writer.URI().Path()
+			ext := filepath.Ext(savePath)
+			if strings.ToLower(ext) != ".occparams" {
+				savePath = strings.TrimSuffix(savePath, ext) + ".occparams"
+			}
+
+			// Reject writing to the auto-generated from_occelmnt file
+			baseName := filepath.Base(savePath)
+			if baseName == "from_occelmnt" || baseName == "from_occelmnt.occparams" {
+				dialog.ShowError(fmt.Errorf("cannot overwrite the auto-generated 'from_occelmnt' file — please choose a different name"), w)
+				return
+			}
+
 			// Build parameters struct from entry fields
 			params := OccultationParameters{
 				WindowSizePixels:               parseInt(windowSizeEntry.Text),
@@ -584,13 +598,13 @@ func showOccultationParametersDialog(w fyne.Window) {
 			}
 			data = indented
 
-			// Write to the file
-			if _, err := writer.Write(data); err != nil {
-				dialog.ShowError(fmt.Errorf("failed to write file: %w", err), w)
+			// Write to the file with the enforced extension
+			if werr := os.WriteFile(savePath, data, 0644); werr != nil {
+				dialog.ShowError(fmt.Errorf("failed to write file: %w", werr), w)
 				return
 			}
 
-			logAction(fmt.Sprintf("Saved parameters file: %s", writer.URI().Path()))
+			logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
 
 			// Re-snapshot so saved state is considered clean
 			for i, e := range allEntries {
@@ -600,8 +614,8 @@ func showOccultationParametersDialog(w fyne.Window) {
 			// Close the parameters dialog after a successful save
 			customDialog.Hide()
 		}, w)
-		fileDialog.SetFilter(nil) // Allow all files or set a specific filter
-		if loadedFileName != "" {
+		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
+		if loadedFileName != "" && loadedFileName != "from_occelmnt" {
 			fileDialog.SetFileName(loadedFileName)
 		}
 		// Set the starting directory to the directory of the last loaded parameters file
@@ -769,21 +783,8 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		container.NewHBox(widget.NewLabel("Altitude (m):"), altitudeContainer),
 	)
 
-	// --- Asteroid section ---
-	asteroidNumberEntry := widget.NewEntry()
-	asteroidNumberEntry.SetPlaceHolder("number")
-	asteroidNameEntry := widget.NewEntry()
-	asteroidNameEntry.SetPlaceHolder("name")
-	asteroidNumberContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(80, 36)), asteroidNumberEntry)
-	asteroidNameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), asteroidNameEntry)
-
-	asteroidSection := container.NewVBox(
-		widget.NewLabel("Asteroid:"),
-		container.NewHBox(widget.NewLabel("Number:"), asteroidNumberContainer, widget.NewLabel("Name:"), asteroidNameContainer),
-	)
-
-	// --- Fill from SODIS form button ---
-	fillSodisBtn := widget.NewButton("Fill from SODIS form", func() {
+	// --- Load site file button ---
+	loadSiteBtn := widget.NewButton("Load site file", func() {
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -800,18 +801,18 @@ func showProcessOccelemntDialog(w fyne.Window) {
 
 			// Save the parent directory URI for next time
 			if parentURI, perr := storage.Parent(selectedURI); perr == nil {
-				fyne.CurrentApp().Preferences().SetString("lastSodisFormDir", parentURI.String())
+				fyne.CurrentApp().Preferences().SetString("lastSiteFileDir", parentURI.String())
 			}
 
-			// Parse the SODIS form and fill the entry fields
+			// Parse the site file and fill the entry fields
 			file, ferr := os.Open(filePath)
 			if ferr != nil {
-				dialog.ShowError(fmt.Errorf("error opening SODIS form: %w", ferr), w)
+				dialog.ShowError(fmt.Errorf("error opening site file: %w", ferr), w)
 				return
 			}
 			defer func() {
 				if cerr := file.Close(); cerr != nil {
-					dialog.ShowError(fmt.Errorf("error closing SODIS form file: %w", cerr), w)
+					dialog.ShowError(fmt.Errorf("error closing site file: %w", cerr), w)
 				}
 			}()
 
@@ -819,66 +820,37 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			for scanner.Scan() {
 				line := scanner.Text()
 
-				if strings.HasPrefix(line, "#Longitude:") {
-					value := strings.TrimSpace(strings.TrimPrefix(line, "#Longitude:"))
-					parts := strings.Fields(value)
-					if len(parts) >= 3 {
-						longDegEntry.SetText(parts[0])
-						longMinEntry.SetText(parts[1])
-						longSecsEntry.SetText(parts[2])
-					}
+				if strings.HasPrefix(line, "latitude_decimal:") {
+					value := strings.TrimSpace(strings.TrimPrefix(line, "latitude_decimal:"))
+					latDecimalEntry.SetText(value)
 					continue
 				}
 
-				if strings.HasPrefix(line, "#Latitude:") {
-					value := strings.TrimSpace(strings.TrimPrefix(line, "#Latitude:"))
-					parts := strings.Fields(value)
-					if len(parts) >= 3 {
-						latDegEntry.SetText(parts[0])
-						latMinEntry.SetText(parts[1])
-						latSecsEntry.SetText(parts[2])
-					}
+				if strings.HasPrefix(line, "longitude_decimal:") {
+					value := strings.TrimSpace(strings.TrimPrefix(line, "longitude_decimal:"))
+					longDecimalEntry.SetText(value)
 					continue
 				}
 
-				if strings.HasPrefix(line, "#Altitude:") {
-					value := strings.TrimSpace(strings.TrimPrefix(line, "#Altitude:"))
-					if altVal, aerr := strconv.ParseFloat(value, 64); aerr == nil {
-						altitudeEntry.SetText(fmt.Sprintf("%.0f", altVal))
-					}
-					continue
-				}
-
-				if strings.HasPrefix(line, "#ASTEROID:") {
-					value := strings.TrimSpace(strings.TrimPrefix(line, "#ASTEROID:"))
-					asteroidNameEntry.SetText(value)
-					continue
-				}
-
-				if strings.HasPrefix(line, "#Nr") {
-					value := strings.TrimPrefix(line, "#Nr")
-					value = strings.TrimLeft(value, ".: \t")
-					value = strings.TrimSpace(value)
-					if value != "" {
-						asteroidNumberEntry.SetText(value)
-					}
+				if strings.HasPrefix(line, "altitude:") {
+					value := strings.TrimSpace(strings.TrimPrefix(line, "altitude:"))
+					altitudeEntry.SetText(value)
 					continue
 				}
 			}
 
 			if serr := scanner.Err(); serr != nil {
-				dialog.ShowError(fmt.Errorf("error reading SODIS form: %w", serr), w)
+				dialog.ShowError(fmt.Errorf("error reading site file: %w", serr), w)
 				return
 			}
 
-			logAction(fmt.Sprintf("Occelemnt dialog: SODIS form loaded: %s", filePath))
-			dialog.ShowInformation("Success", "SODIS form entries extracted successfully.", w)
+			logAction(fmt.Sprintf("Site file loaded: %s", filePath))
 		}, w)
 
-		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
+		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".site"}))
 		fileDialog.Resize(fyne.NewSize(800, 600))
 
-		if lastDir := fyne.CurrentApp().Preferences().String("lastSodisFormDir"); lastDir != "" {
+		if lastDir := fyne.CurrentApp().Preferences().String("lastSiteFileDir"); lastDir != "" {
 			if parsed, perr := storage.ParseURI(lastDir); perr == nil {
 				if listable, lerr := storage.ListerForURI(parsed); lerr == nil {
 					fileDialog.SetLocation(listable)
@@ -889,8 +861,64 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		fileDialog.Show()
 	})
 
+	// --- Write site file button ---
+	writeSiteBtn := widget.NewButton("Write site file", func() {
+		saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if writer == nil {
+				return // User cancelled
+			}
+			defer func() {
+				if cerr := writer.Close(); cerr != nil {
+					dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+				}
+			}()
+
+			// Save the parent directory URI for next time
+			if parentURI, perr := storage.Parent(writer.URI()); perr == nil {
+				fyne.CurrentApp().Preferences().SetString("lastSiteFileDir", parentURI.String())
+			}
+
+			// Enforce .site extension
+			filePath := writer.URI().Path()
+			ext := filepath.Ext(filePath)
+			if strings.ToLower(ext) != ".site" {
+				filePath = strings.TrimSuffix(filePath, ext) + ".site"
+			}
+
+			content := fmt.Sprintf("latitude_decimal: %s\nlongitude_decimal: %s\naltitude: %s\n",
+				strings.TrimSpace(latDecimalEntry.Text),
+				strings.TrimSpace(longDecimalEntry.Text),
+				strings.TrimSpace(altitudeEntry.Text),
+			)
+
+			if werr := os.WriteFile(filePath, []byte(content), 0644); werr != nil {
+				dialog.ShowError(fmt.Errorf("failed to write site file: %w", werr), w)
+				return
+			}
+			logAction(fmt.Sprintf("Site file written: %s", filePath))
+		}, w)
+
+		saveDialog.SetFileName("observer.site")
+		saveDialog.Resize(fyne.NewSize(800, 600))
+
+		if lastDir := fyne.CurrentApp().Preferences().String("lastSiteFileDir"); lastDir != "" {
+			if parsed, perr := storage.ParseURI(lastDir); perr == nil {
+				if listable, lerr := storage.ListerForURI(parsed); lerr == nil {
+					saveDialog.SetLocation(listable)
+				}
+			}
+		}
+
+		saveDialog.Show()
+	})
+
 	// --- Calculate observer dX dY button ---
-	calcDxDyBtn := widget.NewButton("Calculate observer dX dY", func() {
+	var occelmntDialog dialog.Dialog
+	calcDxDyBtn := widget.NewButton("Calculate observer dX dY (closes dialog)", func() {
 		xmlContent := strings.TrimSpace(pasteEntry.Text)
 		if xmlContent == "" {
 			dialog.ShowError(fmt.Errorf("please paste occelmnt XML content first"), w)
@@ -956,6 +984,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		// Build a parameters struct with the computed values
 		params := OccultationParameters{
 			Title:                          titleStr,
+			WindowSizePixels:               600,
 			FundamentalPlaneWidthKm:        math.Ceil(3 * bodyDiamKm),
 			FundamentalPlaneWidthNumPoints: 2000,
 			DXKmPerSec:                     vx,
@@ -986,9 +1015,12 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			return
 		}
 
-		// Set as the loaded parameters path and open the dialog
+		// Set as the loaded parameters path, close this dialog, and open the parameters dialog
 		lastLoadedParamsPath = paramsPath
 		fyne.CurrentApp().Preferences().SetString("lastLoadedParamsPath", lastLoadedParamsPath)
+		if occelmntDialog != nil {
+			occelmntDialog.Hide()
+		}
 		showOccultationParametersDialog(w)
 	})
 
@@ -997,16 +1029,20 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		widget.NewSeparator(),
 		siteLocationSection,
 		widget.NewSeparator(),
-		asteroidSection,
+		container.NewHBox(loadSiteBtn, writeSiteBtn, calcDxDyBtn),
 		widget.NewSeparator(),
-		container.NewHBox(fillSodisBtn, calcDxDyBtn),
+		widget.NewButton("Cancel", func() {
+			if occelmntDialog != nil {
+				occelmntDialog.Hide()
+			}
+		}),
 	)
 
 	content := container.NewBorder(nil, bottomSection, nil, nil, scrollable)
 
-	d := dialog.NewCustom("Process OWC occelmnt file", "Close", content, w)
-	d.Resize(fyne.NewSize(840, 750))
-	d.Show()
+	occelmntDialog = dialog.NewCustomWithoutButtons("Process OWC occelmnt file", content, w)
+	occelmntDialog.Resize(fyne.NewSize(840, 750))
+	occelmntDialog.Show()
 
 	// Focus the entry so the user can immediately paste
 	w.Canvas().Focus(pasteEntry)
