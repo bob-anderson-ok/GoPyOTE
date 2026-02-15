@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image/color"
 	"image/png"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -68,7 +69,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.20"
+const Version = "1.1.21"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -657,6 +658,42 @@ func showProcessOccelemntDialog(w fyne.Window) {
 	pasteEntry.SetPlaceHolder("Paste occelmnt file contents here (Ctrl+V)")
 	pasteEntry.Wrapping = fyne.TextWrapOff
 
+	// --- Load occelmnt file button ---
+	loadOccelmntBtn := widget.NewButton("Load occelmnt file", func() {
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if reader == nil {
+				return // User cancelled
+			}
+			defer func() {
+				if cerr := reader.Close(); cerr != nil {
+					dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+				}
+			}()
+			data, rerr := io.ReadAll(reader)
+			if rerr != nil {
+				dialog.ShowError(fmt.Errorf("failed to read occelmnt file: %w", rerr), w)
+				return
+			}
+			pasteEntry.SetText(string(data))
+			logAction(fmt.Sprintf("Loaded occelmnt file: %s", reader.URI().Path()))
+		}, w)
+		occelmntDir := filepath.Join(appDir, "OCCELMNT-FOLDER")
+		if merr := os.MkdirAll(occelmntDir, 0755); merr != nil {
+			dialog.ShowError(fmt.Errorf("failed to create OCCELMNT-FOLDER directory: %w", merr), w)
+			return
+		}
+		folderURI := storage.NewFileURI(occelmntDir)
+		if listableURI, lerr := storage.ListerForURI(folderURI); lerr == nil {
+			fileDialog.SetLocation(listableURI)
+		}
+		fileDialog.Resize(fyne.NewSize(800, 600))
+		fileDialog.Show()
+	})
+
 	scrollable := container.NewVScroll(pasteEntry)
 	scrollable.SetMinSize(fyne.NewSize(800, 400))
 
@@ -1072,7 +1109,8 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		}),
 	)
 
-	content := container.NewBorder(nil, bottomSection, nil, nil, scrollable)
+	pasteSection := container.NewBorder(loadOccelmntBtn, nil, nil, nil, scrollable)
+	content := container.NewBorder(nil, bottomSection, nil, nil, pasteSection)
 
 	occelmntDialog = dialog.NewCustomWithoutButtons("Process OWC occelmnt file", content, w)
 	occelmntDialog.Resize(fyne.NewSize(840, 750))
