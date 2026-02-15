@@ -15,6 +15,8 @@ import (
 
 	"GoPyOTE/lightcurve"
 
+	"github.com/KevinWang15/go-json5"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
@@ -324,6 +326,30 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 			duration := math.Abs((fr.edgeTimes[1] + fr.bestShift) - (fr.edgeTimes[0] + fr.bestShift))
 			msg += fmt.Sprintf("\nEvent duration: %.4f sec\n", duration)
 		}
+
+		// Count samples between event edges and find the minimum theoretical value
+		if len(fr.edgeTimes) == 2 && len(fr.sampledTimes) > 0 {
+			edge1Abs := fr.edgeTimes[0] + fr.bestShift
+			edge2Abs := fr.edgeTimes[1] + fr.bestShift
+			if edge1Abs > edge2Abs {
+				edge1Abs, edge2Abs = edge2Abs, edge1Abs
+			}
+			sampleCount := 0
+			minTheoretical := math.MaxFloat64
+			for i, t := range fr.sampledTimes {
+				if t >= edge1Abs && t <= edge2Abs {
+					sampleCount++
+					if fr.sampledVals[i] < minTheoretical {
+						minTheoretical = fr.sampledVals[i]
+					}
+				}
+			}
+			msg += fmt.Sprintf("\nSamples between event edges: %d\n", sampleCount)
+			if sampleCount > 0 {
+				msg += fmt.Sprintf("Minimum theoretical value at event: %.4f\n", minTheoretical)
+			}
+		}
+
 		fmt.Print(msg)
 
 		// Log fit results
@@ -335,6 +361,27 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 			duration := math.Abs((fr.edgeTimes[1] + fr.bestShift) - (fr.edgeTimes[0] + fr.bestShift))
 			logAction(fmt.Sprintf("  Event duration: %.4f sec", duration))
 		}
+		if len(fr.edgeTimes) == 2 && len(fr.sampledTimes) > 0 {
+			edge1Abs := fr.edgeTimes[0] + fr.bestShift
+			edge2Abs := fr.edgeTimes[1] + fr.bestShift
+			if edge1Abs > edge2Abs {
+				edge1Abs, edge2Abs = edge2Abs, edge1Abs
+			}
+			sampleCount := 0
+			minTheoretical := math.MaxFloat64
+			for i, t := range fr.sampledTimes {
+				if t >= edge1Abs && t <= edge2Abs {
+					sampleCount++
+					if fr.sampledVals[i] < minTheoretical {
+						minTheoretical = fr.sampledVals[i]
+					}
+				}
+			}
+			logAction(fmt.Sprintf("  Samples between event edges: %d", sampleCount))
+			if sampleCount > 0 {
+				logAction(fmt.Sprintf("  Minimum theoretical value at event: %.4f", minTheoretical))
+			}
+		}
 
 		edgeLabel := widget.NewLabel(msg)
 		edgeLabel.Wrapping = fyne.TextWrapWord
@@ -342,6 +389,26 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 		spacer.SetMinSize(fyne.NewSize(750, 0))
 		edgeContainer := container.NewVBox(spacer, edgeLabel)
 		dialog.ShowCustom("Fit Edge Times", "OK", edgeContainer, w)
+	}
+
+	// Write the occultation parameters to the results folder
+	if resultsFolder != "" {
+		data, err := json5.Marshal(params)
+		if err != nil {
+			fmt.Printf("Warning: could not marshal parameters: %v\n", err)
+		} else {
+			var indented []byte
+			if err := json5.Indent(&indented, data, "", "  "); err != nil {
+				fmt.Printf("Warning: could not format parameters: %v\n", err)
+			} else {
+				savePath := filepath.Join(resultsFolder, "occultation_parameters.occparams")
+				if err := os.WriteFile(savePath, indented, 0644); err != nil {
+					fmt.Printf("Warning: could not write parameters to results folder: %v\n", err)
+				} else {
+					logAction(fmt.Sprintf("Occultation parameters written to: %s", savePath))
+				}
+			}
+		}
 	}
 
 	return nil
@@ -1073,13 +1140,15 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 		return nil, fmt.Errorf("failed to encode overlay PNG: %w", err)
 	}
 
-	// Save to fitPlot.png in the results folder
-	fitPlotPath := filepath.Join(appDir, "fitPlot.png")
-	if resultsFolder != "" {
-		fitPlotPath = filepath.Join(resultsFolder, "fitPlot.png")
-	}
-	if err := os.WriteFile(fitPlotPath, buf.Bytes(), 0644); err != nil {
-		fmt.Printf("Warning: could not save fitPlot.png: %v\n", err)
+	// Save to fitPlot.png in the results folder (only for the initial fit, not Monte Carlo)
+	if edgeStds == nil {
+		fitPlotPath := filepath.Join(appDir, "fitPlot.png")
+		if resultsFolder != "" {
+			fitPlotPath = filepath.Join(resultsFolder, "fitPlot.png")
+		}
+		if err := os.WriteFile(fitPlotPath, buf.Bytes(), 0644); err != nil {
+			fmt.Printf("Warning: could not save fitPlot.png: %v\n", err)
+		}
 	}
 
 	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))

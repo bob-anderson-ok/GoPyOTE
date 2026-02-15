@@ -68,7 +68,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.19"
+const Version = "1.1.20"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -381,7 +381,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 		&widget.FormItem{Text: "Fund. Plane Width (pts)", Widget: wrapEntry(fundamentalPlaneWidthNumPointsEntry)},
 		&widget.FormItem{Text: "Parallax (arcsec)", Widget: wrapEntry(parallaxArcsecEntry)},
 		&widget.FormItem{Text: "Distance (AU)", Widget: wrapEntry(distanceAuEntry)},
-		&widget.FormItem{Text: "Path to QE Table File", Widget: wrapEntry(pathToQeTableFileEntry)},
+		&widget.FormItem{Text: "Name of camera QE file", Widget: wrapEntry(pathToQeTableFileEntry)},
 		&widget.FormItem{Text: "Obs. Wavelength (nm)", Widget: wrapEntry(observationWavelengthNmEntry)},
 		&widget.FormItem{Text: "dX (km/sec)", Widget: wrapEntry(dXKmPerSecEntry)},
 		&widget.FormItem{Text: "dY (km/sec)", Widget: wrapEntry(dYKmPerSecEntry)},
@@ -531,17 +531,25 @@ func showOccultationParametersDialog(w fyne.Window) {
 			if writer == nil {
 				return // User cancelled
 			}
-			defer func() {
-				if cerr := writer.Close(); cerr != nil {
-					dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
-				}
-			}()
 
 			// Enforce .occparams extension
-			savePath := writer.URI().Path()
+			originalSavePath := writer.URI().Path()
+			savePath := originalSavePath
 			ext := filepath.Ext(savePath)
 			if strings.ToLower(ext) != ".occparams" {
 				savePath = strings.TrimSuffix(savePath, ext) + ".occparams"
+			}
+
+			// Close the writer first so the file handle is released
+			if cerr := writer.Close(); cerr != nil {
+				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+			}
+
+			// Remove the empty file created by the save dialog if the path changed
+			if savePath != originalSavePath {
+				if rerr := os.Remove(originalSavePath); rerr != nil {
+					fmt.Printf("Warning: could not remove empty file %s: %v\n", originalSavePath, rerr)
+				}
 			}
 
 			// Reject writing to the auto-generated from_occelmnt file
@@ -621,13 +629,15 @@ func showOccultationParametersDialog(w fyne.Window) {
 		if loadedFileName != "" && loadedFileName != "from_occelmnt" {
 			fileDialog.SetFileName(loadedFileName)
 		}
-		// Set the starting directory to the directory of the last loaded parameters file
-		if lastLoadedParamsPath != "" {
-			folderURI := storage.NewFileURI(filepath.Dir(lastLoadedParamsPath))
-			listableURI, locErr := storage.ListerForURI(folderURI)
-			if locErr == nil {
-				fileDialog.SetLocation(listableURI)
-			}
+		// Always save to the OCCULTATION-PARAMETERS directory, creating it if needed
+		occParamsDir := filepath.Join(appDir, "OCCULTATION-PARAMETERS")
+		if merr := os.MkdirAll(occParamsDir, 0755); merr != nil {
+			dialog.ShowError(fmt.Errorf("failed to create OCCULTATION-PARAMETERS directory: %w", merr), w)
+			return
+		}
+		folderURI := storage.NewFileURI(occParamsDir)
+		if listableURI, locErr := storage.ListerForURI(folderURI); locErr == nil {
+			fileDialog.SetLocation(listableURI)
 		}
 		fileDialog.Resize(fyne.NewSize(1200, 800))
 		fileDialog.Show()
@@ -796,15 +806,9 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			if reader == nil {
 				return // User cancelled
 			}
-			selectedURI := reader.URI()
-			filePath := selectedURI.Path()
+			filePath := reader.URI().Path()
 			if cerr := reader.Close(); cerr != nil {
 				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
-			}
-
-			// Save the parent directory URI for next time
-			if parentURI, perr := storage.Parent(selectedURI); perr == nil {
-				fyne.CurrentApp().Preferences().SetString("lastSiteFileDir", parentURI.String())
 			}
 
 			// Parse the site file and fill the entry fields
@@ -853,12 +857,14 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".site"}))
 		fileDialog.Resize(fyne.NewSize(800, 600))
 
-		if lastDir := fyne.CurrentApp().Preferences().String("lastSiteFileDir"); lastDir != "" {
-			if parsed, perr := storage.ParseURI(lastDir); perr == nil {
-				if listable, lerr := storage.ListerForURI(parsed); lerr == nil {
-					fileDialog.SetLocation(listable)
-				}
-			}
+		siteDir := filepath.Join(appDir, "SITE-FILES")
+		if merr := os.MkdirAll(siteDir, 0755); merr != nil {
+			dialog.ShowError(fmt.Errorf("failed to create SITE-FILES directory: %w", merr), w)
+			return
+		}
+		folderURI := storage.NewFileURI(siteDir)
+		if listableURI, lerr := storage.ListerForURI(folderURI); lerr == nil {
+			fileDialog.SetLocation(listableURI)
 		}
 
 		fileDialog.Show()
@@ -874,22 +880,25 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			if writer == nil {
 				return // User cancelled
 			}
-			defer func() {
-				if cerr := writer.Close(); cerr != nil {
-					dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
-				}
-			}()
-
-			// Save the parent directory URI for next time
-			if parentURI, perr := storage.Parent(writer.URI()); perr == nil {
-				fyne.CurrentApp().Preferences().SetString("lastSiteFileDir", parentURI.String())
-			}
 
 			// Enforce .site extension
-			filePath := writer.URI().Path()
+			originalPath := writer.URI().Path()
+			filePath := originalPath
 			ext := filepath.Ext(filePath)
 			if strings.ToLower(ext) != ".site" {
 				filePath = strings.TrimSuffix(filePath, ext) + ".site"
+			}
+
+			// Close the writer first so the file handle is released
+			if cerr := writer.Close(); cerr != nil {
+				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+			}
+
+			// Remove the empty file created by the save dialog if the path changed
+			if filePath != originalPath {
+				if rerr := os.Remove(originalPath); rerr != nil {
+					fmt.Printf("Warning: could not remove empty file %s: %v\n", originalPath, rerr)
+				}
 			}
 
 			content := fmt.Sprintf("latitude_decimal: %s\nlongitude_decimal: %s\naltitude: %s\n",
@@ -905,15 +914,17 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			logAction(fmt.Sprintf("Site file written: %s", filePath))
 		}, w)
 
-		saveDialog.SetFileName("observer.site")
+		saveDialog.SetFileName("")
 		saveDialog.Resize(fyne.NewSize(800, 600))
 
-		if lastDir := fyne.CurrentApp().Preferences().String("lastSiteFileDir"); lastDir != "" {
-			if parsed, perr := storage.ParseURI(lastDir); perr == nil {
-				if listable, lerr := storage.ListerForURI(parsed); lerr == nil {
-					saveDialog.SetLocation(listable)
-				}
-			}
+		siteDir := filepath.Join(appDir, "SITE-FILES")
+		if merr := os.MkdirAll(siteDir, 0755); merr != nil {
+			dialog.ShowError(fmt.Errorf("failed to create SITE-FILES directory: %w", merr), w)
+			return
+		}
+		folderURI := storage.NewFileURI(siteDir)
+		if listableURI, lerr := storage.ListerForURI(folderURI); lerr == nil {
+			saveDialog.SetLocation(listableURI)
 		}
 
 		saveDialog.Show()
@@ -4620,6 +4631,34 @@ func main() {
 
 	// Helper function to run IOTAdiffraction with a given parameter file
 	runIOTAdiffraction := func(paramFilePath string) {
+		// If the parameters file has a non-empty path_to_qe_table_file, prefix it with CAMERA-QE/
+		// and write a temporary modified copy for IOTAdiffraction to use.
+		actualParamFile := paramFilePath
+		var tempParamFile string
+		if content, err := os.ReadFile(paramFilePath); err == nil {
+			var params OccultationParameters
+			if err := json5.Unmarshal(content, &params); err == nil && params.PathToQeTableFile != "" {
+				if !strings.HasPrefix(params.PathToQeTableFile, "CAMERA-QE/") && !strings.HasPrefix(params.PathToQeTableFile, "CAMERA-QE\\") {
+					prefixed := "CAMERA-QE/" + params.PathToQeTableFile
+					// Replace the value in the raw file content to preserve JSON5 formatting
+					modified := strings.Replace(string(content),
+						fmt.Sprintf("%q", params.PathToQeTableFile),
+						fmt.Sprintf("%q", prefixed), 1)
+					tmpFile, err := os.CreateTemp(appDir, "iotadiff-*.occparams")
+					if err == nil {
+						if _, err := tmpFile.WriteString(modified); err == nil {
+							tempParamFile = tmpFile.Name()
+							actualParamFile = tempParamFile
+							logAction(fmt.Sprintf("QE file path prefixed: %s -> %s", params.PathToQeTableFile, prefixed))
+						}
+						if cerr := tmpFile.Close(); cerr != nil {
+							fmt.Printf("Warning: failed to close temp params file: %v\n", cerr)
+						}
+					}
+				}
+			}
+		}
+
 		// Build the path to IOTAdiffraction.exe using the app directory
 		exePath := filepath.Join(appDir, "IOTAdiffraction.exe")
 
@@ -4642,7 +4681,7 @@ func main() {
 		outputDialog := dialog.NewCustom("IOTAdiffraction Output", "Close", scrollContainer, w)
 
 		// Set up the command with pipes using the selected file as a parameter
-		cmd := exec.Command(exePath, paramFilePath)
+		cmd := exec.Command(exePath, actualParamFile)
 		cmd.Dir = appDir
 
 		stdout, err := cmd.StdoutPipe()
@@ -4699,6 +4738,12 @@ func main() {
 		// Wait for completion in a goroutine
 		go func() {
 			err := cmd.Wait()
+			// Clean up the temporary parameter file if one was created
+			if tempParamFile != "" {
+				if rerr := os.Remove(tempParamFile); rerr != nil {
+					fmt.Printf("Warning: could not remove temp params file: %v\n", rerr)
+				}
+			}
 			if err != nil {
 				appendOutput(fmt.Sprintf("\n[Error: %v]", err))
 			} else {
@@ -4712,8 +4757,8 @@ func main() {
 	}
 
 	btnIOTA := widget.NewButton("Run IOTAdiffraction", func() {
-		// Always ask the user to select a parameter file
-		showFileOpenWithRecents(w, prefs, "Select Parameter File", nil, func(reader fyne.URIReadCloser, err error) {
+		// Open the OCCULTATION-PARAMETERS directory and show only .occparams files
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -4742,7 +4787,15 @@ func main() {
 			}
 			prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
 			runIOTAdiffraction(paramFilePath)
-		})
+		}, w)
+		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
+		occParamsDir := filepath.Join(appDir, "OCCULTATION-PARAMETERS")
+		folderURI := storage.NewFileURI(occParamsDir)
+		if listableURI, err := storage.ListerForURI(folderURI); err == nil {
+			fileDialog.SetLocation(listableURI)
+		}
+		fileDialog.Resize(fyne.NewSize(1200, 800))
+		fileDialog.Show()
 	})
 	btnOccultParams := widget.NewButton("Edit/Enter Occultation Parameters", func() {
 		showOccultationParametersDialog(w)

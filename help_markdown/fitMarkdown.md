@@ -88,7 +88,7 @@ If a **search range** is specified, this process repeats for each path offset st
 - **NCC Fit Result** window — plot of NCC (weighted and unweighted) versus time offset, with the peak marked.
 - **Fit Result** window — overlay plot of observed (blue) and theoretical (light red) light curves at the best alignment, with sampled theoretical points (dark red dots) and geometric shadow edges (green dashed vertical lines).
 - **Observation Path** window — the diffraction image with the observation path drawn at the best-fit offset.
-- **Fit Edge Times** dialog — reports NCC value, time offset, path offset, edge times in timestamp format (hh:mm:ss.ssss), and event duration.
+- **Fit Edge Times** dialog — reports NCC value, time offset, path offset, edge times in timestamp format (hh:mm:ss.ssss), event duration, number of samples between event edges, and the minimum theoretical value at the event.
 
 All fit results are logged to the session log file.
 

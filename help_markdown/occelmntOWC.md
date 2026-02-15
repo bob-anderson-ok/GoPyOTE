@@ -32,9 +32,9 @@ Use negative degrees for West longitude and South latitude.
 
 ### Buttons
 
-- **Load site file** — Opens a file dialog to select a `.site` file. Automatically fills the Site Location fields (latitude, longitude, altitude) from the file.
+- **Load site file** — Opens a file dialog in the `SITE-FILES` directory (created automatically if it does not exist), showing only `.site` files. Automatically fills the Site Location fields (latitude, longitude, altitude) from the selected file.
 
-- **Write site file** — Opens a file save dialog to write the current Site Location fields (latitude, longitude, altitude) to a `.site` file. The `.site` extension is enforced automatically.
+- **Write site file** — Opens a file save dialog in the `SITE-FILES` directory (created automatically if it does not exist) to write the current Site Location fields (latitude, longitude, altitude) to a `.site` file. The `.site` extension is enforced automatically.
 
 - **Calculate observer dX dY (closes dialog)** — Computes the observer-relative shadow velocity, creates a diffraction parameters file, closes this dialog, and opens the Edit/Enter Occultation Parameters dialog. A Fresnel scale information popup is also displayed. See workflow below.
 
@@ -78,6 +78,6 @@ Use negative degrees for West longitude and South latitude.
 
 - The calculation uses `dut1Seconds = 0`, `xpArcsec = 0`, and `ypArcsec = 0` by default. For sub-10 ms precision work, you would need actual UT1-UTC and polar motion values from the IERS.
 - The `from_occelmnt` file is overwritten each time you click Calculate. To preserve a set of parameters, use the Write button in the Parameters dialog to save to a named file (with `.occparams` extension).
-- The `.site` file directory is remembered separately for Load and Write site file operations.
+- Both **Load site file** and **Write site file** always open in the `SITE-FILES` directory relative to the application directory.
 
 ##
