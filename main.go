@@ -69,7 +69,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.21"
+const Version = "1.1.22"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -343,7 +343,11 @@ func showOccultationParametersDialog(w fyne.Window) {
 					exposureTimeSecsEntry.SetText("")
 				}
 				loadedFileName = filepath.Base(lastLoadedParamsPath)
-				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+				if loadedFileName == "from_occelmnt" {
+					fileNameLabel.SetText("File being displayed:  from_occelmnt (a temp file - you will need to rename this during a write)")
+				} else {
+					fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+				}
 				logAction(fmt.Sprintf("Auto-loaded parameters file: %s", lastLoadedParamsPath))
 			}
 		}
@@ -444,7 +448,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 
 	// File open button
 	loadBtn := widget.NewButton("Browse", func() {
-		showFileOpenWithRecents(w, fyne.CurrentApp().Preferences(), "Select Parameters File", storage.NewExtensionFileFilter([]string{".occparams"}), func(reader fyne.URIReadCloser, err error) {
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -503,13 +507,25 @@ func showOccultationParametersDialog(w fyne.Window) {
 			lastLoadedParamsPath = reader.URI().Path()
 			// Persist to preferences so it autoloads next time
 			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
-			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+			if loadedFileName == "from_occelmnt" {
+				fileNameLabel.SetText("File being displayed:  from_occelmnt (a temp file - you will need to rename this during a write)")
+			} else {
+				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+			}
 			logAction(fmt.Sprintf("Loaded parameters file: %s", lastLoadedParamsPath))
 			// Re-snapshot so a fresh load is considered clean
 			for i, e := range allEntries {
 				initialValues[i] = e.Text
 			}
-		})
+		}, w)
+		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
+		occParamsDir := filepath.Join(appDir, "OCCULTATION-PARAMETERS")
+		folderURI := storage.NewFileURI(occParamsDir)
+		if listableURI, err := storage.ListerForURI(folderURI); err == nil {
+			fileDialog.SetLocation(listableURI)
+		}
+		fileDialog.Resize(fyne.NewSize(1200, 800))
+		fileDialog.Show()
 	})
 
 	// Helper functions to parse entry values
@@ -648,18 +664,18 @@ func showOccultationParametersDialog(w fyne.Window) {
 	bottomSection := container.NewVBox(fileNameLabel, buttons)
 	content := container.NewBorder(nil, bottomSection, nil, nil, scrollContent)
 
-	customDialog = dialog.NewCustomWithoutButtons("Edit/Enter Occultation Parameters", content, w)
+	customDialog = dialog.NewCustomWithoutButtons("Edit Occultation Parameters", content, w)
 	customDialog.Resize(fyne.NewSize(840, 750))
 	customDialog.Show()
 }
 
 func showProcessOccelemntDialog(w fyne.Window) {
 	pasteEntry := widget.NewMultiLineEntry()
-	pasteEntry.SetPlaceHolder("Paste occelmnt file contents here (Ctrl+V)")
+	pasteEntry.SetPlaceHolder("Use Load button above or paste from the clipboard (Ctrl V) to fill this panel")
 	pasteEntry.Wrapping = fyne.TextWrapOff
 
 	// --- Load occelmnt file button ---
-	loadOccelmntBtn := widget.NewButton("Load occelmnt file", func() {
+	loadOccelmntBtn := widget.NewButton("Load occelmnt.xml", func() {
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -906,6 +922,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 
 		fileDialog.Show()
 	})
+	loadSiteBtn.Importance = widget.HighImportance
 
 	// --- Write site file button ---
 	writeSiteBtn := widget.NewButton("Write site file", func() {
@@ -966,10 +983,11 @@ func showProcessOccelemntDialog(w fyne.Window) {
 
 		saveDialog.Show()
 	})
+	writeSiteBtn.Importance = widget.HighImportance
 
 	// --- Calculate observer dX dY button ---
 	var occelmntDialog dialog.Dialog
-	calcDxDyBtn := widget.NewButton("Calculate observer dX dY (closes dialog)", func() {
+	calcDxDyBtn := widget.NewButton("Create Occultation Parameter file", func() {
 		xmlContent := strings.TrimSpace(pasteEntry.Text)
 		if xmlContent == "" {
 			dialog.ShowError(fmt.Errorf("please paste occelmnt XML content first"), w)
@@ -1094,6 +1112,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			dialog.ShowInformation("Fresnel Scale", msg, w)
 		}
 	})
+	calcDxDyBtn.Importance = widget.HighImportance
 
 	// --- Assemble bottom sections ---
 	bottomSection := container.NewVBox(
@@ -1109,10 +1128,11 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		}),
 	)
 
-	pasteSection := container.NewBorder(loadOccelmntBtn, nil, nil, nil, scrollable)
+	loadOccelmntBtn.Importance = widget.HighImportance
+	pasteSection := container.NewBorder(container.NewHBox(loadOccelmntBtn), nil, nil, nil, scrollable)
 	content := container.NewBorder(nil, bottomSection, nil, nil, pasteSection)
 
-	occelmntDialog = dialog.NewCustomWithoutButtons("Process OWC occelmnt file", content, w)
+	occelmntDialog = dialog.NewCustomWithoutButtons("Process OWC occelmnt.xml", content, w)
 	occelmntDialog.Resize(fyne.NewSize(840, 750))
 	occelmntDialog.Show()
 
@@ -1231,21 +1251,21 @@ func main() {
 			}
 			ShowMarkdownDialogWithImages("Fit explanation", string(content), &fitExplanationMarkdown, w)
 		}),
-		fyne.NewMenuItem("Process OWC occelmnt file", func() {
+		fyne.NewMenuItem("Process OWC occelmnt.xml", func() {
 			content, err := occelmntButtonExplanation.ReadFile("help_markdown/occelmntOWC.md")
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("failed to load occelmntOWC.md: %w", err), w)
 				return
 			}
-			ShowMarkdownDialogWithImages("Process OWC occelmnt file", string(content), &occelmntButtonExplanation, w)
+			ShowMarkdownDialogWithImages("Process OWC occelmnt.xml", string(content), &occelmntButtonExplanation, w)
 		}),
-		fyne.NewMenuItem("Edit/Enter Occ Params", func() {
+		fyne.NewMenuItem("Edit Occ Params", func() {
 			content, err := editOccParamsExplanation.ReadFile("help_markdown/editOccParams.md")
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("failed to load editOccParams.md: %w", err), w)
 				return
 			}
-			ShowMarkdownDialogWithImages("Edit/Enter Occ Params", string(content), &editOccParamsExplanation, w)
+			ShowMarkdownDialogWithImages("Edit Occ Params", string(content), &editOccParamsExplanation, w)
 		}),
 		fyne.NewMenuItem("Run IOTAdiffraction", func() {
 			content, err := runIOTAdiffractionExplanation.ReadFile("help_markdown/runIOTAdiffraction.md")
@@ -3894,7 +3914,7 @@ func main() {
 	var lastFitTargetTimes, lastFitTargetValues []float64
 
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
-	calcBaselineMeanBtn := widget.NewButton("Calculate Baseline mean", func() {
+	calcBaselineMeanBtn := widget.NewButton("Normalize baseline to 1.0 (get baseline noise to use for Monte Carlo trials)", func() {
 		if len(lightCurvePlot.SelectedPairs) == 0 {
 			dialog.ShowError(fmt.Errorf("no point pairs selected - click on points to select baseline regions"), w)
 			return
@@ -4006,6 +4026,7 @@ func main() {
 
 		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (baseline=%.4f, %d points) — noise: %d samples", mean, count, len(noise)))
 	})
+	calcBaselineMeanBtn.Importance = widget.HighImportance
 
 	// Path perpendicular offset override entry
 	fitOffsetEntry := widget.NewEntry()
@@ -4147,7 +4168,7 @@ func main() {
 
 	// Fit button - checks preconditions and reports readiness
 	var fitBtn *widget.Button
-	fitBtn = widget.NewButton("Fit", func() {
+	fitBtn = widget.NewButton("Run fit search", func() {
 		var issues []string
 
 		// Check 1: Single curve selected
@@ -4315,6 +4336,7 @@ func main() {
 			}
 		}
 	})
+	fitBtn.Importance = widget.HighImportance
 
 	// Monte Carlo UI elements
 	mcShowTrialsCheck := widget.NewCheck("Show individual trial results", nil)
@@ -4540,6 +4562,17 @@ func main() {
 			})
 		}()
 	})
+	mcBtn.Importance = widget.HighImportance
+
+	fillSodisBtn := widget.NewButton("Fill SODIS report", func() {
+		dialog.ShowInformation("Not Implemented", "This function is not yet implemented.", w)
+	})
+	fillSodisBtn.Importance = widget.HighImportance
+
+	fillNaBtn := widget.NewButton("Fill NA spreadsheet", func() {
+		dialog.ShowInformation("Not Implemented", "This function is not yet implemented.", w)
+	})
+	fillNaBtn.Importance = widget.HighImportance
 
 	tab10Content := container.NewStack(tab10Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Fit"),
@@ -4548,7 +4581,7 @@ func main() {
 		widget.NewLabel("2. Repeat to add more baseline regions"),
 		widget.NewLabel("3. Click on a marked point to remove that pair"),
 		widget.NewSeparator(),
-		calcBaselineMeanBtn,
+		container.NewHBox(calcBaselineMeanBtn),
 		widget.NewSeparator(),
 		fitOffsetLabel,
 		fitOffsetEntry,
@@ -4558,7 +4591,7 @@ func main() {
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
 		container.NewHBox(mcShowTrialsCheck, mcShowHistogramsCheck),
-		container.NewHBox(mcBtn, mcAbortBtn),
+		container.NewHBox(mcBtn, mcAbortBtn, fillSodisBtn, fillNaBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
 		fitStatusLabel,
@@ -4835,13 +4868,13 @@ func main() {
 		fileDialog.Resize(fyne.NewSize(1200, 800))
 		fileDialog.Show()
 	})
-	btnOccultParams := widget.NewButton("Edit/Enter Occultation Parameters", func() {
+	btnOccultParams := widget.NewButton("Edit Occultation Parameters", func() {
 		showOccultationParametersDialog(w)
 	})
-	btnProcessOccelemnt := widget.NewButton("Process OWC occelmnt file", func() {
+	btnProcessOccelemnt := widget.NewButton("Process OWC occelmnt.xml", func() {
 		showProcessOccelemntDialog(w)
 	})
-	buttons := container.NewHBox(btnIOTA, btnOccultParams, btnProcessOccelemnt)
+	buttons := container.NewHBox(btnProcessOccelemnt, btnOccultParams, btnIOTA)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
