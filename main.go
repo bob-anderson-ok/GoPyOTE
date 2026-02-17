@@ -69,7 +69,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.23"
+const Version = "1.1.24"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -147,7 +147,7 @@ func saveRecentFolders(prefs fyne.Preferences, folders []string) {
 func addRecentFolder(prefs fyne.Preferences, folderPath string) {
 	// Don't add internal application directories to the recent list
 	base := filepath.Base(folderPath)
-	if base == "OCCULTATION-PARAMETERS" || base == "SITE-FOLDER" || base == "SITE-FILES" {
+	if base == "OCCULTATION-PARAMETERS" || base == "SITE-FILES" {
 		return
 	}
 
@@ -3985,8 +3985,8 @@ func main() {
 	// Status label for Fit tab
 	fitStatusLabel := widget.NewLabel("Select pairs of points to define baseline regions")
 
-	// Stored baseline noise for later use
-	var extractedNoise []float64
+	// Stored baseline noise sigma for Monte Carlo and NIE
+	var noiseSigma float64
 
 	// Stored last fit result, params, candidate curves, and target data for Monte Carlo
 	var lastFitResult *fitResult
@@ -3995,7 +3995,7 @@ func main() {
 	var lastFitTargetTimes, lastFitTargetValues []float64
 
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
-	calcBaselineMeanBtn := widget.NewButton("Normalize baseline to 1.0 (get baseline noise to use for Monte Carlo trials)", func() {
+	calcBaselineMeanBtn := widget.NewButton("Normalize baseline and estimate noise sigma (used for Monte Carlo and NIE trials)", func() {
 		if len(lightCurvePlot.SelectedPairs) == 0 {
 			dialog.ShowError(fmt.Errorf("no point pairs selected - click on points to select baseline regions"), w)
 			return
@@ -4070,8 +4070,6 @@ func main() {
 				noise = append(noise, col.Values[i]/mean-1.0)
 			}
 		}
-		extractedNoise = noise
-
 		// Scale all column values to unity
 		scaleFactor := mean
 		logAction(fmt.Sprintf("Fit: Scaling all light curves by 1/%.4f to set baseline mean to unity", scaleFactor))
@@ -4091,10 +4089,11 @@ func main() {
 
 		// Show noise histogram if we have enough points
 		if len(noise) >= 2 {
-			histImg, noiseMean, noiseSigma, err := createNoiseHistogramImage(noise, lastDiffractionTitle, 800, 500)
+			histImg, noiseMean, sigma, err := createNoiseHistogramImage(noise, lastDiffractionTitle, 800, 500)
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("failed to create noise histogram: %v", err), w)
 			} else {
+				noiseSigma = sigma
 				histWindow := a.NewWindow("Baseline Noise Histogram")
 				histCanvas := canvas.NewImageFromImage(histImg)
 				histCanvas.FillMode = canvas.ImageFillOriginal
@@ -4105,7 +4104,7 @@ func main() {
 			}
 		}
 
-		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (baseline=%.4f, %d points) — noise: %d samples", mean, count, len(noise)))
+		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (baseline=%.4f, %d points) — noise sigma=%.6f", mean, count, noiseSigma))
 	})
 	calcBaselineMeanBtn.Importance = widget.HighImportance
 
@@ -4457,8 +4456,8 @@ func main() {
 			dialog.ShowError(fmt.Errorf("no candidate curves available — run a fit first"), w)
 			return
 		}
-		if len(extractedNoise) == 0 {
-			dialog.ShowError(fmt.Errorf("no baseline noise data — run Estimate Baseline first"), w)
+		if noiseSigma == 0 {
+			dialog.ShowError(fmt.Errorf("no noise sigma available — run Normalize Baseline first"), w)
 			return
 		}
 		numTrials, err := strconv.Atoi(mcNumTrialsEntry.Text)
@@ -4473,7 +4472,7 @@ func main() {
 		mcAbortBtn.Show()
 		mcAbortBtn.Enable()
 		go func() {
-			result, err := runMonteCarloTrials(lastFitCandidates, lastFitResult, extractedNoise, numTrials, &mcAbortFlag, func(progress float64) {
+			result, err := runMonteCarloTrials(lastFitCandidates, lastFitResult, noiseSigma, numTrials, &mcAbortFlag, func(progress float64) {
 				fyne.Do(func() {
 					mcProgressBar.SetValue(progress)
 				})
@@ -4487,12 +4486,15 @@ func main() {
 					return
 				}
 				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
-				for i := 0; i < result.numEdges; i++ {
-					msg += fmt.Sprintf("  Edge %d: %.4f sec (3 sigma)\n", i+1, 3*result.edgeStds[i])
+				for i := 0; i < result.numEdges && i < len(lastFitResult.edgeTimes); i++ {
+					absTime := lastFitResult.edgeTimes[i] + lastFitResult.bestShift
+					ts := formatSecondsAsTimestamp(absTime)
+					msg += fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)\n", i+1, ts, 3*result.edgeStds[i])
 				}
 				if result.numEdges == 2 {
+					fitDuration := math.Abs(lastFitResult.edgeTimes[1] - lastFitResult.edgeTimes[0])
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
-					msg += fmt.Sprintf("\n  Duration: %.4f sec (3 sigma)\n", 3*durationStd)
+					msg += fmt.Sprintf("\n  Duration: %.4f +/- %.4f sec (3 sigma)\n", fitDuration, 3*durationStd)
 				}
 				fmt.Print(msg)
 

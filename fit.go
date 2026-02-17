@@ -424,23 +424,22 @@ type mcRefitResult struct {
 	pathOffset  float64
 }
 
-func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noise []float64) (*mcRefitResult, error) {
+func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigma float64) (*mcRefitResult, error) {
 	if len(fr.sampledTimes) == 0 || len(fr.sampledVals) == 0 {
 		return nil, fmt.Errorf("no sampled theoretical curve available for Monte Carlo")
 	}
-	if len(noise) == 0 {
-		return nil, fmt.Errorf("no baseline noise data available — run Estimate Baseline first")
+	if noiseSigma == 0 {
+		return nil, fmt.Errorf("no noise sigma available — run Normalize Baseline first")
 	}
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no precomputed candidate curves available")
 	}
 
-	// Create a noisy version of the sampled theoretical curve
+	// Create a noisy version of the sampled theoretical curve by adding
+	// Gaussian noise with the measured baseline noise sigma.
 	noisyValues := make([]float64, len(fr.sampledVals))
 	for i, v := range fr.sampledVals {
-		// Sample noise with replacement
-		noiseVal := noise[rand.IntN(len(noise))]
-		noisyValues[i] = v + noiseVal
+		noisyValues[i] = v + rand.NormFloat64()*noiseSigma
 	}
 
 	// Search across precomputed path offset candidates
@@ -491,12 +490,12 @@ type mcTrialsResult struct {
 // runMonteCarloTrials runs numTrials Monte Carlo re-noise refits and computes
 // the mean and standard deviation of the edge times. Safe to call from a goroutine.
 // Candidates are the precomputed theoretical light curves from the fit search.
-func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noise []float64, numTrials int, abort *atomic.Bool, onProgress func(float64)) (*mcTrialsResult, error) {
+func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noiseSigma float64, numTrials int, abort *atomic.Bool, onProgress func(float64)) (*mcTrialsResult, error) {
 	if len(fr.sampledTimes) == 0 || len(fr.sampledVals) == 0 {
 		return nil, fmt.Errorf("no sampled theoretical curve available — run a fit first")
 	}
-	if len(noise) == 0 {
-		return nil, fmt.Errorf("no baseline noise data — run Estimate Baseline first")
+	if noiseSigma == 0 {
+		return nil, fmt.Errorf("no noise sigma available — run Normalize Baseline first")
 	}
 	if len(fr.edgeTimes) == 0 {
 		return nil, fmt.Errorf("no edge times in fit result")
@@ -519,7 +518,7 @@ func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noise []
 			fmt.Printf("Monte Carlo aborted after %d trials\n", trial)
 			break
 		}
-		mcResult, err := runMonteCarloRefit(candidates, fr, noise)
+		mcResult, err := runMonteCarloRefit(candidates, fr, noiseSigma)
 		if err != nil {
 			fmt.Printf("Monte Carlo trial %d failed: %v\n", trial+1, err)
 			continue
