@@ -69,7 +69,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.22"
+const Version = "1.1.23"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -145,6 +145,12 @@ func saveRecentFolders(prefs fyne.Preferences, folders []string) {
 
 // addRecentFolder adds a folder to the recent list (pushdown stack behavior)
 func addRecentFolder(prefs fyne.Preferences, folderPath string) {
+	// Don't add internal application directories to the recent list
+	base := filepath.Base(folderPath)
+	if base == "OCCULTATION-PARAMETERS" || base == "SITE-FOLDER" || base == "SITE-FILES" {
+		return
+	}
+
 	folders := getRecentFolders(prefs)
 
 	// Remove if already exists (to move it to the top)
@@ -246,6 +252,15 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 		btn.Importance = widget.LowImportance
 		buttons = append(buttons, btn)
 	}
+
+	// Add a Clear history button
+	buttons = append(buttons, widget.NewSeparator())
+	clearHistoryBtn := widget.NewButton("Clear history", func() {
+		saveRecentFolders(prefs, nil)
+		customDialog.Hide()
+	})
+	clearHistoryBtn.Importance = widget.HighImportance
+	buttons = append(buttons, container.NewHBox(clearHistoryBtn))
 
 	content := container.NewVBox(buttons...)
 	customDialog = dialog.NewCustom(title, "Cancel", content, w)
@@ -350,6 +365,13 @@ func showOccultationParametersDialog(w fyne.Window) {
 				}
 				logAction(fmt.Sprintf("Auto-loaded parameters file: %s", lastLoadedParamsPath))
 			}
+		}
+	}
+
+	// If the QE file entry is still empty, fill from the saved preference
+	if pathToQeTableFileEntry.Text == "" {
+		if savedQe := prefs.StringWithFallback("stickyQeTableFile", ""); savedQe != "" {
+			pathToQeTableFileEntry.SetText(savedQe)
 		}
 	}
 
@@ -633,6 +655,11 @@ func showOccultationParametersDialog(w fyne.Window) {
 			}
 
 			logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
+
+			// Persist QE file name so it autofill next time
+			if qe := strings.TrimSpace(pathToQeTableFileEntry.Text); qe != "" {
+				prefs.SetString("stickyQeTableFile", qe)
+			}
 
 			// Re-snapshot so saved state is considered clean
 			for i, e := range allEntries {
@@ -2410,6 +2437,24 @@ func main() {
 						len(timingResult.CadenceErrors), len(timingResult.DroppedFrameErrors), len(timingResult.NegativeDeltaErrors)))
 					dialog.ShowInformation("Timing Analysis", report, w)
 				}
+
+				// Show exposure time comparison popup
+				if timingResult != nil {
+					csvExposure := timingResult.MedianTimeStep
+					var paramExposure float64
+					if lastDiffractionParamsPath != "" {
+						if f, ferr := os.Open(lastDiffractionParamsPath); ferr == nil {
+							if p, perr := parseOccultationParameters(f); perr == nil {
+								paramExposure = p.ExposureTimeSecs
+							}
+							if cerr := f.Close(); cerr != nil {
+								fmt.Printf("Warning: failed to close parameters file: %v\n", cerr)
+							}
+						}
+					}
+					msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
+					dialog.ShowInformation("Exposure Time Comparison", msg, w)
+				}
 			}
 
 			// Clear displayed curves and reset the plot
@@ -2738,6 +2783,24 @@ func main() {
 						markNegativeDeltaIndex(negErr.Index + offset)
 					}
 				}
+			}
+
+			// Show exposure time comparison popup
+			if timingResult != nil {
+				csvExposure := timingResult.MedianTimeStep
+				var paramExposure float64
+				if lastDiffractionParamsPath != "" {
+					if f, ferr := os.Open(lastDiffractionParamsPath); ferr == nil {
+						if p, perr := parseOccultationParameters(f); perr == nil {
+							paramExposure = p.ExposureTimeSecs
+						}
+						if cerr := f.Close(); cerr != nil {
+							fmt.Printf("Warning: failed to close parameters file: %v\n", cerr)
+						}
+					}
+				}
+				msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
+				dialog.ShowInformation("Exposure Time Comparison", msg, w)
 			}
 		}
 
@@ -3386,6 +3449,24 @@ func main() {
 						markNegativeDeltaIndex(negErr.Index + offset)
 					}
 				}
+			}
+
+			// Show exposure time comparison popup
+			if timingResult != nil {
+				csvExposure := timingResult.MedianTimeStep
+				var paramExposure float64
+				if lastDiffractionParamsPath != "" {
+					if f, ferr := os.Open(lastDiffractionParamsPath); ferr == nil {
+						if p, perr := parseOccultationParameters(f); perr == nil {
+							paramExposure = p.ExposureTimeSecs
+						}
+						if cerr := f.Close(); cerr != nil {
+							fmt.Printf("Warning: failed to close parameters file: %v\n", cerr)
+						}
+					}
+				}
+				msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
+				dialog.ShowInformation("Exposure Time Comparison", msg, w)
 			}
 		}
 
@@ -4198,6 +4279,13 @@ func main() {
 			}
 			dialog.ShowError(fmt.Errorf("%s", msg), w)
 		} else {
+			// Clear previous fit results so edges don't accumulate across runs
+			lastFitResult = nil
+			lastFitParams = nil
+			lastFitCandidates = nil
+			lastFitTargetTimes = nil
+			lastFitTargetValues = nil
+
 			// Load parameters from the file used to generate the diffraction image
 			file, err := os.Open(lastDiffractionParamsPath)
 			if err != nil {
@@ -4564,6 +4652,11 @@ func main() {
 	})
 	mcBtn.Importance = widget.HighImportance
 
+	runNieBtn := widget.NewButton("Run NIE analysis", func() {
+		dialog.ShowInformation("Not Implemented", "This function is not yet implemented.", w)
+	})
+	runNieBtn.Importance = widget.HighImportance
+
 	fillSodisBtn := widget.NewButton("Fill SODIS report", func() {
 		dialog.ShowInformation("Not Implemented", "This function is not yet implemented.", w)
 	})
@@ -4591,7 +4684,7 @@ func main() {
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
 		container.NewHBox(mcShowTrialsCheck, mcShowHistogramsCheck),
-		container.NewHBox(mcBtn, mcAbortBtn, fillSodisBtn, fillNaBtn),
+		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, fillSodisBtn, fillNaBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
 		fitStatusLabel,
