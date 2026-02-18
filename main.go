@@ -69,7 +69,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.24"
+const Version = "1.1.25"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3994,6 +3994,9 @@ func main() {
 	var lastFitCandidates []*precomputedCurve
 	var lastFitTargetTimes, lastFitTargetValues []float64
 
+	mcShowDiagnosticsCheck := widget.NewCheck("Show diagnostics plots", nil)
+	mcShowDiagnosticsCheck.Checked = false
+
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
 	calcBaselineMeanBtn := widget.NewButton("Normalize baseline and estimate noise sigma (used for Monte Carlo and NIE trials)", func() {
 		if len(lightCurvePlot.SelectedPairs) == 0 {
@@ -4087,19 +4090,22 @@ func main() {
 		rebuildPlot()
 		lightCurvePlot.SetYBounds(savedMinY/scaleFactor, savedMaxY/scaleFactor)
 
-		// Show noise histogram if we have enough points
+		// Show noise histogram if we have enough points and diagnostics are enabled
 		if len(noise) >= 2 {
 			histImg, noiseMean, sigma, err := createNoiseHistogramImage(noise, lastDiffractionTitle, 800, 500)
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("failed to create noise histogram: %v", err), w)
 			} else {
 				noiseSigma = sigma
-				histWindow := a.NewWindow("Baseline Noise Histogram")
-				histCanvas := canvas.NewImageFromImage(histImg)
-				histCanvas.FillMode = canvas.ImageFillOriginal
-				histWindow.SetContent(container.NewScroll(histCanvas))
-				histWindow.Resize(fyne.NewSize(850, 550))
-				histWindow.Show()
+				if mcShowDiagnosticsCheck.Checked {
+					histWindow := a.NewWindow("Baseline Noise Histogram")
+					histCanvas := canvas.NewImageFromImage(histImg)
+					histCanvas.FillMode = canvas.ImageFillOriginal
+					histWindow.SetContent(container.NewScroll(histCanvas))
+					histWindow.Resize(fyne.NewSize(850, 550))
+					histWindow.CenterOnScreen()
+					histWindow.Show()
+				}
 				logAction(fmt.Sprintf("Fit: Extracted baseline noise: %d points, mean=%.6f, sigma=%.6f", len(noise), noiseMean, noiseSigma))
 			}
 		}
@@ -4218,6 +4224,7 @@ func main() {
 				previewCanvas.FillMode = canvas.ImageFillContain
 				searchPreviewWindow.SetContent(previewCanvas)
 				searchPreviewWindow.Resize(fyne.NewSize(600, 600))
+				searchPreviewWindow.CenterOnScreen()
 				searchPreviewWindow.Show()
 			})
 		}()
@@ -4390,7 +4397,7 @@ func main() {
 						if err != nil {
 							dialog.ShowError(err, w)
 						} else {
-							fr, err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues)
+							fr, err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
 							if err != nil {
 								dialog.ShowError(err, w)
 							} else {
@@ -4409,7 +4416,7 @@ func main() {
 					})
 				}()
 			} else {
-				fr, pc, err := performFit(a, w, params, targetTimes, targetValues)
+				fr, pc, err := performFit(a, w, params, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
 				if err != nil {
 					dialog.ShowError(err, w)
 				} else {
@@ -4426,11 +4433,6 @@ func main() {
 	fitBtn.Importance = widget.HighImportance
 
 	// Monte Carlo UI elements
-	mcShowTrialsCheck := widget.NewCheck("Show individual trial results", nil)
-	mcShowTrialsCheck.Checked = false
-	mcShowHistogramsCheck := widget.NewCheck("Show histograms", nil)
-	mcShowHistogramsCheck.Checked = false
-
 	mcNumTrialsEntry := widget.NewEntry()
 	mcNumTrialsEntry.SetText("1000")
 	mcNumTrialsEntry.SetPlaceHolder("number of trials")
@@ -4532,14 +4534,18 @@ func main() {
 				summaryLabel.Wrapping = fyne.TextWrapWord
 
 				var mcContainer *fyne.Container
-				if mcShowTrialsCheck.Checked {
-					// Temporary: show individual trial edge times
-					trialsMsg := "Individual trial edge times:\n"
+				if mcShowDiagnosticsCheck.Checked {
+					// Show individual trial edge times (max 100)
+					trialsMsg := "Individual trial edge times: "
 					numCompleted := 0
 					if result.numEdges > 0 {
 						numCompleted = len(result.edgeAll[0])
 					}
-					for t := 0; t < numCompleted; t++ {
+					maxDisplay := numCompleted
+					if maxDisplay > 100 {
+						maxDisplay = 100
+					}
+					for t := 0; t < maxDisplay; t++ {
 						trialsMsg += fmt.Sprintf("  Trial %3d:", t+1)
 						for i := 0; i < result.numEdges; i++ {
 							trialsMsg += fmt.Sprintf("  Edge %d=%.4f", i+1, result.edgeAll[i][t])
@@ -4550,7 +4556,10 @@ func main() {
 						if t < len(result.pathOffsets) {
 							trialsMsg += fmt.Sprintf("  Path=%.3f km", result.pathOffsets[t])
 						}
-						trialsMsg += "\n"
+						trialsMsg += ""
+					}
+					if numCompleted > 100 {
+						trialsMsg += fmt.Sprintf("  ... (%d more trials not shown)", numCompleted-100)
 					}
 					fmt.Print(trialsMsg)
 					trialsLabel := widget.NewLabel(trialsMsg)
@@ -4558,15 +4567,8 @@ func main() {
 					trialsScroll := container.NewScroll(trialsLabel)
 					trialsScroll.SetMinSize(fyne.NewSize(750, 300))
 					mcContainer = container.NewVBox(summaryLabel, trialsScroll)
-				} else {
-					mcSpacer := canvas.NewRectangle(color.Transparent)
-					mcSpacer.SetMinSize(fyne.NewSize(750, 0))
-					mcContainer = container.NewVBox(mcSpacer, summaryLabel)
-				}
-				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
 
-				// Show histograms if the checkbox is checked
-				if mcShowHistogramsCheck.Checked {
+					// Show edge and duration histograms
 					for i := 0; i < result.numEdges; i++ {
 						if len(result.edgeAll[i]) < 2 {
 							continue
@@ -4579,7 +4581,7 @@ func main() {
 							900, 500,
 						)
 						if err != nil {
-							fmt.Printf("Failed to create Edge %d histogram: %v\n", i+1, err)
+							fmt.Printf("Failed to create Edge %d histogram: %v", i+1, err)
 							continue
 						}
 						histWin := a.NewWindow(fmt.Sprintf("Monte Carlo — Edge %d Histogram", i+1))
@@ -4587,6 +4589,7 @@ func main() {
 						histCanvas.FillMode = canvas.ImageFillContain
 						histWin.SetContent(histCanvas)
 						histWin.Resize(fyne.NewSize(950, 550))
+						histWin.CenterOnScreen()
 						histWin.Show()
 					}
 
@@ -4605,18 +4608,23 @@ func main() {
 							900, 500,
 						)
 						if err != nil {
-							fmt.Printf("Failed to create duration histogram: %v\n", err)
+							fmt.Printf("Failed to create duration histogram: %v", err)
 						} else {
 							histWin := a.NewWindow("Monte Carlo — Duration Histogram")
 							histCanvas := canvas.NewImageFromImage(histImg)
 							histCanvas.FillMode = canvas.ImageFillContain
 							histWin.SetContent(histCanvas)
 							histWin.Resize(fyne.NewSize(950, 550))
+							histWin.CenterOnScreen()
 							histWin.Show()
 						}
 					}
+				} else {
+					mcSpacer := canvas.NewRectangle(color.Transparent)
+					mcSpacer.SetMinSize(fyne.NewSize(750, 0))
+					mcContainer = container.NewVBox(mcSpacer, summaryLabel)
 				}
-
+				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
 				// Create a fit overlay plot with ±3σ edge uncertainty lines
 				if len(lastFitTargetTimes) > 0 && len(lastFitTargetValues) > 0 {
 					mcOverlayImg, err := createOverlayPlotImage(
@@ -4646,6 +4654,7 @@ func main() {
 						mcOverlayCanvas.FillMode = canvas.ImageFillContain
 						mcOverlayWin.SetContent(mcOverlayCanvas)
 						mcOverlayWin.Resize(fyne.NewSize(1250, 550))
+						mcOverlayWin.CenterOnScreen()
 						mcOverlayWin.Show()
 					}
 				}
@@ -4654,8 +4663,119 @@ func main() {
 	})
 	mcBtn.Importance = widget.HighImportance
 
-	runNieBtn := widget.NewButton("Run NIE analysis", func() {
-		dialog.ShowInformation("Not Implemented", "This function is not yet implemented.", w)
+	var nieAbortFlag atomic.Bool
+	var nieAbortBtn *widget.Button
+	nieAbortBtn = widget.NewButton("Abort NIE", func() {
+		nieAbortFlag.Store(true)
+		nieAbortBtn.Disable()
+	})
+	nieAbortBtn.Importance = widget.DangerImportance
+	nieAbortBtn.Hide()
+
+	var runNieBtn *widget.Button
+	runNieBtn = widget.NewButton("Run NIE analysis", func() {
+		if lastFitResult == nil {
+			dialog.ShowError(fmt.Errorf("no fit result available — run a fit first"), w)
+			return
+		}
+		if len(lastFitResult.edgeTimes) < 2 {
+			dialog.ShowError(fmt.Errorf("NIE requires a two-edge fit result"), w)
+			return
+		}
+		if noiseSigma == 0 {
+			dialog.ShowError(fmt.Errorf("no noise sigma available — run Normalize Baseline first"), w)
+			return
+		}
+		if len(lastFitTargetTimes) == 0 {
+			dialog.ShowError(fmt.Errorf("no target light curve available — run a fit first"), w)
+			return
+		}
+		mcTrials, err := strconv.Atoi(mcNumTrialsEntry.Text)
+		if err != nil || mcTrials < 1 {
+			dialog.ShowError(fmt.Errorf("number of trials must be a positive integer"), w)
+			return
+		}
+		numTrials := mcTrials * 10
+
+		// Compute window width = samples between event edges in the target light curve
+		edge1Abs := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
+		edge2Abs := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
+		if edge1Abs > edge2Abs {
+			edge1Abs, edge2Abs = edge2Abs, edge1Abs
+		}
+		windowWidth := 0
+		for _, t := range lastFitTargetTimes {
+			if t >= edge1Abs && t <= edge2Abs {
+				windowWidth++
+			}
+		}
+		if windowWidth < 1 {
+			dialog.ShowError(fmt.Errorf("no target samples found between event edges — check fit result"), w)
+			return
+		}
+
+		nPoints := len(lastFitTargetTimes)
+		logAction(fmt.Sprintf("NIE: starting %d trials, nPoints=%d, windowWidth=%d, noiseSigma=%.6f", numTrials, nPoints, windowWidth, noiseSigma))
+
+		mcProgressBar.SetValue(0)
+		mcProgressBar.Show()
+		runNieBtn.Disable()
+		nieAbortFlag.Store(false)
+		nieAbortBtn.Show()
+		nieAbortBtn.Enable()
+		go func() {
+			minMeans, err := runNIETrials(numTrials, nPoints, windowWidth, noiseSigma, &nieAbortFlag, func(progress float64) {
+				fyne.Do(func() {
+					mcProgressBar.SetValue(progress)
+				})
+			})
+			fyne.Do(func() {
+				mcProgressBar.Hide()
+				nieAbortBtn.Hide()
+				runNieBtn.Enable()
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				// Compute the event drop as mean of sampled theoretical values within the event edges
+				// (square wave approximation of the best-fit model depth)
+				eventDrop := 1.0
+				if lastFitResult != nil && len(lastFitResult.edgeTimes) >= 2 {
+					e1 := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
+					e2 := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
+					if e1 > e2 {
+						e1, e2 = e2, e1
+					}
+					var dropSum float64
+					var dropCount int
+					for i, t := range lastFitResult.sampledTimes {
+						if t >= e1 && t <= e2 {
+							dropSum += lastFitResult.sampledVals[i]
+							dropCount++
+						}
+					}
+					if dropCount > 0 {
+						eventDrop = dropSum / float64(dropCount)
+					}
+				}
+
+				histImg, nieMean, nieSigma, err := createNIEHistogramImage(minMeans, windowWidth, eventDrop, lastDiffractionTitle, 800, 500)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("failed to create NIE histogram: %v", err), w)
+					return
+				}
+
+				logAction(fmt.Sprintf("NIE: %d trials completed, min-window-mean distribution: mean=%.6f, sigma=%.6f", len(minMeans), nieMean, nieSigma))
+
+				histWindow := a.NewWindow("Noise Induced Drop study")
+				histCanvas := canvas.NewImageFromImage(histImg)
+				histCanvas.FillMode = canvas.ImageFillOriginal
+				histWindow.SetContent(container.NewScroll(histCanvas))
+				histWindow.Resize(fyne.NewSize(850, 550))
+				histWindow.CenterOnScreen()
+				histWindow.Show()
+			})
+		}()
 	})
 	runNieBtn.Importance = widget.HighImportance
 
@@ -4685,8 +4805,8 @@ func main() {
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
-		container.NewHBox(mcShowTrialsCheck, mcShowHistogramsCheck),
-		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, fillSodisBtn, fillNaBtn),
+		container.NewHBox(mcShowDiagnosticsCheck),
+		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, fillNaBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
 		fitStatusLabel,

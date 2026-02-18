@@ -30,6 +30,14 @@ import (
 	"gonum.org/v1/plot/vg/vgimg"
 )
 
+// reverseNorm is a plot.Normalizer that maps [min,max] to [1,0] instead of [0,1],
+// producing a reversed (right-to-left) axis when used as plt.X.Scale.
+type reverseNorm struct{}
+
+func (reverseNorm) Normalize(min, max, x float64) float64 {
+	return (max - x) / (max - min)
+}
+
 // nccResult holds a single time-offset and its NCC scores.
 type nccResult struct {
 	offset       float64
@@ -244,18 +252,22 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 //}
 
 // displayFitResult shows the NCC plot, overlay plot, diffraction image, and edge times for a fit result.
-func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64) error {
-	plotImg, err := createNCCPlotImage(fr.nccCurve, params.Title, 1000, 500)
-	if err != nil {
-		return fmt.Errorf("failed to create NCC plot: %w", err)
-	}
+// showDiagnostics gates in the NCC Fit Result window.
+func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64, showDiagnostics bool) error {
+	if showDiagnostics {
+		plotImg, err := createNCCPlotImage(fr.nccCurve, params.Title, 1000, 500)
+		if err != nil {
+			return fmt.Errorf("failed to create NCC plot: %w", err)
+		}
 
-	nccWindow := app.NewWindow("NCC Fit Result")
-	plotCanvas := canvas.NewImageFromImage(plotImg)
-	plotCanvas.FillMode = canvas.ImageFillOriginal
-	nccWindow.SetContent(container.NewScroll(plotCanvas))
-	nccWindow.Resize(fyne.NewSize(1050, 550))
-	nccWindow.Show()
+		nccWindow := app.NewWindow("NCC Fit Result")
+		plotCanvas := canvas.NewImageFromImage(plotImg)
+		plotCanvas.FillMode = canvas.ImageFillOriginal
+		nccWindow.SetContent(container.NewScroll(plotCanvas))
+		nccWindow.Resize(fyne.NewSize(1050, 550))
+		nccWindow.CenterOnScreen()
+		nccWindow.Show()
+	}
 
 	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", fr.bestShift, fr.bestNCC)
 
@@ -269,6 +281,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 	overlayCanvas.FillMode = canvas.ImageFillContain
 	overlayWindow.SetContent(overlayCanvas)
 	overlayWindow.Resize(fyne.NewSize(1250, 550))
+	overlayWindow.CenterOnScreen()
 	overlayWindow.Show()
 
 	displayImg, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "diffractionImage8bit.png"))
@@ -308,6 +321,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 				pathCanvas.FillMode = canvas.ImageFillContain
 				pathWindow.SetContent(container.NewScroll(pathCanvas))
 				pathWindow.Resize(fyne.NewSize(600, 600))
+				pathWindow.CenterOnScreen()
 				pathWindow.Show()
 			}
 		}
@@ -465,7 +479,7 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 
 // performFit runs the NCC sliding fit between the theoretical diffraction light curve
 // and the observed target curve, then displays the results in popup windows.
-func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64) (*fitResult, *precomputedCurve, error) {
+func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64, showDiagnostics bool) (*fitResult, *precomputedCurve, error) {
 	pc, err := buildPrecomputedCurve(params)
 	if err != nil {
 		return nil, nil, err
@@ -474,7 +488,7 @@ func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targ
 	if err != nil {
 		return nil, nil, err
 	}
-	return fr, pc, displayFitResult(app, w, params, fr, targetTimes, targetValues)
+	return fr, pc, displayFitResult(app, w, params, fr, targetTimes, targetValues, showDiagnostics)
 }
 
 // mcTrialsResult holds the accumulated edge time statistics from Monte Carlo trials.
@@ -575,6 +589,222 @@ func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noiseSig
 	}, nil
 }
 
+// runNIETrials runs numTrials Noise-In-Event trials. Each trial generates a noisy
+// baseline of nPoints values drawn from N(1.0, noiseSigma), slides a window of
+// windowWidth across it, and records the minimum window mean (the biggest dip).
+// Returns the slice of minimum window means.
+func runNIETrials(numTrials, nPoints, windowWidth int, noiseSigma float64, abort *atomic.Bool, onProgress func(float64)) ([]float64, error) {
+	if windowWidth < 1 {
+		return nil, fmt.Errorf("event window width must be at least 1")
+	}
+	if nPoints < windowWidth {
+		return nil, fmt.Errorf("light curve length (%d) is shorter than event window width (%d)", nPoints, windowWidth)
+	}
+
+	// Throttle progress callbacks to at most 100 updates so the event queue
+	// is not flooded (NIE trials are fast and could generate thousands of
+	// fyne.Do calls before the abort button click is ever processed).
+	progressStep := numTrials / 100
+	if progressStep < 1 {
+		progressStep = 1
+	}
+
+	minMeans := make([]float64, 0, numTrials)
+	for trial := 0; trial < numTrials; trial++ {
+		if abort != nil && abort.Load() {
+			fmt.Printf("NIE analysis aborted after %d trials\n", trial)
+			break
+		}
+
+		// Generate noisy baseline: N(1.0, noiseSigma)
+		seq := make([]float64, nPoints)
+		for i := range seq {
+			seq[i] = 1.0 + rand.NormFloat64()*noiseSigma
+		}
+
+		// Sliding window: find minimum mean (the biggest dip)
+		var windowSum float64
+		for i := 0; i < windowWidth; i++ {
+			windowSum += seq[i]
+		}
+		minMean := windowSum / float64(windowWidth)
+		for i := windowWidth; i < nPoints; i++ {
+			windowSum += seq[i] - seq[i-windowWidth]
+			m := windowSum / float64(windowWidth)
+			if m < minMean {
+				minMean = m
+			}
+		}
+		minMeans = append(minMeans, minMean)
+
+		if onProgress != nil && (trial+1)%progressStep == 0 {
+			onProgress(float64(trial+1) / float64(numTrials))
+		}
+	}
+	if onProgress != nil {
+		onProgress(1.0)
+	}
+
+	if len(minMeans) == 0 {
+		return nil, fmt.Errorf("no NIE trials completed")
+	}
+	return minMeans, nil
+}
+
+// createNIEHistogramImage renders a histogram of NIE minimum window means with a
+// Gaussian fit overlay and a blue vertical line at eventDrop. Returns the image, mean, and sigma.
+func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop float64, occultationTitle string, plotWidth, plotHeight int) (image.Image, float64, float64, error) {
+	n := float64(len(minMeans))
+	var sum float64
+	for _, v := range minMeans {
+		sum += v
+	}
+	mean := sum / n
+
+	var sumSq float64
+	for _, v := range minMeans {
+		d := v - mean
+		sumSq += d * d
+	}
+	sigma := math.Sqrt(sumSq / n)
+
+	plt := plot.New()
+	if grayPlotBackground {
+		plt.BackgroundColor = plotBackgroundGray
+	}
+
+	plt.Title.TextStyle.Font.Typeface = "Liberation"
+	plt.Title.TextStyle.Font.Variant = "Sans"
+	plt.Title.TextStyle.Font.Size = vg.Points(14)
+	plt.Title.TextStyle.Font.Weight = 2
+
+	plt.X.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.X.Label.TextStyle.Font.Variant = "Sans"
+	plt.X.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.X.Label.TextStyle.Font.Weight = 2
+
+	plt.Y.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.Y.Label.TextStyle.Font.Variant = "Sans"
+	plt.Y.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.Y.Label.TextStyle.Font.Weight = 2
+
+	plt.X.Tick.Label.Font.Typeface = "Liberation"
+	plt.X.Tick.Label.Font.Variant = "Sans"
+	plt.X.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Y.Tick.Label.Font.Typeface = "Liberation"
+	plt.Y.Tick.Label.Font.Variant = "Sans"
+	plt.Y.Tick.Label.Font.Size = vg.Points(10)
+
+	if occultationTitle != "" {
+		plt.Title.Text = fmt.Sprintf("%s — NIE Analysis (%d trials)", occultationTitle, len(minMeans))
+	} else {
+		plt.Title.Text = fmt.Sprintf("NIE Analysis (%d trials)", len(minMeans))
+	}
+	plt.X.Label.Text = "Drop position (drops are bigger toward the right)"
+	plt.Y.Label.Text = "Density"
+
+	plt.Add(plotter.NewGrid())
+
+	vals := make(plotter.Values, len(minMeans))
+	copy(vals, minMeans)
+
+	numBins := int(math.Sqrt(n))
+	if numBins < 10 {
+		numBins = 10
+	}
+
+	hist, err := plotter.NewHist(vals, numBins)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to create NIE histogram: %w", err)
+	}
+	hist.Normalize(1)
+	hist.FillColor = color.RGBA{R: 100, G: 200, B: 120, A: 180}
+	hist.Color = color.RGBA{R: 0, G: 130, B: 30, A: 255}
+	plt.Add(hist)
+	plt.Legend.Add(fmt.Sprintf("Noise induced drops at event size %d", windowWidth), hist)
+
+	// Compute y-axis max and half-peak from Gaussian fit (used for line heights only, not plotted)
+	var yMax, halfPeak float64
+	if sigma > 0 {
+		gaussPeak := 1.0 / (sigma * math.Sqrt(2*math.Pi))
+		yMax = gaussPeak * 1.5
+		halfPeak = gaussPeak * 0.5
+	} else {
+		yMax = 10.0
+	}
+
+	// Black vertical line at x=1.0 (baseline level) — half the Gaussian peak height
+	baseLinePts := plotter.XYs{{X: 1.0, Y: 0}, {X: 1.0, Y: halfPeak}}
+	baseLine, err := plotter.NewLine(baseLinePts)
+	if err == nil {
+		baseLine.Color = color.RGBA{R: 0, G: 0, B: 0, A: 255}
+		baseLine.Width = vg.Points(2)
+		plt.Add(baseLine)
+		plt.Legend.Add("Baseline", baseLine)
+	}
+
+	// Blue vertical line at the event drop (square wave approximation) — half the Gaussian peak height
+	vLinePts := plotter.XYs{{X: eventDrop, Y: 0}, {X: eventDrop, Y: halfPeak}}
+	vLine, err2 := plotter.NewLine(vLinePts)
+	if err2 == nil {
+		vLine.Color = color.RGBA{R: 0, G: 0, B: 220, A: 255}
+		vLine.Width = vg.Points(2)
+		vLine.Dashes = []vg.Length{vg.Points(6), vg.Points(3)}
+		plt.Add(vLine)
+		plt.Legend.Add(fmt.Sprintf("Event level (%.4f)", eventDrop), vLine)
+	}
+
+	// Gray vertical line at x=0.0 (zero level) — half the height of the event line
+	zeroLinePts := plotter.XYs{{X: 0.0, Y: 0}, {X: 0.0, Y: halfPeak / 2}}
+	zeroLine, err3 := plotter.NewLine(zeroLinePts)
+	if err3 == nil {
+		zeroLine.Color = color.RGBA{R: 220, G: 180, B: 0, A: 255}
+		zeroLine.Width = vg.Points(2)
+		zeroLine.Dashes = []vg.Length{vg.Points(6), vg.Points(3)}
+		plt.Add(zeroLine)
+		plt.Legend.Add("zero level", zeroLine)
+	}
+
+	// Reversed x-axis: 1.2 on the left, -0.2 on the right
+	plt.X.Scale = reverseNorm{}
+	plt.X.Min = -0.2
+	plt.X.Max = 1.2
+	plt.Y.Min = 0.0
+	plt.Y.Max = yMax
+
+	// Center the legend horizontally
+	plt.Legend.Top = true
+	plt.Legend.Left = false
+	plt.Legend.XOffs = vg.Points(-120)
+
+	width := vg.Length(plotWidth) * vg.Inch / 96
+	height := vg.Length(plotHeight) * vg.Inch / 96
+
+	img := vgimg.New(width, height)
+	dc := draw.New(img)
+	plt.Draw(dc)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img.Image()); err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to encode NIE histogram PNG: %w", err)
+	}
+
+	nieHistPath := filepath.Join(appDir, "nieHistogram.png")
+	if resultsFolder != "" {
+		nieHistPath = filepath.Join(resultsFolder, "nieHistogram.png")
+	}
+	if err := os.WriteFile(nieHistPath, buf.Bytes(), 0644); err != nil {
+		fmt.Printf("Warning: could not save nieHistogram.png: %v\n", err)
+	}
+
+	histImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to decode NIE histogram PNG: %w", err)
+	}
+	return histImg, mean, sigma, nil
+}
+
 // fitSearchResult holds the output of runFitSearch for display.
 type fitSearchResult struct {
 	results        []searchResult
@@ -641,22 +871,25 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 
 // displayFitSearchResult shows the path offset plot and the full fit for the best offset.
 // Must be called on the main thread.
-func displayFitSearchResult(app fyne.App, w fyne.Window, params *OccultationParameters, fsr *fitSearchResult, targetTimes, targetValues []float64) (*fitResult, error) {
-	searchPlotImg, err := createPathOffsetPlotImage(fsr.results, params.Title, 1000, 500)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create path offset plot: %w", err)
-	}
+func displayFitSearchResult(app fyne.App, w fyne.Window, params *OccultationParameters, fsr *fitSearchResult, targetTimes, targetValues []float64, showDiagnostics bool) (*fitResult, error) {
+	if showDiagnostics {
+		searchPlotImg, err := createPathOffsetPlotImage(fsr.results, params.Title, 1000, 500)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create path offset plot: %w", err)
+		}
 
-	searchWindow := app.NewWindow("Peak NCC vs Path Offset")
-	searchCanvas := canvas.NewImageFromImage(searchPlotImg)
-	searchCanvas.FillMode = canvas.ImageFillOriginal
-	searchWindow.SetContent(container.NewScroll(searchCanvas))
-	searchWindow.Resize(fyne.NewSize(1050, 550))
-	searchWindow.Show()
+		searchWindow := app.NewWindow("Peak NCC vs Path Offset")
+		searchCanvas := canvas.NewImageFromImage(searchPlotImg)
+		searchCanvas.FillMode = canvas.ImageFillOriginal
+		searchWindow.SetContent(container.NewScroll(searchCanvas))
+		searchWindow.Resize(fyne.NewSize(1050, 550))
+		searchWindow.CenterOnScreen()
+		searchWindow.Show()
+	}
 
 	params.PathPerpendicularOffsetKm = fsr.bestPathOffset
 	bestFr := fsr.results[fsr.bestIdx].fr
-	err = displayFitResult(app, w, params, bestFr, targetTimes, targetValues)
+	err := displayFitResult(app, w, params, bestFr, targetTimes, targetValues, showDiagnostics)
 	return bestFr, err
 }
 

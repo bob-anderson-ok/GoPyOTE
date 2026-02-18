@@ -4,7 +4,7 @@
 
 ## Overview
 
-The Fit page provides tools for fitting a theoretical diffraction light curve to an observed occultation light curve. It uses Normalized Cross-Correlation (NCC) to find the best time alignment between the two curves, optionally searching across a range of observation path offsets. A Monte Carlo procedure estimates the uncertainty in the derived edge times.
+The Fit page provides tools for fitting a theoretical diffraction light curve to an observed occultation light curve. It uses Normalized Cross-Correlation (NCC) to find the best time alignment between the two curves, optionally searching across a range of observation path offsets. A Monte Carlo procedure estimates the uncertainty in the derived edge times. A Noise-In-Event (NIE) analysis tests whether the detected event could be a random noise fluctuation.
 
 ##
 
@@ -34,16 +34,16 @@ On the interactive plot, click pairs of points to mark baseline regions — segm
 
 ##
 
-### 2. Calculate Baseline
+### 2. Normalize Baseline
 
-Click **Calculate Baseline mean** to:
+Click **Normalize baseline and estimate noise sigma (used for Monte Carlo and NIE trials)** to:
 
 1. **Compute the mean** of all data points within the selected baseline regions.
-2. **Extract noise** — for each baseline point, compute `(value / mean) - 1.0`. These residuals are stored for later use in Monte Carlo uncertainty estimation.
-3. **Scale to unity** — divide all light curve values by the baseline mean so the unocculted level equals 1.0.
+2. **Scale to unity** — divide all light curve values by the baseline mean so the unocculted level equals 1.0.
+3. **Estimate noise sigma** — for each baseline point, compute `(value / mean) - 1.0`. Fit a Gaussian to these residuals and record the standard deviation (sigma), which is used in Monte Carlo and NIE uncertainty estimation.
 4. **Display a noise histogram** — shows the distribution of baseline noise with a Gaussian fit overlay, reporting the mean and sigma.
 
-After this step, the status bar shows the baseline mean, number of points used, and number of noise samples extracted.
+After this step, the status bar shows the baseline mean, number of points used, and the estimated noise sigma.
 
 ##
 
@@ -115,7 +115,7 @@ Click **Run Monte Carlo** to start. An **Abort** button appears to the right of 
 1. **Uses candidate theoretical curves from the fit** — the Monte Carlo procedure reuses the theoretical light curves that were computed during the fit. If a path offset search was performed, all curves from the search steps serve as candidates. If only a single fit was run (no search range), there is one candidate curve.
 
 2. **Runs N trials**, each consisting of:
-   a. **Create a noisy observation** — take the sampled theoretical curve from the best fit and add noise by sampling with replacement from the extracted baseline noise (bootstrap resampling).
+   a. **Create a noisy observation** — take the sampled theoretical curve from the best fit and add Gaussian noise drawn from N(0, noiseSigma), where noiseSigma is the baseline noise sigma estimated during the Normalize Baseline step.
    b. **Search across candidates** — run the NCC sliding fit against each candidate curve and select the one with the highest NCC.
    c. **Record results** — store the edge times and path offset for this trial.
 
@@ -127,7 +127,13 @@ Click **Run Monte Carlo** to start. An **Abort** button appears to the right of 
 
 ### Results
 
-- **Monte Carlo Edge Time Uncertainty** dialog — shows the standard deviation (1 sigma) for each edge and for the duration, along with the number of completed trials.
+- **Monte Carlo Edge Time Uncertainty** dialog — shows the best-fit edge times with 3-sigma uncertainties, and the event duration with its 3-sigma uncertainty, along with the number of completed trials. Example format:
+  ```
+  Edge 1: 03:58:34.5678 +/- 0.0123 sec (3 sigma)
+  Edge 2: 03:58:35.6789 +/- 0.0145 sec (3 sigma)
+
+  Duration: 1.1111 +/- 0.0190 sec (3 sigma)
+  ```
 - **Histograms** (if enabled) — separate windows for each edge time distribution and the duration distribution, each with a Gaussian curve fit overlay.
 - **Individual trial results** (if enabled) — scrollable list showing per-trial edge times, duration, and path offset.
 -
@@ -145,3 +151,52 @@ A final report is written to the log file combining the fit edge times (in times
   Duration: 1.1111 +/- 0.0190 sec (3 sigma)
 --- End Report ---
 ```
+
+##
+
+## NIE (Noise-In-Event) Analysis
+
+The NIE analysis tests whether the detected occultation event could plausibly be produced by a random noise fluctuation in the baseline. It uses the baseline noise sigma and runs ten times as many trials as the Monte Carlo setting.
+
+##
+
+### Prerequisites
+
+NIE analysis requires:
+
+1. **A completed fit** with two detected edges.
+2. **Noise sigma estimated** — run Normalize Baseline first.
+
+##
+
+### Procedure
+
+Click **Run NIE analysis** to start. An **Abort NIE** button appears while trials are running. The procedure:
+
+1. **Determines the event window width** — counts the number of observed light curve samples that fall between the two fit edge times. This is the sliding window width used in each trial.
+
+2. **Runs N × 10 trials** (ten times the Monte Carlo trial count), each consisting of:
+   a. **Generate a synthetic baseline** — draw a sequence of values from N(1.0, noiseSigma), with the same number of points as the observed (trimmed) light curve.
+   b. **Slide a window** of width equal to the event window across the synthetic baseline.
+   c. **Record the minimum window mean** — the deepest dip found anywhere in that sequence by the sliding window.
+
+3. **Histograms the results** and displays the **Noise Induced Drop study** plot.
+
+**Aborting NIE:** Click **Abort NIE** to stop after the current trial. The histogram is generated from however many trials completed.
+
+##
+
+### Results
+
+The **Noise Induced Drop study** window shows:
+
+- **Title** — event title and number of completed trials.
+- **Green histogram** — distribution of minimum window means from all noise trials, labelled *Noise induced drops at event size N*.
+- **X-axis** — labelled *Drop position (drops are bigger toward the right)*, reversed so that 1.2 is on the left and −0.2 is on the right. A Gaussian is fitted internally to set line heights but is not shown on the plot.
+- **Black vertical line** — *Baseline* at x = 1.0 (unocculted level), height equal to half the Gaussian peak.
+- **Blue dashed vertical line** — *Event level (value)*, the mean of the sampled theoretical light curve within the event edges (square wave approximation of the event depth), same height as the baseline line.
+- **Yellow dashed vertical line** — *zero level* at x = 0.0, half the height of the event line.
+
+**Interpretation:** if the blue event level line falls well to the right of the noise histogram (toward larger drops), the event is statistically significant and unlikely to be a noise fluctuation. If it overlaps the histogram substantially, the event detection is marginal.
+
+The NIE histogram is saved as `nieHistogram.png` in the results folder.
