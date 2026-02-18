@@ -109,7 +109,7 @@ After a successful fit, the Monte Carlo procedure estimates the uncertainty in e
   - The **Peak NCC vs Path Offset** plot is displayed after a path offset search.
   - The results dialog includes a scrollable list of individual trial edge times, durations, and path offsets (up to 100 trials displayed).
   - Histogram windows with Gaussian fits are displayed for each edge time and for the event duration.
-- **Enable single point NIE analysis** — checkbox (default: unchecked). When checked, the NIE sliding window width is fixed at 1 sample and the event drop is taken from a single clicked point rather than computed from the fit. See [Single Point NIE Analysis](#single-point-nie-analysis) below.
+- **Enable manual selection of points for NIE analysis** — checkbox (default: unchecked). When checked, the NIE window and event drop are determined by points you click on the light curve rather than from the fit edge times. See [Manual Point NIE Analysis](#manual-point-nie-analysis) below.
 
 ##
 
@@ -177,7 +177,7 @@ NIE analysis requires:
 
 Click **Run NIE analysis** to start. An **Abort NIE** button appears while trials are running. The procedure:
 
-1. **Determines the event window width** — counts the number of observed light curve samples that fall between the two fit edge times. This is the sliding window width used in each trial. (In single point mode the window width is always 1.)
+1. **Determines the event window width** — counts the number of observed light curve samples that fall between the two fit edge times. This is the sliding window width used in each trial. (In manual point mode the window width is 1 for a single selected point, or the span count for two selected points.)
 
 2. **Runs N × 10 trials** (ten times the Monte Carlo trial count), each consisting of:
    a. **Generate a synthetic baseline** — draw a sequence of values from N(1.0, noiseSigma), with the same number of points as the observed (trimmed) light curve.
@@ -190,21 +190,29 @@ Click **Run NIE analysis** to start. An **Abort NIE** button appears while trial
 
 ##
 
-## Single Point NIE Analysis
+## Manual Point NIE Analysis
 
-When **Enable single point NIE analysis** is checked, the NIE analysis tests whether a single observed data point could be a noise fluctuation, rather than a multi-sample event window.
+When **Enable manual selection of points for NIE analysis** is checked, the NIE window and event drop are determined by one or two points you click on the light curve, rather than being computed from the fit edge times.
+
+Checking the box switches the plot from baseline-pair selection mode into point-selection mode. Any previously selected baseline pairs are preserved and remain in effect for the baseline normalisation; the clicks you make while this box is checked are used only for NIE selection.
 
 ### How to use
 
-1. Click on the point on the light curve that you want to test. It will be highlighted as the selected point.
-2. Click **Run NIE analysis**.
-   - If a point is already selected, the analysis runs immediately using that point's value as the event drop.
-   - If no point is selected, a dialog advises you to click a point first, then click **Run NIE analysis** again.
+1. Check **Enable manual selection of points for NIE analysis**.
+2. Click one or two points on the light curve (they will be highlighted).
+3. Click **Run NIE analysis**.
 
-### What changes in single point mode
+- **One point selected**: the NIE sliding window width is set to 1, and the event drop is the Y value of that point.
+- **Two points selected**: the NIE sliding window width equals the number of observed light curve samples that fall within the span between the two selected points (inclusive). The event drop is the mean of those samples.
+- **No points selected**: a dialog is shown advising you to select one or two points first.
 
-- **Window width** is fixed at 1 sample instead of being computed from the fit edge times.
-- **Event drop** is the Y value of the selected point, shown as the blue dashed vertical line on the plot. In normal mode this is the mean of the theoretical curve within the event edges.
+Unchecking the box restores baseline-pair selection mode so you can adjust baseline regions again if needed.
+
+### What changes in manual point mode
+
+- **Click behaviour** — clicks set individual NIE selection points (not baseline pairs). The first click sets the reference point; the second click sets the far end of the span.
+- **Window width** — 1 (single point) or the count of samples in the selected span (two points), instead of being computed from the fit edge times.
+- **Event drop** — the Y value of the selected point (single point) or the mean of the selected span (two points), shown as the blue dashed vertical line on the NIE plot. In normal mode this is the mean of the theoretical curve within the event edges.
 - Everything else — trial count, noise sigma, histogram display, abort — works exactly as in normal NIE mode.
 
 ##
@@ -217,7 +225,7 @@ The **Noise Induced Drop study** window shows:
 - **Green histogram** — distribution of minimum window means from all noise trials, labelled *Noise induced drops at event size N*.
 - **X-axis** — labelled *Drop position (drops are bigger toward the right)*, reversed so that 1.2 is on the left and −0.2 is on the right. A Gaussian is fitted internally to set line heights but is not shown on the plot.
 - **Black vertical line** — *Baseline* at x = 1.0 (unocculted level), height equal to half the Gaussian peak.
-- **Blue dashed vertical line** — *Event level (value)*, the event drop position. In normal mode this is the mean of the sampled theoretical light curve within the event edges (square wave approximation of the event depth). In single point mode this is the Y value of the selected point.
+- **Blue dashed vertical line** — *Event level (value)*, the event drop position. In normal mode this is the mean of the sampled theoretical light curve within the event edges (square wave approximation of the event depth). In manual point mode this is the Y value of the single selected point, or the mean of the selected span for two points.
 - **Yellow dashed vertical line** — *zero level* at x = 0.0, half the height of the event line.
 
 **Interpretation:** if the blue event level line falls well to the right of the noise histogram (toward larger drops), the event is statistically significant and unlikely to be a noise fluctuation. If it overlaps the histogram substantially, the event detection is marginal.
