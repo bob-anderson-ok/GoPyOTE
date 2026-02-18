@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.27"
+const Version = "1.1.28"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -224,9 +224,7 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 		openAtLocation("")
 	})
 	browseBtn.Importance = widget.HighImportance
-	roseBg := canvas.NewRectangle(color.RGBA{R: 255, G: 150, B: 170, A: 255})
-	browseBtnContainer := container.NewStack(roseBg, browseBtn)
-	browseBtnHalf := container.NewGridWrap(fyne.NewSize(450/2, browseBtn.MinSize().Height), browseBtnContainer)
+	browseBtnHalf := container.NewGridWrap(fyne.NewSize(450/2, browseBtn.MinSize().Height), browseBtn)
 	buttons = append(buttons, browseBtnHalf)
 
 	// Add separator
@@ -4339,8 +4337,8 @@ func main() {
 		numTrials := mcTrials * 10
 		nPoints := len(lastFitTargetTimes)
 
-		// launchNIE starts the goroutine given a known windowWidth and eventDrop.
-		launchNIE := func(windowWidth int, eventDrop float64) {
+		// launchNIE starts the goroutine given a known windowWidth, eventDrop, and selection source.
+		launchNIE := func(windowWidth int, eventDrop float64, manualSelection bool) {
 			logAction(fmt.Sprintf("NIE: starting %d trials, nPoints=%d, windowWidth=%d, noiseSigma=%.6f", numTrials, nPoints, windowWidth, noiseSigma))
 			mcProgressBar.SetValue(0)
 			mcProgressBar.Show()
@@ -4368,7 +4366,11 @@ func main() {
 						return
 					}
 					logAction(fmt.Sprintf("NIE: %d trials completed, min-window-mean distribution: mean=%.6f, sigma=%.6f", len(minMeans), nieMean, nieSigma))
-					histWindow := a.NewWindow("Noise Induced Drop study")
+					nieWindowTitle := "Noise Induced Drop study — fit-derived"
+					if manualSelection {
+						nieWindowTitle = "Noise Induced Drop study — manual selection"
+					}
+					histWindow := a.NewWindow(nieWindowTitle)
 					histCanvas := canvas.NewImageFromImage(histImg)
 					histCanvas.FillMode = canvas.ImageFillOriginal
 					histWindow.SetContent(container.NewScroll(histCanvas))
@@ -4405,12 +4407,12 @@ func main() {
 				}
 				eventDrop := dropSum / float64(windowWidth)
 				logAction(fmt.Sprintf("NIE two-point: x1=%.6f x2=%.6f window=%d eventDrop=%.6f", x1, x2, windowWidth, eventDrop))
-				launchNIE(windowWidth, eventDrop)
+				launchNIE(windowWidth, eventDrop, true)
 			} else if p1 {
 				// Single-point mode: window=1, the drop=selected point value.
 				y := lightCurvePlot.SelectedPoint1Value
 				logAction(fmt.Sprintf("NIE single-point: using selected point value=%.6f", y))
-				launchNIE(1, y)
+				launchNIE(1, y, true)
 			} else {
 				dialog.ShowInformation("Manual NIE Selection",
 					"No point is currently selected.\n\nSelect one or two points on the light curve, then click Run NIE analysis again.\n\n"+
@@ -4434,24 +4436,18 @@ func main() {
 				dialog.ShowError(fmt.Errorf("no target samples found between event edges â check fit result"), w)
 				return
 			}
+			// Event drop = minimum theoretical value between the fit edges.
 			eventDrop := 1.0
-			e1 := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
-			e2 := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
-			if e1 > e2 {
-				e1, e2 = e2, e1
-			}
-			var dropSum float64
-			var dropCount int
+			first := true
 			for i, t := range lastFitResult.sampledTimes {
-				if t >= e1 && t <= e2 {
-					dropSum += lastFitResult.sampledVals[i]
-					dropCount++
+				if t >= edge1Abs && t <= edge2Abs {
+					if first || lastFitResult.sampledVals[i] < eventDrop {
+						eventDrop = lastFitResult.sampledVals[i]
+						first = false
+					}
 				}
 			}
-			if dropCount > 0 {
-				eventDrop = dropSum / float64(dropCount)
-			}
-			launchNIE(windowWidth, eventDrop)
+			launchNIE(windowWidth, eventDrop, false)
 		}
 	})
 	runNieBtn.Importance = widget.HighImportance
@@ -4491,7 +4487,7 @@ func main() {
 	)))
 	tab10 := container.NewTabItem("Fit", tab10Content)
 
-	tabs := container.NewAppTabs(tab2, tab3, tab5, tab6, tab7, vizierTab.TabItem, tab10)
+	tabs := container.NewAppTabs(tab2, tab3, tab10, tab5, tab6, tab7, vizierTab.TabItem)
 
 	// Apply dark tab backgrounds if dark mode was persisted
 	if prefs.BoolWithFallback("darkMode", false) {

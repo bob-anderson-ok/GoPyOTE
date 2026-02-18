@@ -752,7 +752,7 @@ func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop floa
 		vLine.Width = vg.Points(2)
 		vLine.Dashes = []vg.Length{vg.Points(6), vg.Points(3)}
 		plt.Add(vLine)
-		plt.Legend.Add(fmt.Sprintf("Event level (%.4f)", eventDrop), vLine)
+		plt.Legend.Add(fmt.Sprintf("Event bottom @ %.4f", eventDrop), vLine)
 	}
 
 	// Gray vertical line at x=0.0 (zero level) — half the height of the event line
@@ -766,9 +766,13 @@ func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop floa
 		plt.Legend.Add("zero level", zeroLine)
 	}
 
-	// Reversed x-axis: 1.2 on the left, -0.2 on the right
+	// Reversed x-axis: 1.2 on the left, -0.2 (or eventDrop with margin) on the right
+	xMin := -0.2
+	if eventDrop < xMin {
+		xMin = eventDrop - 0.1
+	}
 	plt.X.Scale = reverseNorm{}
-	plt.X.Min = -0.2
+	plt.X.Min = xMin
 	plt.X.Max = 1.2
 	plt.Y.Min = 0.0
 	plt.Y.Max = yMax

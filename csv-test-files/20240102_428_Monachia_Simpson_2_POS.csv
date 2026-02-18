@@ -81,7 +81,6 @@
 #
 # Aperture photometry was used to extract the lightcurves
 FrameNum,timeInfo,signal-target,signal-tracking,appsum-target,avgbkg-target,stdbkg-target,nmaskpx-target,maxpx-target,xcentroid-target,ycentroid-target,hit-defect-target,appsum-tracking,avgbkg-tracking,stdbkg-tracking,nmaskpx-tracking,maxpx-tracking,xcentroid-tracking,ycentroid-tracking,hit-defect-tracking
-0.00,[03:11:42.740496],5767.00,28779.00,156032.00,4061.21,244.35,-37,5056,928.00,412.00,0,178816.00,4055.06,243.05,-37,6784,614.00,247.00,0
 2.00,[03:11:43.026185],6252.00,22504.00,156352.00,4056.75,247.63,-37,5056,926.00,411.00,0,172736.00,4060.31,245.78,-37,6656,612.00,246.00,0
 3.00,[03:11:43.169029],2716.00,30173.00,152448.00,4046.81,252.48,-37,5056,926.00,410.00,0,180864.00,4072.73,250.03,-37,6528,612.00,245.00,0
 4.00,[03:11:43.311874],6680.00,30741.00,156032.00,4036.55,237.36,-37,5056,925.00,410.00,0,180992.00,4060.84,251.11,-37,6784,611.00,245.00,0
