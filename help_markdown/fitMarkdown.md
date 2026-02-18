@@ -41,7 +41,7 @@ Click **Normalize baseline and estimate noise sigma (used for Monte Carlo and NI
 1. **Compute the mean** of all data points within the selected baseline regions.
 2. **Scale to unity** — divide all light curve values by the baseline mean so the unocculted level equals 1.0.
 3. **Estimate noise sigma** — for each baseline point, compute `(value / mean) - 1.0`. Fit a Gaussian to these residuals and record the standard deviation (sigma), which is used in Monte Carlo and NIE uncertainty estimation.
-4. **Display a noise histogram** — shows the distribution of baseline noise with a Gaussian fit overlay, reporting the mean and sigma.
+4. **Display a noise histogram** (only if **Show diagnostics plots** is checked) — shows the distribution of baseline noise with a Gaussian fit overlay, reporting the mean and sigma.
 
 After this step, the status bar shows the baseline mean, number of points used, and the estimated noise sigma.
 
@@ -77,7 +77,7 @@ Click **Fit** to start. An **Abort** button appears to the right of the Fit butt
 4. **Runs an NCC sliding fit** — slides the theoretical curve across the observed curve in steps of one frame period, computing the NCC at each offset. The NCC is weighted by the overlap fraction (number of overlapping points / maximum overlap) to penalize partial overlaps.
 5. **Finds the best alignment** — the time offset with the highest weighted NCC.
 
-If a **search range** is specified, this process repeats for each path offset step and a **Peak NCC vs Path Offset** plot is shown. The path offset with the highest peak NCC is selected.
+If a **search range** is specified, this process repeats for each path offset step and a **Peak NCC vs Path Offset** plot is shown (only if **Show diagnostics plots** is checked). The path offset with the highest peak NCC is selected.
 
 **Aborting a fit search:** If a path offset search is taking too long, click the **Abort** button. The search stops after the current step completes, and results are displayed using whatever steps have been completed so far. The best path offset is selected from the completed steps. This is useful when searching a large range and you can see that the region of interest has already been covered.
 
@@ -85,7 +85,7 @@ If a **search range** is specified, this process repeats for each path offset st
 
 #### Fit Results Displayed
 
-- **NCC Fit Result** window — plot of NCC (weighted and unweighted) versus time offset, with the peak marked.
+- **NCC Fit Result** window (only if **Show diagnostics plots** is checked) — plot of NCC (weighted and unweighted) versus time offset, with the peak marked.
 - **Fit Result** window — overlay plot of observed (blue) and theoretical (light red) light curves at the best alignment, with sampled theoretical points (dark red dots) and geometric shadow edges (green dashed vertical lines).
 - **Observation Path** window — the diffraction image with the observation path drawn at the best-fit offset.
 - **Fit Edge Times** dialog — reports NCC value, time offset, path offset, edge times in timestamp format (hh:mm:ss.ssss), event duration, number of samples between event edges, and the minimum theoretical value at the event.
@@ -103,8 +103,13 @@ After a successful fit, the Monte Carlo procedure estimates the uncertainty in e
 ### Configuration
 
 - **Monte Carlo trials** — entry box for the number of trials (default: 1000).
-- **Show individual trial results** — checkbox (default: unchecked). When checked, the results dialog includes a scrollable list of individual trial edge times, durations, and path offsets.
-- **Show histograms** — checkbox (default: unchecked). When checked, histogram windows with Gaussian fits are displayed for each edge time and for the event duration.
+- **Show diagnostics plots** — checkbox (default: unchecked). When checked:
+  - The **Baseline Noise Histogram** is displayed after normalizing the baseline.
+  - The **NCC Fit Result** window is displayed after each fit.
+  - The **Peak NCC vs Path Offset** plot is displayed after a path offset search.
+  - The results dialog includes a scrollable list of individual trial edge times, durations, and path offsets (up to 100 trials displayed).
+  - Histogram windows with Gaussian fits are displayed for each edge time and for the event duration.
+- **Enable single point NIE analysis** — checkbox (default: unchecked). When checked, the NIE sliding window width is fixed at 1 sample and the event drop is taken from a single clicked point rather than computed from the fit. See [Single Point NIE Analysis](#single-point-nie-analysis) below.
 
 ##
 
@@ -134,9 +139,8 @@ Click **Run Monte Carlo** to start. An **Abort** button appears to the right of 
 
   Duration: 1.1111 +/- 0.0190 sec (3 sigma)
   ```
-- **Histograms** (if enabled) — separate windows for each edge time distribution and the duration distribution, each with a Gaussian curve fit overlay.
-- **Individual trial results** (if enabled) — scrollable list showing per-trial edge times, duration, and path offset.
--
+- **Histograms** (if **Show diagnostics plots** is checked) — separate windows for each edge time distribution and the duration distribution, each with a Gaussian curve fit overlay.
+- **Individual trial results** (if **Show diagnostics plots** is checked) — scrollable list in the results dialog showing per-trial edge times, duration, and path offset for up to 100 trials. If more than 100 trials completed, a note indicates how many additional results are not shown.
 ##
 
 ### Final Report (Log File)
@@ -173,7 +177,7 @@ NIE analysis requires:
 
 Click **Run NIE analysis** to start. An **Abort NIE** button appears while trials are running. The procedure:
 
-1. **Determines the event window width** — counts the number of observed light curve samples that fall between the two fit edge times. This is the sliding window width used in each trial.
+1. **Determines the event window width** — counts the number of observed light curve samples that fall between the two fit edge times. This is the sliding window width used in each trial. (In single point mode the window width is always 1.)
 
 2. **Runs N × 10 trials** (ten times the Monte Carlo trial count), each consisting of:
    a. **Generate a synthetic baseline** — draw a sequence of values from N(1.0, noiseSigma), with the same number of points as the observed (trimmed) light curve.
@@ -186,6 +190,25 @@ Click **Run NIE analysis** to start. An **Abort NIE** button appears while trial
 
 ##
 
+## Single Point NIE Analysis
+
+When **Enable single point NIE analysis** is checked, the NIE analysis tests whether a single observed data point could be a noise fluctuation, rather than a multi-sample event window.
+
+### How to use
+
+1. Click on the point on the light curve that you want to test. It will be highlighted as the selected point.
+2. Click **Run NIE analysis**.
+   - If a point is already selected, the analysis runs immediately using that point's value as the event drop.
+   - If no point is selected, a dialog advises you to click a point first, then click **Run NIE analysis** again.
+
+### What changes in single point mode
+
+- **Window width** is fixed at 1 sample instead of being computed from the fit edge times.
+- **Event drop** is the Y value of the selected point, shown as the blue dashed vertical line on the plot. In normal mode this is the mean of the theoretical curve within the event edges.
+- Everything else — trial count, noise sigma, histogram display, abort — works exactly as in normal NIE mode.
+
+##
+
 ### Results
 
 The **Noise Induced Drop study** window shows:
@@ -194,7 +217,7 @@ The **Noise Induced Drop study** window shows:
 - **Green histogram** — distribution of minimum window means from all noise trials, labelled *Noise induced drops at event size N*.
 - **X-axis** — labelled *Drop position (drops are bigger toward the right)*, reversed so that 1.2 is on the left and −0.2 is on the right. A Gaussian is fitted internally to set line heights but is not shown on the plot.
 - **Black vertical line** — *Baseline* at x = 1.0 (unocculted level), height equal to half the Gaussian peak.
-- **Blue dashed vertical line** — *Event level (value)*, the mean of the sampled theoretical light curve within the event edges (square wave approximation of the event depth), same height as the baseline line.
+- **Blue dashed vertical line** — *Event level (value)*, the event drop position. In normal mode this is the mean of the sampled theoretical light curve within the event edges (square wave approximation of the event depth). In single point mode this is the Y value of the selected point.
 - **Yellow dashed vertical line** — *zero level* at x = 0.0, half the height of the event line.
 
 **Interpretation:** if the blue event level line falls well to the right of the noise histogram (toward larger drops), the event is statistically significant and unlikely to be a noise fluctuation. If it overlaps the histogram substantially, the event detection is marginal.
