@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.31"
+const Version = "1.1.32"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1202,17 +1202,20 @@ func main() {
 
 	// Load the last used parameters path from preferences for startup display
 	lastLoadedParamsPath = prefs.StringWithFallback("lastLoadedParamsPath", "")
-	lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
-	lastDiffractionTitle = prefs.StringWithFallback("lastDiffractionTitle", "")
-	// Backfill the title from the parameters file if a path exists but title was never saved
-	if lastDiffractionParamsPath != "" && lastDiffractionTitle == "" {
-		if f, err := os.Open(lastDiffractionParamsPath); err == nil {
-			if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
-				lastDiffractionTitle = p.Title
-				prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
-			}
-			if err := f.Close(); err != nil {
-				fmt.Printf("Warning: failed to close parameters file: %v\n", err)
+	// Only restore the diffraction image data if the user opted to reuse it across sessions
+	if prefs.BoolWithFallback("reuseCurrentDiffractionImage", false) {
+		lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
+		lastDiffractionTitle = prefs.StringWithFallback("lastDiffractionTitle", "")
+		// Backfill the title from the parameters file if a path exists but title was never saved
+		if lastDiffractionParamsPath != "" && lastDiffractionTitle == "" {
+			if f, err := os.Open(lastDiffractionParamsPath); err == nil {
+				if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
+					lastDiffractionTitle = p.Title
+					prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
+				}
+				if err := f.Close(); err != nil {
+					fmt.Printf("Warning: failed to close parameters file: %v\n", err)
+				}
 			}
 		}
 	}
@@ -1450,8 +1453,13 @@ func main() {
 	timestampTicksCheck := widget.NewCheck("Use timestamp format to display time value", nil)
 	timestampTicksCheck.Checked = true
 
+	reuseImageCheck := widget.NewCheck("Use current diffraction image for next session", func(checked bool) {
+		prefs.SetBool("reuseCurrentDiffractionImage", checked)
+	})
+	reuseImageCheck.Checked = prefs.BoolWithFallback("reuseCurrentDiffractionImage", false)
+
 	tab2Bg := makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
-	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck)))
+	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, reuseImageCheck)))
 	tab2 := container.NewTabItem("Settings", tab2Content)
 
 	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
@@ -1506,7 +1514,8 @@ func main() {
 	// Track the current x-axis label for click callback
 	currentXAxisLabel := "Time"
 
-	var onFitTab bool // Track whether the Fit tab is active
+	var onFitTab bool            // Track whether the Fit tab is active
+	var iotaRanSuccessfully bool // Suppresses IOTAdiffraction reminder after a successful run
 
 	// Create the plot with an empty series (will be populated when CSV is loaded)
 	var lightCurvePlot *LightCurvePlot
@@ -1745,6 +1754,9 @@ func main() {
 	refreshStartupOverlay()
 
 	startupOverlay := container.NewBorder(nil, startupInfoLabel, nil, nil, startupDiffImg)
+	if !reuseImageCheck.Checked {
+		startupOverlay.Hide()
+	}
 
 	plotCenter := container.NewStack(lightCurvePlot, startupOverlay)
 
@@ -2376,6 +2388,10 @@ func main() {
 
 			loadedLightCurveData = data
 			startupOverlay.Hide()
+			if !reuseImageCheck.Checked && !iotaRanSuccessfully {
+				dialog.ShowInformation("IOTAdiffraction reminder",
+					"Remember to run IOTAdiffraction before proceeding with fits.", w)
+			}
 
 			// Create an action log file for this CSV
 			if err := createActionLog(filePath); err != nil {
@@ -3902,7 +3918,7 @@ func main() {
 		if !searchRangeLockDialogShowing {
 			searchRangeLockDialogShowing = true
 			d := dialog.NewInformation("Manual search range entry for path offsets is disabled",
-				"Check 'Enable manual entry of search range' to edit these fields.\n\nYou may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.", w)
+				"Check 'Enable manual entry of search range' to edit these fields.\n\nYou may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.\n\nRemember to click Run Fit Search after doing manual search range selection because the Monte Carlo trials use the path range from the last click on Run Fit Search.", w)
 			d.SetOnClosed(func() { searchRangeLockDialogShowing = false })
 			d.Show()
 		}
@@ -3917,7 +3933,7 @@ func main() {
 		if !searchRangeLockDialogShowing {
 			searchRangeLockDialogShowing = true
 			d := dialog.NewInformation("Manual search range entry for path offsets is disabled",
-				"Check 'Enable manual entry of search range' to edit these fields.\n\nYou may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.", w)
+				"Check 'Enable manual entry of search range' to edit these fields.\n\nYou may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.\n\nRemember to click Run Fit Search after doing manual search range selection because the Monte Carlo trials use the path range from the last click on Run Fit Search.", w)
 			d.SetOnClosed(func() { searchRangeLockDialogShowing = false })
 			d.Show()
 		}
@@ -4572,6 +4588,12 @@ func main() {
 				return
 			}
 
+			// Fit tab: remind the user to run IOTAdiffraction if they haven't opted in to reuse
+			if !reuseImageCheck.Checked && !iotaRanSuccessfully {
+				dialog.ShowInformation("IOTAdiffraction reminder",
+					"Remember to run IOTAdiffraction before proceeding with fits.", w)
+			}
+
 			// Fit tab: multi-pair mode for baseline selection, unless the NIE manual
 			// selection checkbox is checked, in which case keep two-point mode.
 			lightCurvePlot.SingleSelectMode = false
@@ -4753,9 +4775,10 @@ func main() {
 				appendOutput(fmt.Sprintf("\n[Error: %v]", err))
 			} else {
 				appendOutput("\n[Process completed successfully]")
+				iotaRanSuccessfully = true
 				fyne.Do(func() {
 					refreshStartupOverlay()
-					startupOverlay.Show()
+					startupOverlay.Hide()
 				})
 			}
 		}()
