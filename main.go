@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.30"
+const Version = "1.1.31"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2079,13 +2079,32 @@ func main() {
 
 	// Set the Set trim button callback now that lightCurvePlot, frameRangeStart/End, and rebuildPlot exist
 	setTrimBtn.OnTapped = func() {
-		if !lightCurvePlot.SelectedPoint1Valid || !lightCurvePlot.SelectedPoint2Valid {
-			dialog.ShowError(fmt.Errorf("select exactly two points on the plot first"), w)
-			return
+		var idx1, idx2 int
+
+		if lightCurvePlot.MultiPairSelectMode {
+			// On the Fit page, two clicks save a PointPair rather than setting
+			// SelectedPoint1/2Valid. Use the most recently saved pair for trim.
+			if lightCurvePlot.SelectedPoint1Valid {
+				dialog.ShowError(fmt.Errorf("select a second point on the plot first"), w)
+				return
+			}
+			if len(lightCurvePlot.SelectedPairs) == 0 {
+				dialog.ShowError(fmt.Errorf("select exactly two points on the plot first"), w)
+				return
+			}
+			lastPair := lightCurvePlot.SelectedPairs[len(lightCurvePlot.SelectedPairs)-1]
+			idx1 = lastPair.Point1DataIdx
+			idx2 = lastPair.Point2DataIdx
+			lightCurvePlot.SelectedPairs = lightCurvePlot.SelectedPairs[:len(lightCurvePlot.SelectedPairs)-1]
+		} else {
+			if !lightCurvePlot.SelectedPoint1Valid || !lightCurvePlot.SelectedPoint2Valid {
+				dialog.ShowError(fmt.Errorf("select exactly two points on the plot first"), w)
+				return
+			}
+			// Get frame numbers from loaded data using the data indices
+			idx1 = lightCurvePlot.selectedPointDataIndex
+			idx2 = lightCurvePlot.selectedPointDataIndex2
 		}
-		// Get frame numbers from loaded data using the data indices
-		idx1 := lightCurvePlot.selectedPointDataIndex
-		idx2 := lightCurvePlot.selectedPointDataIndex2
 		var frame1, frame2 float64
 		if loadedLightCurveData != nil && idx1 < len(loadedLightCurveData.FrameNumbers) {
 			frame1 = loadedLightCurveData.FrameNumbers[idx1]
@@ -3883,7 +3902,7 @@ func main() {
 		if !searchRangeLockDialogShowing {
 			searchRangeLockDialogShowing = true
 			d := dialog.NewInformation("Manual search range entry for path offsets is disabled",
-				"Check 'Enable manual entry of search range' to edit these fields.", w)
+				"Check 'Enable manual entry of search range' to edit these fields.\n\nYou may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.", w)
 			d.SetOnClosed(func() { searchRangeLockDialogShowing = false })
 			d.Show()
 		}
@@ -3898,7 +3917,7 @@ func main() {
 		if !searchRangeLockDialogShowing {
 			searchRangeLockDialogShowing = true
 			d := dialog.NewInformation("Manual search range entry for path offsets is disabled",
-				"Check 'Enable manual entry of search range' to edit these fields.", w)
+				"Check 'Enable manual entry of search range' to edit these fields.\n\nYou may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.", w)
 			d.SetOnClosed(func() { searchRangeLockDialogShowing = false })
 			d.Show()
 		}
