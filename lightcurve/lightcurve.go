@@ -324,6 +324,15 @@ func LoadGray16PNG(filename string, scale float64) (matrix [][]float64, err erro
 		return nil, fmt.Errorf("failed to decode %s: %w", filename, err)
 	}
 
+	switch img.(type) {
+	case *image.Gray16:
+		// expected
+	case *image.NRGBA, *image.RGBA:
+		// 32-bit image — convert per-pixel using RGB average
+	default:
+		return nil, fmt.Errorf("%s is not a Gray16 image (got %T)", filename, img)
+	}
+
 	bounds := img.Bounds()
 	h := bounds.Dy()
 	w := bounds.Dx()
@@ -335,7 +344,6 @@ func LoadGray16PNG(filename string, scale float64) (matrix [][]float64, err erro
 			c := img.At(x+bounds.Min.X, y+bounds.Min.Y)
 			gray, ok := c.(color.Gray16)
 			if !ok {
-				// Try to convert
 				r, g, b, _ := c.RGBA()
 				grayVal := (r + g + b) / 3
 				matrix[y][x] = float64(grayVal) / scale
@@ -364,6 +372,15 @@ func LoadGray8PNG(filename string) (matrix [][]float64, err error) {
 	img, err := png.Decode(f)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode %s: %w", filename, err)
+	}
+
+	switch img.(type) {
+	case *image.Gray:
+		// expected
+	case *image.NRGBA, *image.RGBA:
+		// 32-bit image — convert per-pixel using RGB average
+	default:
+		return nil, fmt.Errorf("%s is not a Gray (8-bit) image (got %T)", filename, img)
 	}
 
 	bounds := img.Bounds()

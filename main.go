@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.29"
+const Version = "1.1.30"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3753,11 +3753,6 @@ func main() {
 	})
 	calcBaselineMeanBtn.Importance = widget.HighImportance
 
-	// Path perpendicular offset override entry
-	fitOffsetEntry := widget.NewEntry()
-	fitOffsetEntry.SetPlaceHolder("from parameters file")
-	fitOffsetLabel := widget.NewLabel("Path Perpendicular Offset (km)")
-
 	// Search range for observation path offset
 	searchInitialOffsetEntry := NewFocusLossEntry()
 	searchInitialOffsetEntry.SetPlaceHolder("")
@@ -3765,6 +3760,12 @@ func main() {
 	searchFinalOffsetEntry.SetPlaceHolder("")
 	searchNumStepsEntry := widget.NewEntry()
 	searchNumStepsEntry.SetPlaceHolder("")
+
+	var lockedInitialVal = "0.0"
+	var lockedFinalVal string
+	var suppressSearchChange bool
+	var searchRangeLockDialogShowing bool
+	searchRangeManualCheck := widget.NewCheck("Enable manual entry of search range", nil)
 
 	// Preview window for search range paths — kept so we can update in place
 	var searchPreviewWindow fyne.Window
@@ -3872,6 +3873,37 @@ func main() {
 	searchInitialOffsetEntry.OnSubmitted = func(_ string) { showSearchRangePreview() }
 	searchFinalOffsetEntry.OnSubmitted = func(_ string) { showSearchRangePreview() }
 
+	searchInitialOffsetEntry.OnChanged = func(_ string) {
+		if searchRangeManualCheck.Checked || suppressSearchChange {
+			return
+		}
+		suppressSearchChange = true
+		searchInitialOffsetEntry.SetText(lockedInitialVal)
+		suppressSearchChange = false
+		if !searchRangeLockDialogShowing {
+			searchRangeLockDialogShowing = true
+			d := dialog.NewInformation("Manual search range entry for path offsets is disabled",
+				"Check 'Enable manual entry of search range' to edit these fields.", w)
+			d.SetOnClosed(func() { searchRangeLockDialogShowing = false })
+			d.Show()
+		}
+	}
+	searchFinalOffsetEntry.OnChanged = func(_ string) {
+		if searchRangeManualCheck.Checked || suppressSearchChange {
+			return
+		}
+		suppressSearchChange = true
+		searchFinalOffsetEntry.SetText(lockedFinalVal)
+		suppressSearchChange = false
+		if !searchRangeLockDialogShowing {
+			searchRangeLockDialogShowing = true
+			d := dialog.NewInformation("Manual search range entry for path offsets is disabled",
+				"Check 'Enable manual entry of search range' to edit these fields.", w)
+			d.SetOnClosed(func() { searchRangeLockDialogShowing = false })
+			d.Show()
+		}
+	}
+
 	searchRangeForm := widget.NewForm(
 		&widget.FormItem{Text: "Initial offset", Widget: searchInitialOffsetEntry},
 		&widget.FormItem{Text: "Final offset", Widget: searchFinalOffsetEntry},
@@ -3944,16 +3976,6 @@ func main() {
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("could not parse parameters: %v", err), w)
 				return
-			}
-
-			// Override path perpendicular offset if the user entered a value
-			if offsetText := fitOffsetEntry.Text; offsetText != "" {
-				offsetVal, err := strconv.ParseFloat(strings.TrimSpace(offsetText), 64)
-				if err != nil {
-					dialog.ShowError(fmt.Errorf("invalid Path Perpendicular Offset value: %v", err), w)
-					return
-				}
-				params.PathPerpendicularOffsetKm = offsetVal
 			}
 
 			// Find the single displayed column index
@@ -4471,10 +4493,8 @@ func main() {
 		widget.NewSeparator(),
 		container.NewHBox(calcBaselineMeanBtn),
 		widget.NewSeparator(),
-		fitOffsetLabel,
-		fitOffsetEntry,
 		searchRangeCard,
-		container.NewHBox(fitBtn, fitAbortBtn),
+		container.NewHBox(fitBtn, fitAbortBtn, searchRangeManualCheck),
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
@@ -4522,11 +4542,58 @@ func main() {
 			lightCurvePlot.SelectedPoint2Value = 0
 			lightCurvePlot.Refresh()
 		} else if tab == tab10 {
+			// Fit tab: require exactly one light curve to be displayed
+			if len(displayedCurves) != 1 {
+				dialog.ShowError(fmt.Errorf(
+					"The Fit page requires a CSV file to be loaded with exactly one light curve displayed.\n\n"+
+						"Currently %d light curve(s) are selected.\n\n"+
+						"Please load a CSV file and select a single light curve before opening the Fit page.",
+					len(displayedCurves)), w)
+				tabs.Select(tab3)
+				return
+			}
+
 			// Fit tab: multi-pair mode for baseline selection, unless the NIE manual
 			// selection checkbox is checked, in which case keep two-point mode.
 			lightCurvePlot.SingleSelectMode = false
 			lightCurvePlot.MultiPairSelectMode = !nieSinglePointCheck.Checked
 			lightCurvePlot.Refresh()
+
+			// Autofill search range defaults from the parameters file
+			if lastDiffractionParamsPath != "" {
+				go func() {
+					file, err := os.Open(lastDiffractionParamsPath)
+					if err != nil {
+						return
+					}
+					params, err := parseOccultationParameters(file)
+					if closeErr := file.Close(); closeErr != nil {
+						fmt.Printf("Failed to close parameters file: %v\n", closeErr)
+					}
+					if err != nil {
+						return
+					}
+					finalVal := params.MainBody.MajorAxisKm / 2
+					numSteps := 0
+					if params.FundamentalPlaneWidthNumPoints > 0 {
+						stepSize := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+						if stepSize > 0 {
+							numSteps = int(math.Abs(finalVal)/stepSize) + 1
+						}
+					}
+					ns := numSteps
+					fv := finalVal
+					fyne.Do(func() {
+						lockedInitialVal = "0.0"
+						lockedFinalVal = strconv.FormatFloat(fv, 'f', -1, 64)
+						searchInitialOffsetEntry.SetText(lockedInitialVal)
+						searchFinalOffsetEntry.SetText(lockedFinalVal)
+						if ns > 0 {
+							searchNumStepsEntry.SetText(fmt.Sprintf("%d", ns))
+						}
+					})
+				}()
+			}
 		} else {
 			lightCurvePlot.SingleSelectMode = false
 			lightCurvePlot.MultiPairSelectMode = false

@@ -820,6 +820,7 @@ type fitSearchResult struct {
 // It is safe to call from a goroutine. UI display is handled separately.
 func runFitSearch(params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int, abort *atomic.Bool, onProgress func(float64)) (*fitSearchResult, error) {
 	results := make([]searchResult, 0, numSteps)
+	var firstErr error
 
 	for step := 0; step < numSteps; step++ {
 		if abort != nil && abort.Load() {
@@ -839,11 +840,17 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 
 		pc, err := buildPrecomputedCurve(params)
 		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
 			fmt.Printf("Fit at path offset %.3f km failed: %v\n", offset, err)
 			continue
 		}
 		fr, err := nccSlidingFit(pc, targetTimes, targetValues)
 		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
 			fmt.Printf("Fit at path offset %.3f km failed: %v\n", offset, err)
 			continue
 		}
@@ -857,6 +864,9 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 	}
 
 	if len(results) == 0 {
+		if firstErr != nil {
+			return nil, fmt.Errorf("all path offset fits failed: %w", firstErr)
+		}
 		return nil, fmt.Errorf("all path offset fits failed")
 	}
 
