@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.32"
+const Version = "1.1.33"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -733,7 +733,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 	})
 
 	scrollable := container.NewVScroll(pasteEntry)
-	scrollable.SetMinSize(fyne.NewSize(800, 400))
+	scrollable.SetMinSize(fyne.NewSize(800, 300))
 
 	// --- Site Location section ---
 	longDegEntry := widget.NewEntry()
@@ -864,6 +864,68 @@ func showProcessOccelemntDialog(w fyne.Window) {
 	altitudeEntry.SetPlaceHolder("meters")
 	altitudeContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(80, 36)), altitudeEntry)
 
+	// --- Observer / Equipment entries ---
+	observer1Entry := widget.NewEntry()
+	observer1Entry.SetPlaceHolder("first observer name")
+	observer1Container := container.New(layout.NewGridWrapLayout(fyne.NewSize(200, 36)), observer1Entry)
+
+	observer2Entry := widget.NewEntry()
+	observer2Entry.SetPlaceHolder("second observer (optional)")
+	observer2Container := container.New(layout.NewGridWrapLayout(fyne.NewSize(200, 36)), observer2Entry)
+
+	observatoryEntry := widget.NewEntry()
+	observatoryEntry.SetPlaceHolder("observatory name")
+	observatoryContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(200, 36)), observatoryEntry)
+
+	emailEntry := widget.NewEntry()
+	emailEntry.SetPlaceHolder("e-mail address")
+	emailContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(200, 36)), emailEntry)
+
+	addressEntry := widget.NewEntry()
+	addressEntry.SetPlaceHolder("postal address")
+	addressContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(280, 36)), addressEntry)
+
+	nearestCityEntry := widget.NewEntry()
+	nearestCityEntry.SetPlaceHolder("nearest city")
+	nearestCityContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(160, 36)), nearestCityEntry)
+
+	countryCodeEntry := widget.NewEntry()
+	countryCodeEntry.SetPlaceHolder("e.g. US")
+	countryCodeContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(60, 36)), countryCodeEntry)
+
+	telescopeEntry := widget.NewEntry()
+	telescopeEntry.SetPlaceHolder("telescope description")
+	telescopeContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(220, 36)), telescopeEntry)
+
+	apertureEntry := widget.NewEntry()
+	apertureEntry.SetPlaceHolder("e.g. 80mm")
+	apertureContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(90, 36)), apertureEntry)
+
+	focalLengthEntry := widget.NewEntry()
+	focalLengthEntry.SetPlaceHolder("e.g. 500mm")
+	focalLengthContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(90, 36)), focalLengthEntry)
+
+	observingMethodEntry := widget.NewEntry()
+	observingMethodEntry.SetPlaceHolder("e.g. video")
+	observingMethodContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), observingMethodEntry)
+
+	timeSourceEntry := widget.NewEntry()
+	timeSourceEntry.SetPlaceHolder("e.g. GPS")
+	timeSourceContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), timeSourceEntry)
+
+	cameraEntry := widget.NewEntry()
+	cameraEntry.SetPlaceHolder("camera model")
+	cameraContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(200, 36)), cameraEntry)
+
+	observerEquipSection := container.NewVBox(
+		widget.NewLabel("Observer / Equipment:"),
+		container.NewHBox(widget.NewLabel("Observer1:"), observer1Container, layout.NewSpacer(), widget.NewLabel("Observer2:"), observer2Container),
+		container.NewHBox(widget.NewLabel("Observatory:"), observatoryContainer, layout.NewSpacer(), widget.NewLabel("E-mail:"), emailContainer),
+		container.NewHBox(widget.NewLabel("Address:"), addressContainer, layout.NewSpacer(), widget.NewLabel("NearestCity:"), nearestCityContainer, layout.NewSpacer(), widget.NewLabel("CountryCode:"), countryCodeContainer),
+		container.NewHBox(widget.NewLabel("Telescope:"), telescopeContainer, layout.NewSpacer(), widget.NewLabel("Aperture:"), apertureContainer, layout.NewSpacer(), widget.NewLabel("FocalLength:"), focalLengthContainer),
+		container.NewHBox(widget.NewLabel("ObservingMethod:"), observingMethodContainer, layout.NewSpacer(), widget.NewLabel("TimeSource:"), timeSourceContainer, layout.NewSpacer(), widget.NewLabel("Camera:"), cameraContainer),
+	)
+
 	siteLocationSection := container.NewVBox(
 		widget.NewLabel("Site Location:"),
 		container.NewHBox(widget.NewLabel("Longitude(DMS):"), longDegContainer, widget.NewLabel("\u00b0"), longMinContainer, widget.NewLabel("'"), longSecsContainer, widget.NewLabel("\""), layout.NewSpacer(), widget.NewLabel("Longitude(degrees):"), longDecimalContainer),
@@ -885,6 +947,24 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			if cerr := reader.Close(); cerr != nil {
 				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
 			}
+
+			// Clear all entry fields before loading
+			latDecimalEntry.SetText("")
+			longDecimalEntry.SetText("")
+			altitudeEntry.SetText("")
+			observer1Entry.SetText("")
+			observer2Entry.SetText("")
+			observatoryEntry.SetText("")
+			emailEntry.SetText("")
+			addressEntry.SetText("")
+			nearestCityEntry.SetText("")
+			countryCodeEntry.SetText("")
+			telescopeEntry.SetText("")
+			apertureEntry.SetText("")
+			focalLengthEntry.SetText("")
+			observingMethodEntry.SetText("")
+			timeSourceEntry.SetText("")
+			cameraEntry.SetText("")
 
 			// Parse the site file and fill the entry fields
 			file, ferr := os.Open(filePath)
@@ -917,6 +997,58 @@ func showProcessOccelemntDialog(w fyne.Window) {
 				if strings.HasPrefix(line, "altitude:") {
 					value := strings.TrimSpace(strings.TrimPrefix(line, "altitude:"))
 					altitudeEntry.SetText(value)
+					continue
+				}
+				if strings.HasPrefix(line, "observer1:") {
+					observer1Entry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "observer1:")))
+					continue
+				}
+				if strings.HasPrefix(line, "observer2:") {
+					observer2Entry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "observer2:")))
+					continue
+				}
+				if strings.HasPrefix(line, "observatory:") {
+					observatoryEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "observatory:")))
+					continue
+				}
+				if strings.HasPrefix(line, "email:") {
+					emailEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "email:")))
+					continue
+				}
+				if strings.HasPrefix(line, "address:") {
+					addressEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "address:")))
+					continue
+				}
+				if strings.HasPrefix(line, "nearest_city:") {
+					nearestCityEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "nearest_city:")))
+					continue
+				}
+				if strings.HasPrefix(line, "country_code:") {
+					countryCodeEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "country_code:")))
+					continue
+				}
+				if strings.HasPrefix(line, "telescope:") {
+					telescopeEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "telescope:")))
+					continue
+				}
+				if strings.HasPrefix(line, "aperture:") {
+					apertureEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "aperture:")))
+					continue
+				}
+				if strings.HasPrefix(line, "focal_length:") {
+					focalLengthEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "focal_length:")))
+					continue
+				}
+				if strings.HasPrefix(line, "observing_method:") {
+					observingMethodEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "observing_method:")))
+					continue
+				}
+				if strings.HasPrefix(line, "time_source:") {
+					timeSourceEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "time_source:")))
+					continue
+				}
+				if strings.HasPrefix(line, "camera:") {
+					cameraEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "camera:")))
 					continue
 				}
 			}
@@ -977,13 +1109,26 @@ func showProcessOccelemntDialog(w fyne.Window) {
 				}
 			}
 
-			content := fmt.Sprintf("latitude_decimal: %s\nlongitude_decimal: %s\naltitude: %s\n",
-				strings.TrimSpace(latDecimalEntry.Text),
-				strings.TrimSpace(longDecimalEntry.Text),
-				strings.TrimSpace(altitudeEntry.Text),
-			)
+			var sb strings.Builder
+			sb.WriteString("latitude_decimal: " + strings.TrimSpace(latDecimalEntry.Text) + "\n")
+			sb.WriteString("longitude_decimal: " + strings.TrimSpace(longDecimalEntry.Text) + "\n")
+			sb.WriteString("altitude: " + strings.TrimSpace(altitudeEntry.Text) + "\n")
+			sb.WriteString("observer1: " + strings.TrimSpace(observer1Entry.Text) + "\n")
+			sb.WriteString("observer2: " + strings.TrimSpace(observer2Entry.Text) + "\n")
+			sb.WriteString("observatory: " + strings.TrimSpace(observatoryEntry.Text) + "\n")
+			sb.WriteString("email: " + strings.TrimSpace(emailEntry.Text) + "\n")
+			sb.WriteString("address: " + strings.TrimSpace(addressEntry.Text) + "\n")
+			sb.WriteString("nearest_city: " + strings.TrimSpace(nearestCityEntry.Text) + "\n")
+			sb.WriteString("country_code: " + strings.TrimSpace(countryCodeEntry.Text) + "\n")
+			sb.WriteString("telescope: " + strings.TrimSpace(telescopeEntry.Text) + "\n")
+			sb.WriteString("aperture: " + strings.TrimSpace(apertureEntry.Text) + "\n")
+			sb.WriteString("focal_length: " + strings.TrimSpace(focalLengthEntry.Text) + "\n")
+			sb.WriteString("observing_method: " + strings.TrimSpace(observingMethodEntry.Text) + "\n")
+			sb.WriteString("time_source: " + strings.TrimSpace(timeSourceEntry.Text) + "\n")
+			sb.WriteString("camera: " + strings.TrimSpace(cameraEntry.Text) + "\n")
+			siteContent := sb.String()
 
-			if werr := os.WriteFile(filePath, []byte(content), 0644); werr != nil {
+			if werr := os.WriteFile(filePath, []byte(siteContent), 0644); werr != nil {
 				dialog.ShowError(fmt.Errorf("failed to write site file: %w", werr), w)
 				return
 			}
@@ -1139,6 +1284,8 @@ func showProcessOccelemntDialog(w fyne.Window) {
 	// --- Assemble bottom sections ---
 	bottomSection := container.NewVBox(
 		widget.NewSeparator(),
+		observerEquipSection,
+		widget.NewSeparator(),
 		siteLocationSection,
 		widget.NewSeparator(),
 		container.NewHBox(loadSiteBtn, writeSiteBtn, calcDxDyBtn),
@@ -1155,7 +1302,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 	content := container.NewBorder(nil, bottomSection, nil, nil, pasteSection)
 
 	occelmntDialog = dialog.NewCustomWithoutButtons("Process OWC occelmnt.xml", content, w)
-	occelmntDialog.Resize(fyne.NewSize(840, 750))
+	occelmntDialog.Resize(fyne.NewSize(840, 1000))
 	occelmntDialog.Show()
 
 	// Focus the entry so the user can immediately paste
