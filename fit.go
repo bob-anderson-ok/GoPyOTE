@@ -103,13 +103,24 @@ type precomputedCurve struct {
 
 // buildPrecomputedCurve generates the theoretical light curve for the given params.
 func buildPrecomputedCurve(params *OccultationParameters) (*precomputedCurve, error) {
+	// When an external image is in use, the generated targetImage16bit.png and
+	// geometricShadow.png are at the external image's native pixel dimensions, not
+	// FundamentalPlaneWidthNumPoints. Read the actual width so that path sample
+	// points are computed in the correct coordinate space.
+	fundPlaneWidthPts := params.FundamentalPlaneWidthNumPoints
+	if params.PathToExternalImage != "" {
+		if img, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "targetImage16bit.png")); err == nil {
+			fundPlaneWidthPts = img.Bounds().Dx()
+		}
+	}
+
 	lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
 		nil,
 		params.DXKmPerSec,
 		params.DYKmPerSec,
 		params.PathPerpendicularOffsetKm,
 		params.FundamentalPlaneWidthKm,
-		params.FundamentalPlaneWidthNumPoints,
+		fundPlaneWidthPts,
 		filepath.Join(appDir, "targetImage16bit.png"),
 		filepath.Join(appDir, "geometricShadow.png"),
 		"",
@@ -137,7 +148,7 @@ func buildPrecomputedCurve(params *OccultationParameters) (*precomputedCurve, er
 
 	curve = applyCameraExposure(curve, params.ExposureTimeSecs)
 
-	distancePerPoint := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+	distancePerPoint := params.FundamentalPlaneWidthKm / float64(fundPlaneWidthPts)
 	edgeTimes := make([]float64, len(edges))
 	for i, edge := range edges {
 		edgeKm := edge * distancePerPoint
@@ -288,12 +299,16 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 	if err != nil {
 		fmt.Printf("Could not load diffractionImage8bit.png: %v\n", err)
 	} else {
+		fundPlaneWidthPts := params.FundamentalPlaneWidthNumPoints
+		if params.PathToExternalImage != "" {
+			fundPlaneWidthPts = displayImg.Bounds().Dx()
+		}
 		path := &lightcurve.ObservationPath{
 			DxKmPerSec:               params.DXKmPerSec,
 			DyKmPerSec:               params.DYKmPerSec,
 			PathOffsetFromCenterKm:   params.PathPerpendicularOffsetKm,
 			FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
-			FundamentalPlaneWidthPts: params.FundamentalPlaneWidthNumPoints,
+			FundamentalPlaneWidthPts: fundPlaneWidthPts,
 		}
 		if err := path.ComputePathFromVelocity(); err != nil {
 			fmt.Printf("Could not compute observation path: %v\n", err)

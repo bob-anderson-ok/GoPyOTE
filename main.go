@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.33"
+const Version = "1.1.34"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3993,13 +3993,17 @@ func main() {
 			if err != nil {
 				return
 			}
+			fundPlaneWidthPts := params.FundamentalPlaneWidthNumPoints
+			if params.PathToExternalImage != "" {
+				fundPlaneWidthPts = baseImg.Bounds().Dx()
+			}
 			// Draw the initial offset path
 			path1 := &lightcurve.ObservationPath{
 				DxKmPerSec:               params.DXKmPerSec,
 				DyKmPerSec:               params.DYKmPerSec,
 				PathOffsetFromCenterKm:   initVal,
 				FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
-				FundamentalPlaneWidthPts: params.FundamentalPlaneWidthNumPoints,
+				FundamentalPlaneWidthPts: fundPlaneWidthPts,
 			}
 			if err := path1.ComputePathFromVelocity(); err != nil {
 				return
@@ -4014,7 +4018,7 @@ func main() {
 				DyKmPerSec:               params.DYKmPerSec,
 				PathOffsetFromCenterKm:   finalVal,
 				FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
-				FundamentalPlaneWidthPts: params.FundamentalPlaneWidthNumPoints,
+				FundamentalPlaneWidthPts: fundPlaneWidthPts,
 			}
 			if err := path2.ComputePathFromVelocity(); err != nil {
 				return
@@ -4762,6 +4766,9 @@ func main() {
 						return
 					}
 					finalVal := params.MainBody.MajorAxisKm / 2
+					if params.PathToExternalImage != "" && finalVal == 0 {
+						finalVal = params.FundamentalPlaneWidthKm / 2
+					}
 					numSteps := 0
 					if params.FundamentalPlaneWidthNumPoints > 0 {
 						stepSize := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
