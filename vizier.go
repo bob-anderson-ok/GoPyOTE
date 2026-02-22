@@ -1476,3 +1476,480 @@ func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
 	dialog.ShowInformation("Success", "SODIS form entries extracted successfully.", w)
 	return nil
 }
+
+// ==================== SODIS Report Dialog ====================
+
+// sodisPreFill carries the current fit/MC/lightcurve/site data used to
+// pre-populate the SODIS report dialog. All fields are optional (zero = not available).
+type sodisPreFill struct {
+	fitResult *fitResult
+	mcResult  *mcTrialsResult
+	fitParams *OccultationParameters
+	lcData    *LightCurveData
+	occTitle  string // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
+	sitePath  string // path to the last-loaded .site file
+}
+
+// formatSecondsForSODIS formats total seconds as HH:MM:SS.sss (3 decimal places),
+// matching the precision expected by the SODIS report form.
+func formatSecondsForSODIS(totalSeconds float64) string {
+	totalSeconds = math.Mod(totalSeconds, 86400)
+	h := int(totalSeconds / 3600)
+	totalSeconds -= float64(h) * 3600
+	m := int(totalSeconds / 60)
+	totalSeconds -= float64(m) * 60
+	return fmt.Sprintf("%02d:%02d:%06.3f", h, m, totalSeconds)
+}
+
+// decimalDegToSODIS converts a decimal-degree coordinate to the SODIS DMS notation
+// "+/-DD MM SS.S" (degrees zero-padded to at least 2 digits, seconds 1 decimal place).
+func decimalDegToSODIS(deg float64) string {
+	sign := "+"
+	if deg < 0 {
+		sign = "-"
+		deg = -deg
+	}
+	d := int(deg)
+	rem := (deg - float64(d)) * 60.0
+	m := int(rem)
+	s := (rem - float64(m)) * 60.0
+	return fmt.Sprintf("%s%02d %02d %04.1f", sign, d, m, s)
+}
+
+// parseSiteFileToMap reads a .site file and returns a map of key→value pairs.
+func parseSiteFileToMap(path string) map[string]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	result := make(map[string]string)
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimRight(raw, "\r")
+		if idx := strings.IndexByte(line, ':'); idx >= 0 {
+			key := strings.TrimSpace(line[:idx])
+			val := strings.TrimSpace(line[idx+1:])
+			if key != "" {
+				result[key] = val
+			}
+		}
+	}
+	return result
+}
+
+// sodisTemplateItem is a parsed item from a SODIS form template.
+type sodisTemplateItem struct {
+	isSection bool   // true = section header line (e.g., #OBSERVER)
+	name      string // field name (e.g. "Observer1") or section label (e.g. "OBSERVER")
+	hint      string // preceding description/hint line, if any (for fields only)
+	value     string // default value from template (for fields only)
+}
+
+// parseSodisTemplateLines walks a slice of SODIS template file lines and returns
+// a list of structured items (sections and fields with optional hints).
+//
+// A line is a field if it matches: #<identifier>: [value]
+// where the identifier contains only [A-Za-z0-9_/-] with no spaces.
+// A line is a section header if the text after '#' contains no spaces or
+// special characters (+-/=.,*).
+// All other '#' lines are treated as hint/description text for the next field.
+func parseSodisTemplateLines(lines []string) []sodisTemplateItem {
+	var items []sodisTemplateItem
+	var pendingHint string
+
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, " \t\r")
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		rest := line[1:] // everything after the leading '#'
+
+		// --- field line check ---
+		colonIdx := strings.IndexByte(rest, ':')
+		if colonIdx > 0 {
+			word := rest[:colonIdx]
+			if !strings.ContainsAny(word, " \t") && isSodisFieldName(word) {
+				value := strings.TrimSpace(rest[colonIdx+1:])
+				items = append(items, sodisTemplateItem{
+					name:  word,
+					hint:  pendingHint,
+					value: value,
+				})
+				pendingHint = ""
+				continue
+			}
+		}
+
+		// --- section header check: only letters, digits, underscores; no spaces or specials ---
+		if !strings.ContainsAny(rest, " \t+-/=.,*") && len(rest) > 0 {
+			pendingHint = ""
+			items = append(items, sodisTemplateItem{
+				isSection: true,
+				name:      rest,
+			})
+			continue
+		}
+
+		// --- hint/description line ---
+		if trimmed := strings.TrimSpace(rest); trimmed != "" {
+			pendingHint = trimmed
+		}
+	}
+	return items
+}
+
+// isSodisFieldName reports whether s is a valid SODIS field identifier
+// (letters, digits, underscores, forward-slashes, or hyphens only).
+func isSodisFieldName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') || c == '_' || c == '/' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// buildSodisReportText reconstructs the SODIS report text from the original
+// template lines, substituting filled-in entry values for each field.
+func buildSodisReportText(templateLines []string, entries map[string]*widget.Entry) string {
+	var sb strings.Builder
+	for _, raw := range templateLines {
+		line := strings.TrimRight(raw, " \t\r")
+		if strings.HasPrefix(line, "#") {
+			rest := line[1:]
+			colonIdx := strings.IndexByte(rest, ':')
+			if colonIdx > 0 {
+				word := rest[:colonIdx]
+				if !strings.ContainsAny(word, " \t") && isSodisFieldName(word) {
+					if e, ok := entries[word]; ok {
+						val := strings.TrimSpace(e.Text)
+						if word == "Comments" {
+							sb.WriteString("#Comments:\n")
+							for _, commentLine := range strings.Split(val, "\n") {
+								if commentLine != "" {
+									sb.WriteString("  ")
+									sb.WriteString(commentLine)
+								}
+								sb.WriteString("\n")
+							}
+						} else {
+							sb.WriteString("#")
+							sb.WriteString(word)
+							sb.WriteString(":")
+							if val != "" {
+								sb.WriteString(val)
+							}
+							sb.WriteString("\n")
+						}
+						continue
+					}
+				}
+			}
+		}
+		// Preserve non-field lines exactly (section headers, hints, blank lines)
+		sb.WriteString(raw)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// showSodisReportDialog opens a scrollable dialog with an entry box for every
+// SODIS form field (any line of the form "#FieldName: value" in the blank template).
+// Fields for which current data is available (fit edges, MC uncertainty, observation
+// times, exposure time) are pre-filled automatically.  All other fields start empty.
+// Use "Load SODIS template" to pre-fill further from a saved template file.
+func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
+	// Read the blank SODIS template to drive the form structure
+	templatePath := filepath.Join(appDir, "SODIS-FOLDER", "1 BLANK SODIS TEMPLATE.txt")
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("could not read SODIS template:\n%s\n\n%w", templatePath, err), w)
+		return
+	}
+	rawLines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	items := parseSodisTemplateLines(rawLines)
+
+	// Build the form UI: entries indexed by field name, grouped by section.
+	// All entries start empty.
+	entries := make(map[string]*widget.Entry)
+	var vboxContent []fyne.CanvasObject
+	var currentFormItems []*widget.FormItem
+
+	flushForm := func() {
+		if len(currentFormItems) > 0 {
+			vboxContent = append(vboxContent, widget.NewForm(currentFormItems...))
+			currentFormItems = nil
+		}
+	}
+
+	for _, item := range items {
+		if item.isSection {
+			flushForm()
+			lbl := widget.NewLabel(item.name)
+			lbl.TextStyle = fyne.TextStyle{Bold: true}
+			vboxContent = append(vboxContent, lbl, widget.NewSeparator())
+		} else {
+			var e *widget.Entry
+			if item.name == "Comments" {
+				e = widget.NewMultiLineEntry()
+				e.SetMinRowsVisible(3)
+			} else {
+				e = widget.NewEntry()
+			}
+			entries[item.name] = e
+			fi := widget.NewFormItem(item.name+":", e)
+			if item.hint != "" {
+				fi.HintText = item.hint
+			}
+			currentFormItems = append(currentFormItems, fi)
+		}
+	}
+	flushForm()
+
+	// Pre-fill entries from currently available data.
+	if fill != nil {
+		setEntry := func(name, value string) {
+			if e, ok := entries[name]; ok && value != "" {
+				e.SetText(value)
+			}
+		}
+
+		// D, R, and Duration from the fit result
+		if fill.fitResult != nil && len(fill.fitResult.edgeTimes) == 2 {
+			t0 := fill.fitResult.edgeTimes[0] + fill.fitResult.bestShift
+			t1 := fill.fitResult.edgeTimes[1] + fill.fitResult.bestShift
+			// Ensure chronological order (D before R)
+			dIdx, rIdx := 0, 1
+			if t0 > t1 {
+				t0, t1 = t1, t0
+				dIdx, rIdx = 1, 0
+			}
+			setEntry("D", "D"+formatSecondsForSODIS(t0))
+			setEntry("R", "R"+formatSecondsForSODIS(t1))
+			setEntry("Duration", fmt.Sprintf("%.3f", t1-t0))
+
+			// Acc_D and Acc_R from the most recent Monte Carlo run (1-sigma values)
+			if fill.mcResult != nil && fill.mcResult.numEdges == 2 &&
+				len(fill.mcResult.edgeStds) == 2 {
+				setEntry("Acc_D", fmt.Sprintf("%.3f", fill.mcResult.edgeStds[dIdx]))
+				setEntry("Acc_R", fmt.Sprintf("%.3f", fill.mcResult.edgeStds[rIdx]))
+			}
+		}
+
+		// StartObs and EndObs from the loaded light curve (only if timestamps are present)
+		if fill.lcData != nil && len(fill.lcData.TimeValues) > 1 &&
+			fill.lcData.TimeValues[0] > 0 {
+			setEntry("StartObs", formatSecondsForSODIS(fill.lcData.TimeValues[0]))
+			setEntry("EndObs", formatSecondsForSODIS(fill.lcData.TimeValues[len(fill.lcData.TimeValues)-1]))
+		}
+
+		// Exp_Time from the occultation parameters
+		if fill.fitParams != nil && fill.fitParams.ExposureTimeSecs > 0 {
+			setEntry("Exp_Time", fmt.Sprintf("%.4f", fill.fitParams.ExposureTimeSecs))
+		}
+
+		// ASTEROID and Nr from the occultation title, e.g. "(2731) Cucula"
+		if fill.occTitle != "" {
+			title := fill.occTitle
+			if strings.HasPrefix(title, "(") {
+				if end := strings.Index(title, ")"); end > 0 {
+					setEntry("Nr", strings.TrimSpace(title[1:end]))
+					setEntry("ASTEROID", strings.TrimSpace(title[end+1:]))
+				}
+			} else {
+				setEntry("ASTEROID", title)
+			}
+		}
+
+		// Site file fields: observer, location, equipment
+		if fill.sitePath != "" {
+			site := parseSiteFileToMap(fill.sitePath)
+			setEntry("Observer1", site["observer1"])
+			setEntry("Observer2", site["observer2"])
+			setEntry("Observatory", site["observatory"])
+			setEntry("E-mail", site["email"])
+			setEntry("Address", site["address"])
+			setEntry("NearestCity", site["nearest_city"])
+			setEntry("Countrycode", site["country_code"])
+			setEntry("Telescope", site["telescope"])
+			setEntry("Aperture", site["aperture"])
+			setEntry("FocalLength", site["focal_length"])
+			setEntry("ObservingMethod", site["observing_method"])
+			setEntry("Timesource", site["time_source"])
+			setEntry("Camera", site["camera"])
+			// Convert decimal lat/lon to SODIS DMS notation
+			if latStr := site["latitude_decimal"]; latStr != "" {
+				if lat, err := strconv.ParseFloat(latStr, 64); err == nil {
+					setEntry("Latitude", decimalDegToSODIS(lat))
+				}
+			}
+			if lonStr := site["longitude_decimal"]; lonStr != "" {
+				if lon, err := strconv.ParseFloat(lonStr, 64); err == nil {
+					setEntry("Longitude", decimalDegToSODIS(lon))
+				}
+			}
+			setEntry("Altitude", site["altitude"])
+		}
+	}
+
+	scroll := container.NewVScroll(container.NewVBox(vboxContent...))
+	scroll.SetMinSize(fyne.NewSize(740, 500))
+
+	var dlg dialog.Dialog
+
+	// loadTemplateBtn opens a .txt file from SODIS-FOLDER and fills all entries.
+	// It deliberately does NOT add the folder to the CSV recent-folders list.
+	loadTemplateBtn := widget.NewButton("Load SODIS template", func() {
+		sodisDir := filepath.Join(appDir, "SODIS-FOLDER")
+		_ = os.MkdirAll(sodisDir, 0755)
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, ferr error) {
+			if ferr != nil {
+				dialog.ShowError(ferr, w)
+				return
+			}
+			if reader == nil {
+				return // user cancelled
+			}
+			filePath := reader.URI().Path()
+			if cerr := reader.Close(); cerr != nil {
+				dialog.ShowError(fmt.Errorf("error closing file: %w", cerr), w)
+				return
+			}
+			tplData, rerr := os.ReadFile(filePath)
+			if rerr != nil {
+				dialog.ShowError(fmt.Errorf("error reading template: %w", rerr), w)
+				return
+			}
+			// Clear all entries then fill from the loaded template
+			for _, e := range entries {
+				e.SetText("")
+			}
+			tplLines := strings.Split(strings.ReplaceAll(string(tplData), "\r\n", "\n"), "\n")
+			for _, tplItem := range parseSodisTemplateLines(tplLines) {
+				if !tplItem.isSection {
+					if e, ok := entries[tplItem.name]; ok {
+						e.SetText(tplItem.value)
+					}
+				}
+			}
+			logAction(fmt.Sprintf("SODIS template loaded: %s", filePath))
+		}, w)
+		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
+		if listable, lerr := storage.ListerForURI(storage.NewFileURI(sodisDir)); lerr == nil {
+			fileDialog.SetLocation(listable)
+		}
+		fileDialog.Resize(fyne.NewSize(800, 600))
+		fileDialog.Show()
+	})
+
+	saveBtn := widget.NewButton("Save", func() {
+		sodisDir := filepath.Join(appDir, "SODIS-FOLDER")
+		_ = os.MkdirAll(sodisDir, 0755)
+		fileSave := dialog.NewFileSave(func(wr fyne.URIWriteCloser, ferr error) {
+			if ferr != nil {
+				dialog.ShowError(ferr, w)
+				return
+			}
+			if wr == nil {
+				return // user cancelled
+			}
+			defer func() {
+				if cerr := wr.Close(); cerr != nil {
+					dialog.ShowError(fmt.Errorf("error closing file: %w", cerr), w)
+				}
+			}()
+			reportText := buildSodisReportText(rawLines, entries)
+			if _, werr := wr.Write([]byte(reportText)); werr != nil {
+				dialog.ShowError(fmt.Errorf("error writing SODIS report: %w", werr), w)
+				return
+			}
+			logAction(fmt.Sprintf("SODIS report saved: %s", wr.URI().Path()))
+			dlg.Hide()
+			dialog.ShowInformation("Saved", "SODIS report saved successfully.", w)
+		}, w)
+		if listable, lerr := storage.ListerForURI(storage.NewFileURI(sodisDir)); lerr == nil {
+			fileSave.SetLocation(listable)
+		}
+		fileSave.SetFileName("SODIS-REPORT.txt")
+		fileSave.Resize(fyne.NewSize(800, 600))
+		fileSave.Show()
+	})
+	saveBtn.Importance = widget.HighImportance
+
+	// changeSiteBtn opens SITE-FILES and fills site-related entries from the chosen file
+	// without clearing the rest of the form first.
+	changeSiteBtn := widget.NewButton("Add/Change Site info", func() {
+		siteDir := filepath.Join(appDir, "SITE-FILES")
+		_ = os.MkdirAll(siteDir, 0755)
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, ferr error) {
+			if ferr != nil {
+				dialog.ShowError(ferr, w)
+				return
+			}
+			if reader == nil {
+				return // user cancelled
+			}
+			filePath := reader.URI().Path()
+			if cerr := reader.Close(); cerr != nil {
+				dialog.ShowError(fmt.Errorf("error closing file: %w", cerr), w)
+				return
+			}
+			site := parseSiteFileToMap(filePath)
+			if site == nil {
+				dialog.ShowError(fmt.Errorf("could not read site file: %s", filePath), w)
+				return
+			}
+			setIfPresent := func(name, val string) {
+				if val != "" {
+					if e, ok := entries[name]; ok {
+						e.SetText(val)
+					}
+				}
+			}
+			setIfPresent("Observer1", site["observer1"])
+			setIfPresent("Observer2", site["observer2"])
+			setIfPresent("Observatory", site["observatory"])
+			setIfPresent("E-mail", site["email"])
+			setIfPresent("Address", site["address"])
+			setIfPresent("NearestCity", site["nearest_city"])
+			setIfPresent("Countrycode", site["country_code"])
+			setIfPresent("Telescope", site["telescope"])
+			setIfPresent("Aperture", site["aperture"])
+			setIfPresent("FocalLength", site["focal_length"])
+			setIfPresent("ObservingMethod", site["observing_method"])
+			setIfPresent("Timesource", site["time_source"])
+			setIfPresent("Camera", site["camera"])
+			if latStr := site["latitude_decimal"]; latStr != "" {
+				if lat, err := strconv.ParseFloat(latStr, 64); err == nil {
+					setIfPresent("Latitude", decimalDegToSODIS(lat))
+				}
+			}
+			if lonStr := site["longitude_decimal"]; lonStr != "" {
+				if lon, err := strconv.ParseFloat(lonStr, 64); err == nil {
+					setIfPresent("Longitude", decimalDegToSODIS(lon))
+				}
+			}
+			setIfPresent("Altitude", site["altitude"])
+			logAction(fmt.Sprintf("SODIS site info updated from: %s", filePath))
+		}, w)
+		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".site"}))
+		if listable, lerr := storage.ListerForURI(storage.NewFileURI(siteDir)); lerr == nil {
+			fileDialog.SetLocation(listable)
+		}
+		fileDialog.Resize(fyne.NewSize(800, 600))
+		fileDialog.Show()
+	})
+
+	cancelBtn := widget.NewButton("Cancel", func() {
+		dlg.Hide()
+	})
+
+	buttons := container.NewHBox(loadTemplateBtn, changeSiteBtn, layout.NewSpacer(), cancelBtn, saveBtn)
+	content := container.NewBorder(nil, buttons, nil, nil, scroll)
+	dlg = dialog.NewCustomWithoutButtons("Fill SODIS Report", content, w)
+	dlg.Resize(fyne.NewSize(800, 650))
+	dlg.Show()
+}

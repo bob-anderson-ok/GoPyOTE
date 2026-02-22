@@ -66,10 +66,13 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.35"
+const Version = "1.1.36"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
+
+// Track the last loaded site file path for use by the Fill SODIS Report dialog
+var lastLoadedSitePath string
 
 // Track the parameters file used for the last IOTAdiffraction run (for startup display)
 var lastDiffractionParamsPath string
@@ -1058,6 +1061,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 				return
 			}
 
+			lastLoadedSitePath = filePath
 			logAction(fmt.Sprintf("Site file loaded: %s", filePath))
 		}, w)
 
@@ -2594,7 +2598,7 @@ func main() {
 					dialog.ShowInformation("Timing Analysis", report, w)
 				}
 
-				// Show exposure time comparison popup
+				// Warn if CSV-measured exposure time differs from the parameters file by more than 5%
 				if timingResult != nil {
 					csvExposure := timingResult.MedianTimeStep
 					var paramExposure float64
@@ -2608,8 +2612,10 @@ func main() {
 							}
 						}
 					}
-					msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
-					dialog.ShowInformation("Exposure Time Comparison", msg, w)
+					if paramExposure > 0 && math.Abs(csvExposure-paramExposure)/paramExposure > 0.05 {
+						msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
+						dialog.ShowError(fmt.Errorf("Exposure time mismatch warning\n\n%s", msg), w)
+					}
 				}
 			}
 
@@ -2941,7 +2947,7 @@ func main() {
 				}
 			}
 
-			// Show exposure time comparison popup
+			// Warn if CSV-measured exposure time differs from the parameters file by more than 5%
 			if timingResult != nil {
 				csvExposure := timingResult.MedianTimeStep
 				var paramExposure float64
@@ -2955,8 +2961,10 @@ func main() {
 						}
 					}
 				}
-				msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
-				dialog.ShowInformation("Exposure Time Comparison", msg, w)
+				if paramExposure > 0 && math.Abs(csvExposure-paramExposure)/paramExposure > 0.05 {
+					msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
+					dialog.ShowError(fmt.Errorf("Exposure time mismatch warning\n\n%s", msg), w)
+				}
 			}
 		}
 
@@ -3607,7 +3615,7 @@ func main() {
 				}
 			}
 
-			// Show exposure time comparison popup
+			// Warn if CSV-measured exposure time differs from the parameters file by more than 5%
 			if timingResult != nil {
 				csvExposure := timingResult.MedianTimeStep
 				var paramExposure float64
@@ -3621,8 +3629,10 @@ func main() {
 						}
 					}
 				}
-				msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
-				dialog.ShowInformation("Exposure Time Comparison", msg, w)
+				if paramExposure > 0 && math.Abs(csvExposure-paramExposure)/paramExposure > 0.05 {
+					msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
+					dialog.ShowError(fmt.Errorf("Exposure time mismatch warning\n\n%s", msg), w)
+				}
 			}
 		}
 
@@ -3784,6 +3794,7 @@ func main() {
 	var lastFitParams *OccultationParameters
 	var lastFitCandidates []*precomputedCurve
 	var lastFitTargetTimes, lastFitTargetValues []float64
+	var lastMCResult *mcTrialsResult // most recent successful Monte Carlo run
 
 	mcShowDiagnosticsCheck := widget.NewCheck("Show diagnostics plots", nil)
 	mcShowDiagnosticsCheck.Checked = false
@@ -4056,9 +4067,6 @@ func main() {
 		}()
 	}
 
-	searchInitialOffsetEntry.OnSubmitted = func(_ string) { showSearchRangePreview() }
-	searchFinalOffsetEntry.OnSubmitted = func(_ string) { showSearchRangePreview() }
-
 	searchInitialOffsetEntry.OnChanged = func(_ string) {
 		if searchRangeManualCheck.Checked || suppressSearchChange {
 			return
@@ -4095,7 +4103,16 @@ func main() {
 		&widget.FormItem{Text: "Final offset", Widget: searchFinalOffsetEntry},
 		&widget.FormItem{Text: "Number of steps", Widget: searchNumStepsEntry},
 	)
-	searchRangeCard := widget.NewCard("Search range for observation path offset", "", searchRangeForm)
+
+	showSearchRangeBtn := widget.NewButton("Show search range", func() {
+		showSearchRangePreview()
+	})
+	showSearchRangeBtn.Importance = widget.HighImportance
+
+	searchRangeTitle := widget.NewLabel("Search range for observation path offset")
+	searchRangeTitle.TextStyle = fyne.TextStyle{Bold: true}
+	searchRangeTitleRow := container.NewBorder(nil, nil, nil, showSearchRangeBtn, searchRangeTitle)
+	searchRangeCard := widget.NewCard("", "", container.NewVBox(searchRangeTitleRow, searchRangeForm))
 
 	fitProgressBar := widget.NewProgressBar()
 	fitProgressBar.Hide()
@@ -4334,6 +4351,7 @@ func main() {
 					dialog.ShowError(err, w)
 					return
 				}
+				lastMCResult = result
 				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
 				for i := 0; i < result.numEdges && i < len(lastFitResult.edgeTimes); i++ {
 					absTime := lastFitResult.edgeTimes[i] + lastFitResult.bestShift
@@ -4661,7 +4679,18 @@ func main() {
 	runNieBtn.Importance = widget.HighImportance
 
 	fillSodisBtn := widget.NewButton("Fill SODIS report", func() {
-		dialog.ShowInformation("Not Implemented", "This function is not yet implemented.", w)
+		occTitle := lastDiffractionTitle
+		if lastFitParams != nil && lastFitParams.Title != "" {
+			occTitle = lastFitParams.Title
+		}
+		showSodisReportDialog(w, &sodisPreFill{
+			fitResult: lastFitResult,
+			mcResult:  lastMCResult,
+			fitParams: lastFitParams,
+			lcData:    loadedLightCurveData,
+			occTitle:  occTitle,
+			sitePath:  lastLoadedSitePath,
+		})
 	})
 	fillSodisBtn.Importance = widget.HighImportance
 
