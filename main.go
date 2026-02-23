@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.38"
+const Version = "1.1.39"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -741,9 +741,10 @@ func showProcessOccelemntDialog(w fyne.Window) {
 				dialog.ShowError(fmt.Errorf("failed to read occelmnt file: %w", rerr), w)
 				return
 			}
-			pasteEntry.SetText(string(data))
-			lastLoadedOccelmntXml = string(data)
-			fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
+			xmlStr := strings.TrimPrefix(string(data), "\xef\xbb\xbf")
+			pasteEntry.SetText(xmlStr)
+			lastLoadedOccelmntXml = xmlStr
+			fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", xmlStr)
 			logAction(fmt.Sprintf("Loaded occelmnt file: %s", reader.URI().Path()))
 		}, w)
 		occelmntDir := filepath.Join(appDir, "OCCELMNT-FOLDER")
@@ -751,6 +752,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			dialog.ShowError(fmt.Errorf("failed to create OCCELMNT-FOLDER directory: %w", merr), w)
 			return
 		}
+		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".xml", ".txt"}))
 		folderURI := storage.NewFileURI(occelmntDir)
 		if listableURI, lerr := storage.ListerForURI(folderURI); lerr == nil {
 			fileDialog.SetLocation(listableURI)

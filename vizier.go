@@ -1679,6 +1679,67 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 	// Build the form UI: entries indexed by field name, grouped by section.
 	// All entries start empty.
 	entries := make(map[string]*widget.Entry)
+	var occultationSelect *widget.Select
+
+	telescopeOpts := []string{"unstated", "1=Refractor", "2=Newtonian", "3=SCT", "4=Dobsonian", "5=Binoculars", "6=Other", "7=None", "8=eVscope"}
+	telescopeOptToVal := map[string]string{
+		"unstated": "", "1=Refractor": "1", "2=Newtonian": "2", "3=SCT": "3",
+		"4=Dobsonian": "4", "5=Binoculars": "5", "6=Other": "6", "7=None": "7", "8=eVscope": "8",
+	}
+	telescopeValToOpt := map[string]string{
+		"": "unstated", "1": "1=Refractor", "2": "2=Newtonian", "3": "3=SCT",
+		"4": "4=Dobsonian", "5": "5=Binoculars", "6": "6=Other", "7": "7=None", "8": "8=eVscope",
+	}
+	var telescopeSelect *widget.Select
+
+	observingMethodOpts := []string{"unspecified", "a=Analogue & digital video", "b=Digital SLR-camera video", "c=Photometer", "d=Sequential images", "e=Drift scan", "f=Visual", "g=Other"}
+	observingMethodOptToVal := map[string]string{
+		"unspecified": "", "a=Analogue & digital video": "a", "b=Digital SLR-camera video": "b",
+		"c=Photometer": "c", "d=Sequential images": "d", "e=Drift scan": "e", "f=Visual": "f", "g=Other": "g",
+	}
+	observingMethodValToOpt := map[string]string{
+		"": "unspecified", "a": "a=Analogue & digital video", "b": "b=Digital SLR-camera video",
+		"c": "c=Photometer", "d": "d=Sequential images", "e": "e=Drift scan", "f": "f=Visual", "g": "g=Other",
+	}
+	var observingMethodSelect *widget.Select
+
+	timesourceOpts := []string{"unspecified", "a=GPS", "b=NTP", "c=Telephone (fixed or mobile)", "d=Radio time signal", "e=Internal clock of recorder", "f=Stopwatch", "g=Other"}
+	timesourceOptToVal := map[string]string{
+		"unspecified": "", "a=GPS": "a", "b=NTP": "b", "c=Telephone (fixed or mobile)": "c",
+		"d=Radio time signal": "d", "e=Internal clock of recorder": "e", "f=Stopwatch": "f", "g=Other": "g",
+	}
+	timesourceValToOpt := map[string]string{
+		"": "unspecified", "a": "a=GPS", "b": "b=NTP", "c": "c=Telephone (fixed or mobile)",
+		"d": "d=Radio time signal", "e": "e=Internal clock of recorder", "f": "f=Stopwatch", "g": "g=Other",
+	}
+	var timesourceSelect *widget.Select
+
+	stabilityOpts := []string{"unstated", "1=Steady", "2=Slight flickering", "3=Strong flickering"}
+	stabilityOptToVal := map[string]string{
+		"unstated": "", "1=Steady": "1", "2=Slight flickering": "2", "3=Strong flickering": "3",
+	}
+	stabilityValToOpt := map[string]string{
+		"": "unstated", "1": "1=Steady", "2": "2=Slight flickering", "3": "3=Strong flickering",
+	}
+	var stabilitySelect *widget.Select
+
+	transparencyOpts := []string{
+		"1=Clear", "2=Fog", "3=Thin cloud < 2 [mag loss < 2mag]",
+		"4=Thick cloud > 2 [mag loss > 2mag]", "5=Broken opaque cloud [that is, observed thru gaps in the cloud]",
+		"6=Star faint", "7=By averted vision",
+	}
+	transparencyOptToVal := map[string]string{
+		"1=Clear": "1", "2=Fog": "2", "3=Thin cloud < 2 [mag loss < 2mag]": "3",
+		"4=Thick cloud > 2 [mag loss > 2mag]": "4", "5=Broken opaque cloud [that is, observed thru gaps in the cloud]": "5",
+		"6=Star faint": "6", "7=By averted vision": "7",
+	}
+	transparencyValToOpt := map[string]string{
+		"1": "1=Clear", "2": "2=Fog", "3": "3=Thin cloud < 2 [mag loss < 2mag]",
+		"4": "4=Thick cloud > 2 [mag loss > 2mag]", "5": "5=Broken opaque cloud [that is, observed thru gaps in the cloud]",
+		"6": "6=Star faint", "7": "7=By averted vision",
+	}
+	var transparencySelect *widget.Select
+
 	var vboxContent []fyne.CanvasObject
 	var currentFormItems []*widget.FormItem
 
@@ -1695,6 +1756,79 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 			lbl := widget.NewLabel(item.name)
 			lbl.TextStyle = fyne.TextStyle{Bold: true}
 			vboxContent = append(vboxContent, lbl, widget.NewSeparator())
+		} else if item.name == "Occultation" {
+			// Use a dropdown instead of a free-text entry
+			backingEntry := widget.NewEntry()
+			entries["Occultation"] = backingEntry
+			sel := widget.NewSelect([]string{"POSITIVE", "NEGATIVE"}, func(val string) {
+				backingEntry.SetText(val)
+			})
+			occultationSelect = sel
+			fi := widget.NewFormItem("Occultation:", sel)
+			if item.hint != "" {
+				fi.HintText = item.hint
+			}
+			currentFormItems = append(currentFormItems, fi)
+		} else if item.name == "Telescope" {
+			backingEntry := widget.NewEntry()
+			entries["Telescope"] = backingEntry
+			sel := widget.NewSelect(telescopeOpts, func(opt string) {
+				backingEntry.SetText(telescopeOptToVal[opt])
+			})
+			telescopeSelect = sel
+			fi := widget.NewFormItem("Telescope:", sel)
+			if item.hint != "" {
+				fi.HintText = item.hint
+			}
+			currentFormItems = append(currentFormItems, fi)
+		} else if item.name == "ObservingMethod" {
+			backingEntry := widget.NewEntry()
+			entries["ObservingMethod"] = backingEntry
+			sel := widget.NewSelect(observingMethodOpts, func(opt string) {
+				backingEntry.SetText(observingMethodOptToVal[opt])
+			})
+			observingMethodSelect = sel
+			fi := widget.NewFormItem("ObservingMethod:", sel)
+			if item.hint != "" {
+				fi.HintText = item.hint
+			}
+			currentFormItems = append(currentFormItems, fi)
+		} else if item.name == "Timesource" {
+			backingEntry := widget.NewEntry()
+			entries["Timesource"] = backingEntry
+			sel := widget.NewSelect(timesourceOpts, func(opt string) {
+				backingEntry.SetText(timesourceOptToVal[opt])
+			})
+			timesourceSelect = sel
+			fi := widget.NewFormItem("Timesource:", sel)
+			if item.hint != "" {
+				fi.HintText = item.hint
+			}
+			currentFormItems = append(currentFormItems, fi)
+		} else if item.name == "Stability" {
+			backingEntry := widget.NewEntry()
+			entries["Stability"] = backingEntry
+			sel := widget.NewSelect(stabilityOpts, func(opt string) {
+				backingEntry.SetText(stabilityOptToVal[opt])
+			})
+			stabilitySelect = sel
+			fi := widget.NewFormItem("Stability:", sel)
+			if item.hint != "" {
+				fi.HintText = item.hint
+			}
+			currentFormItems = append(currentFormItems, fi)
+		} else if item.name == "Transparency" {
+			backingEntry := widget.NewEntry()
+			entries["Transparency"] = backingEntry
+			sel := widget.NewSelect(transparencyOpts, func(opt string) {
+				backingEntry.SetText(transparencyOptToVal[opt])
+			})
+			transparencySelect = sel
+			fi := widget.NewFormItem("Transparency:", sel)
+			if item.hint != "" {
+				fi.HintText = item.hint
+			}
+			currentFormItems = append(currentFormItems, fi)
 		} else {
 			var e *widget.Entry
 			if item.name == "Comments" {
@@ -1780,8 +1914,10 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 			}
 		}
 
-		// Occultation: pre-fill with a template placeholder to prompt the user
-		setEntry("Occultation", "xxxxTIVE")
+		// Occultation: default to POSITIVE
+		if occultationSelect != nil {
+			occultationSelect.SetSelected("POSITIVE")
+		}
 
 		// Fields from occelmnt XML: STAR, DATE, PREDICTTIME
 		if fill.occelmntXml != "" {
@@ -1895,6 +2031,52 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 					}
 				}
 			}
+			// Sync Occultation select from the backing entry
+			if occultationSelect != nil {
+				if e, ok := entries["Occultation"]; ok {
+					occultationSelect.SetSelected(e.Text)
+				}
+			}
+			// Sync Telescope select from a backing entry
+			if telescopeSelect != nil {
+				if e, ok := entries["Telescope"]; ok {
+					if opt, ok2 := telescopeValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						telescopeSelect.SetSelected(opt)
+					}
+				}
+			}
+			// Sync ObservingMethod select from the backing entry
+			if observingMethodSelect != nil {
+				if e, ok := entries["ObservingMethod"]; ok {
+					if opt, ok2 := observingMethodValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						observingMethodSelect.SetSelected(opt)
+					}
+				}
+			}
+			// Sync Timesource select from the backing entry
+			if timesourceSelect != nil {
+				if e, ok := entries["Timesource"]; ok {
+					if opt, ok2 := timesourceValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						timesourceSelect.SetSelected(opt)
+					}
+				}
+			}
+			// Sync Stability select from backing entry
+			if stabilitySelect != nil {
+				if e, ok := entries["Stability"]; ok {
+					if opt, ok2 := stabilityValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						stabilitySelect.SetSelected(opt)
+					}
+				}
+			}
+			// Sync Transparency select from a backing entry
+			if transparencySelect != nil {
+				if e, ok := entries["Transparency"]; ok {
+					if opt, ok2 := transparencyValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						transparencySelect.SetSelected(opt)
+					}
+				}
+			}
 			logAction(fmt.Sprintf("SODIS template loaded: %s", filePath))
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
@@ -1981,10 +2163,31 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 			setIfPresent("NearestCity", site["nearest_city"])
 			setIfPresent("Countrycode", site["country_code"])
 			setIfPresent("Telescope", site["telescope"])
+			if telescopeSelect != nil {
+				if e, ok := entries["Telescope"]; ok {
+					if opt, ok2 := telescopeValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						telescopeSelect.SetSelected(opt)
+					}
+				}
+			}
 			setIfPresent("Aperture", site["aperture"])
 			setIfPresent("FocalLength", site["focal_length"])
 			setIfPresent("ObservingMethod", site["observing_method"])
+			if observingMethodSelect != nil {
+				if e, ok := entries["ObservingMethod"]; ok {
+					if opt, ok2 := observingMethodValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						observingMethodSelect.SetSelected(opt)
+					}
+				}
+			}
 			setIfPresent("Timesource", site["time_source"])
+			if timesourceSelect != nil {
+				if e, ok := entries["Timesource"]; ok {
+					if opt, ok2 := timesourceValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						timesourceSelect.SetSelected(opt)
+					}
+				}
+			}
 			setIfPresent("Camera", site["camera"])
 			if latStr := site["latitude_decimal"]; latStr != "" {
 				if lat, err := strconv.ParseFloat(latStr, 64); err == nil {
