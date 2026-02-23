@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.37"
+const Version = "1.1.38"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -76,6 +76,9 @@ var lastLoadedSitePath string
 
 // Track the last loaded occelmnt XML text for use by the Fill SODIS Report dialog
 var lastLoadedOccelmntXml string
+
+// Track the CSV-measured median exposure time (seconds) for use by the Fill SODIS Report dialog
+var lastCsvExposureSecs float64
 
 // Track the parameters file used for the last IOTAdiffraction run (for startup display)
 var lastDiffractionParamsPath string
@@ -310,6 +313,9 @@ func showOccultationParametersDialog(w fyne.Window) {
 		lastLoadedParamsPath = prefs.StringWithFallback("lastLoadedParamsPath", "")
 	}
 
+	// occelmntXml associated with the currently displayed params file (empty if none)
+	var dialogOccelmntXml string
+
 	// Auto-load previously opened parameters file if available
 	if lastLoadedParamsPath != "" {
 		file, err := os.Open(lastLoadedParamsPath)
@@ -319,6 +325,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 				dialog.ShowError(fmt.Errorf("failed to close file: %w", closeErr), w)
 			}
 			if parseErr == nil {
+				dialogOccelmntXml = params.OccelmntXml
 				windowSizeEntry.SetText(strconv.Itoa(params.WindowSizePixels))
 				titleEntry.SetText(params.Title)
 				fundamentalPlaneWidthKmEntry.SetText(strconv.FormatFloat(params.FundamentalPlaneWidthKm, 'f', -1, 64))
@@ -516,6 +523,8 @@ func showOccultationParametersDialog(w fyne.Window) {
 				exposureTimeSecsEntry.SetText("")
 			}
 
+			dialogOccelmntXml = params.OccelmntXml
+
 			// Store the loaded file name for use as default in the save dialog
 			loadedFileName = reader.URI().Name()
 			// Store the full path for use by Run IOTAdiffraction
@@ -680,7 +689,22 @@ func showOccultationParametersDialog(w fyne.Window) {
 		fileDialog.Show()
 	})
 
-	buttons := container.NewHBox(loadBtn, saveBtn, layout.NewSpacer(), cancelBtn)
+	showOccelmntBtn := widget.NewButton("Show associated occelmnt.xml", func() {
+		if dialogOccelmntXml == "" {
+			dialog.ShowInformation("No occelmnt.xml data", "No occelmnt.xml data is associated with the current parameters file.", w)
+			return
+		}
+		xmlEntry := widget.NewMultiLineEntry()
+		xmlEntry.SetText(dialogOccelmntXml)
+		xmlEntry.Wrapping = fyne.TextWrapOff
+		scroll := container.NewVScroll(xmlEntry)
+		scroll.SetMinSize(fyne.NewSize(800, 300))
+		d := dialog.NewCustom("Associated occelmnt.xml", "Close", scroll, w)
+		d.Resize(fyne.NewSize(840, 400))
+		d.Show()
+	})
+
+	buttons := container.NewHBox(loadBtn, saveBtn, showOccelmntBtn, layout.NewSpacer(), cancelBtn)
 	bottomSection := container.NewVBox(fileNameLabel, buttons)
 	content := container.NewBorder(nil, bottomSection, nil, nil, scrollContent)
 
@@ -1237,6 +1261,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 				MajorAxisKm: bodyDiamKm,
 				MinorAxisKm: bodyDiamKm,
 			},
+			OccelmntXml: xmlContent,
 		}
 
 		// Marshal to JSON5 and write to the from_occelmnt file
@@ -2545,7 +2570,7 @@ func main() {
 			startupOverlay.Hide()
 			if !reuseImageCheck.Checked && !iotaRanSuccessfully {
 				dialog.ShowInformation("IOTAdiffraction reminder",
-					"Remember to run IOTAdiffraction before proceeding with fits.", w)
+					"Remember to run IOTAdiffraction before proceeding with Fit.", w)
 			}
 
 			// Create an action log file for this CSV
@@ -2605,6 +2630,7 @@ func main() {
 				// Warn if CSV-measured exposure time differs from the parameters file by more than 5%
 				if timingResult != nil {
 					csvExposure := timingResult.MedianTimeStep
+					lastCsvExposureSecs = csvExposure
 					var paramExposure float64
 					if lastDiffractionParamsPath != "" {
 						if f, ferr := os.Open(lastDiffractionParamsPath); ferr == nil {
@@ -2954,6 +2980,7 @@ func main() {
 			// Warn if CSV-measured exposure time differs from the parameters file by more than 5%
 			if timingResult != nil {
 				csvExposure := timingResult.MedianTimeStep
+				lastCsvExposureSecs = csvExposure
 				var paramExposure float64
 				if lastDiffractionParamsPath != "" {
 					if f, ferr := os.Open(lastDiffractionParamsPath); ferr == nil {
@@ -3622,6 +3649,7 @@ func main() {
 			// Warn if CSV-measured exposure time differs from the parameters file by more than 5%
 			if timingResult != nil {
 				csvExposure := timingResult.MedianTimeStep
+				lastCsvExposureSecs = csvExposure
 				var paramExposure float64
 				if lastDiffractionParamsPath != "" {
 					if f, ferr := os.Open(lastDiffractionParamsPath); ferr == nil {
@@ -4690,13 +4718,15 @@ func main() {
 			occTitle = lastFitParams.Title
 		}
 		showSodisReportDialog(w, &sodisPreFill{
-			fitResult:   lastFitResult,
-			mcResult:    lastMCResult,
-			fitParams:   lastFitParams,
-			lcData:      loadedLightCurveData,
-			occTitle:    occTitle,
-			sitePath:    lastLoadedSitePath,
-			occelmntXml: lastLoadedOccelmntXml,
+			fitResult:       lastFitResult,
+			mcResult:        lastMCResult,
+			fitParams:       lastFitParams,
+			lcData:          loadedLightCurveData,
+			occTitle:        occTitle,
+			sitePath:        lastLoadedSitePath,
+			occelmntXml:     lastLoadedOccelmntXml,
+			noiseSigma:      noiseSigma,
+			csvExposureSecs: lastCsvExposureSecs,
 		})
 	})
 	fillSodisBtn.Importance = widget.HighImportance
@@ -4778,7 +4808,7 @@ func main() {
 			// Fit tab: remind the user to run IOTAdiffraction if they haven't opted in to reuse
 			if !reuseImageCheck.Checked && !iotaRanSuccessfully {
 				dialog.ShowInformation("IOTAdiffraction reminder",
-					"Remember to run IOTAdiffraction before proceeding with fits.", w)
+					"Remember to run IOTAdiffraction before proceeding with Fit.", w)
 			}
 
 			// Fit tab: multi-pair mode for baseline selection, unless the NIE manual
@@ -4992,11 +5022,15 @@ func main() {
 			logAction(fmt.Sprintf("Running IOTAdiffraction with parameters file: %s", paramFilePath))
 			lastDiffractionParamsPath = paramFilePath
 			prefs.SetString("lastDiffractionParamsPath", paramFilePath)
-			// Extract and save the title from the parameters file
+			// Extract title and embedded occelmnt XML from the parameters file
 			lastDiffractionTitle = ""
 			if f, err := os.Open(paramFilePath); err == nil {
 				if p, err := parseOccultationParameters(f); err == nil {
 					lastDiffractionTitle = p.Title
+					if p.OccelmntXml != "" {
+						lastLoadedOccelmntXml = p.OccelmntXml
+						prefs.SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
+					}
 				}
 				if err := f.Close(); err != nil {
 					fmt.Printf("Warning: failed to close parameters file: %v\n", err)

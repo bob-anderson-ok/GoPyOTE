@@ -1483,13 +1483,15 @@ func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
 // sodisPreFill carries the current fit/MC/lightcurve/site data used to
 // pre-populate the SODIS report dialog. All fields are optional (zero = not available).
 type sodisPreFill struct {
-	fitResult   *fitResult
-	mcResult    *mcTrialsResult
-	fitParams   *OccultationParameters
-	lcData      *LightCurveData
-	occTitle    string // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
-	sitePath    string // path to the last-loaded .site file
-	occelmntXml string // raw occelmnt XML text — first <Star> CSV field used for #STAR
+	fitResult       *fitResult
+	mcResult        *mcTrialsResult
+	fitParams       *OccultationParameters
+	lcData          *LightCurveData
+	occTitle        string  // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
+	sitePath        string  // path to the last-loaded .site file
+	occelmntXml     string  // raw occelmnt XML text — first <Star> CSV field used for #STAR
+	noiseSigma      float64 // baseline noise sigma — used for Signal/Noise (1/sigma)
+	csvExposureSecs float64 // CSV-measured median exposure time — used for Exp_Time
 }
 
 // formatSecondsForSODIS formats total seconds as HH:MM:SS.sss (3 decimal places),
@@ -1741,16 +1743,28 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 			}
 		}
 
-		// StartObs and EndObs from the loaded light curve (only if timestamps are present)
+		// StartObs and EndObs from the loaded light curve (only if timestamps are present).
+		// Rounded to the nearest integer second, formatted as HH:MM:SS.
+		hhmmss := func(totalSeconds float64) string {
+			s := int(math.Round(totalSeconds)) % 86400
+			return fmt.Sprintf("%02d:%02d:%02d", s/3600, (s%3600)/60, s%60)
+		}
 		if fill.lcData != nil && len(fill.lcData.TimeValues) > 1 &&
 			fill.lcData.TimeValues[0] > 0 {
-			setEntry("StartObs", formatSecondsForSODIS(fill.lcData.TimeValues[0]))
-			setEntry("EndObs", formatSecondsForSODIS(fill.lcData.TimeValues[len(fill.lcData.TimeValues)-1]))
+			setEntry("StartObs", hhmmss(fill.lcData.TimeValues[0]))
+			setEntry("EndObs", hhmmss(fill.lcData.TimeValues[len(fill.lcData.TimeValues)-1]))
 		}
 
-		// Exp_Time from the occultation parameters
-		if fill.fitParams != nil && fill.fitParams.ExposureTimeSecs > 0 {
+		// Exp_Time: prefer the CSV-measured median cadence; fall back to the occultation parameters
+		if fill.csvExposureSecs > 0 {
+			setEntry("Exp_Time", fmt.Sprintf("%.4f", fill.csvExposureSecs))
+		} else if fill.fitParams != nil && fill.fitParams.ExposureTimeSecs > 0 {
 			setEntry("Exp_Time", fmt.Sprintf("%.4f", fill.fitParams.ExposureTimeSecs))
+		}
+
+		// Signal/Noise: 1/noiseSigma (baseline noise sigma from the Fit tab)
+		if fill.noiseSigma > 0 {
+			setEntry("Signal/Noise", fmt.Sprintf("%.2f", 1.0/fill.noiseSigma))
 		}
 
 		// ASTEROID and Nr from the occultation title, e.g. "(2731) Cucula"

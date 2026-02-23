@@ -32,6 +32,7 @@ type OccultationParameters struct {
 	Satellite                      EllipseParams `json:"satellite"`
 	PathToExternalImage            string        `json:"path_to_external_image"`
 	ExposureTimeSecs               float64       `json:"exposure_time_secs"`
+	OccelmntXml                    string        `json:"occelmnt_xml,omitempty"`
 }
 
 // LightCurveColumn represents a single light curve column from a CSV file
