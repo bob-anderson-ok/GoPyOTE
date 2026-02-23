@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"encoding/xml"
 	"fmt"
 	"image/color"
 	"io"
@@ -1482,12 +1483,13 @@ func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
 // sodisPreFill carries the current fit/MC/lightcurve/site data used to
 // pre-populate the SODIS report dialog. All fields are optional (zero = not available).
 type sodisPreFill struct {
-	fitResult *fitResult
-	mcResult  *mcTrialsResult
-	fitParams *OccultationParameters
-	lcData    *LightCurveData
-	occTitle  string // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
-	sitePath  string // path to the last-loaded .site file
+	fitResult   *fitResult
+	mcResult    *mcTrialsResult
+	fitParams   *OccultationParameters
+	lcData      *LightCurveData
+	occTitle    string // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
+	sitePath    string // path to the last-loaded .site file
+	occelmntXml string // raw occelmnt XML text — first <Star> CSV field used for #STAR
 }
 
 // formatSecondsForSODIS formats total seconds as HH:MM:SS.sss (3 decimal places),
@@ -1764,6 +1766,50 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 			}
 		}
 
+		// Occultation: pre-fill with a template placeholder to prompt the user
+		setEntry("Occultation", "xxxxTIVE")
+
+		// Fields from occelmnt XML: STAR, DATE, PREDICTTIME
+		if fill.occelmntXml != "" {
+			var occ Occultations
+			if xmlErr := xml.Unmarshal([]byte(fill.occelmntXml), &occ); xmlErr == nil && len(occ.Events) > 0 {
+				ev := occ.Events[0]
+
+				// STAR: first CSV field of the <Star> element
+				if ev.Star != "" {
+					starParts := strings.SplitN(ev.Star, ",", 2)
+					if starName := strings.TrimSpace(starParts[0]); starName != "" {
+						setEntry("STAR", starName)
+					}
+				}
+
+				// DATE and PREDICTTIME: from <Elements> fields (0-indexed: 2=year, 3=month, 4=day, 5=UT hours)
+				if ev.Elements != "" {
+					elParts := splitCSVPreserveEmpty(strings.TrimSpace(ev.Elements))
+					if len(elParts) >= 6 {
+						year, yearErr := strconv.Atoi(strings.TrimSpace(elParts[2]))
+						month, monthErr := strconv.Atoi(strings.TrimSpace(elParts[3]))
+						day, dayErr := strconv.Atoi(strings.TrimSpace(elParts[4]))
+						utHours, utErr := strconv.ParseFloat(strings.TrimSpace(elParts[5]), 64)
+						if yearErr == nil && monthErr == nil && dayErr == nil && month >= 1 && month <= 12 {
+							monthNames := [13]string{"", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"}
+							monthAbbrevs := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+							// DATE: "D MonthName YYYY"
+							setEntry("DATE", fmt.Sprintf("%d %s %d", day, monthNames[month], year))
+							// PREDICTTIME: "DD Mon; HH:MM:SS UT"
+							if utErr == nil {
+								totalSec := int(math.Round(utHours * 3600))
+								h := totalSec / 3600
+								m := (totalSec % 3600) / 60
+								s := totalSec % 60
+								setEntry("PREDICTTIME", fmt.Sprintf("%02d %s; %02d:%02d:%02d UT", day, monthAbbrevs[month], h, m, s))
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// Site file fields: observer, location, equipment
 		if fill.sitePath != "" {
 			site := parseSiteFileToMap(fill.sitePath)
@@ -1846,8 +1892,11 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 	})
 
 	saveBtn := widget.NewButton("Save", func() {
-		sodisDir := filepath.Join(appDir, "SODIS-FOLDER")
-		_ = os.MkdirAll(sodisDir, 0755)
+		saveDir := resultsFolder
+		if saveDir == "" {
+			saveDir = filepath.Join(appDir, "SODIS-FOLDER")
+			_ = os.MkdirAll(saveDir, 0755)
+		}
 		fileSave := dialog.NewFileSave(func(wr fyne.URIWriteCloser, ferr error) {
 			if ferr != nil {
 				dialog.ShowError(ferr, w)
@@ -1870,7 +1919,8 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 			dlg.Hide()
 			dialog.ShowInformation("Saved", "SODIS report saved successfully.", w)
 		}, w)
-		if listable, lerr := storage.ListerForURI(storage.NewFileURI(sodisDir)); lerr == nil {
+		fileSave.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
+		if listable, lerr := storage.ListerForURI(storage.NewFileURI(saveDir)); lerr == nil {
 			fileSave.SetLocation(listable)
 		}
 		fileSave.SetFileName("SODIS-REPORT.txt")

@@ -66,13 +66,16 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.36"
+const Version = "1.1.37"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
 
 // Track the last loaded site file path for use by the Fill SODIS Report dialog
 var lastLoadedSitePath string
+
+// Track the last loaded occelmnt XML text for use by the Fill SODIS Report dialog
+var lastLoadedOccelmntXml string
 
 // Track the parameters file used for the last IOTAdiffraction run (for startup display)
 var lastDiffractionParamsPath string
@@ -221,14 +224,6 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 		}
 		fileDialog.Show()
 	}
-
-	// Add the "Browse..." button at the top
-	browseBtn := widget.NewButton("Open last used folder", func() {
-		openAtLocation("")
-	})
-	browseBtn.Importance = widget.HighImportance
-	browseBtnHalf := container.NewGridWrap(fyne.NewSize(450/2, browseBtn.MinSize().Height), browseBtn)
-	buttons = append(buttons, browseBtnHalf)
 
 	// Add separator
 	buttons = append(buttons, widget.NewSeparator())
@@ -698,6 +693,9 @@ func showProcessOccelemntDialog(w fyne.Window) {
 	pasteEntry := widget.NewMultiLineEntry()
 	pasteEntry.SetPlaceHolder("Use Load button above or paste from the clipboard (Ctrl V) to fill this panel")
 	pasteEntry.Wrapping = fyne.TextWrapOff
+	if lastLoadedOccelmntXml != "" {
+		pasteEntry.SetText(lastLoadedOccelmntXml)
+	}
 
 	// --- Load occelmnt file button ---
 	loadOccelmntBtn := widget.NewButton("Load occelmnt.xml", func() {
@@ -720,6 +718,8 @@ func showProcessOccelemntDialog(w fyne.Window) {
 				return
 			}
 			pasteEntry.SetText(string(data))
+			lastLoadedOccelmntXml = string(data)
+			fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
 			logAction(fmt.Sprintf("Loaded occelmnt file: %s", reader.URI().Path()))
 		}, w)
 		occelmntDir := filepath.Join(appDir, "OCCELMNT-FOLDER")
@@ -1164,6 +1164,8 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			dialog.ShowError(fmt.Errorf("please paste occelmnt XML content first"), w)
 			return
 		}
+		lastLoadedOccelmntXml = xmlContent
+		fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
 		lat, err := strconv.ParseFloat(strings.TrimSpace(latDecimalEntry.Text), 64)
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("invalid latitude (degrees): %v", err), w)
@@ -1353,6 +1355,8 @@ func main() {
 
 	// Load the last used parameters path from preferences for startup display
 	lastLoadedParamsPath = prefs.StringWithFallback("lastLoadedParamsPath", "")
+	// Restore last loaded occelmnt XML text
+	lastLoadedOccelmntXml = prefs.StringWithFallback("lastLoadedOccelmntXml", "")
 	// Only restore the diffraction image data if the user opted to reuse it across sessions
 	if prefs.BoolWithFallback("reuseCurrentDiffractionImage", false) {
 		lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
@@ -3954,11 +3958,44 @@ func main() {
 	searchNumStepsEntry := widget.NewEntry()
 	searchNumStepsEntry.SetPlaceHolder("")
 
-	var lockedInitialVal = "0.0"
-	var lockedFinalVal string
-	var suppressSearchChange bool
-	var searchRangeLockDialogShowing bool
-	searchRangeManualCheck := widget.NewCheck("Enable manual entry of search range", nil)
+	showSearchRangeHelp := func() {
+		dialog.ShowInformation("Search range for observation path offsets",
+			"You may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.\n\nRemember to click Run Fit Search after making changes to the search range because the Monte Carlo trials use the path range from the last click on Run Fit Search.", w)
+	}
+
+	// updateSearchNumSteps recalculates the number of steps from the current offset
+	// range and the pixel resolution of the diffraction image parameters file.
+	updateSearchNumSteps := func() {
+		initVal, err1 := strconv.ParseFloat(strings.TrimSpace(searchInitialOffsetEntry.Text), 64)
+		finalVal, err2 := strconv.ParseFloat(strings.TrimSpace(searchFinalOffsetEntry.Text), 64)
+		if err1 != nil || err2 != nil || lastDiffractionParamsPath == "" {
+			return
+		}
+		go func() {
+			file, err := os.Open(lastDiffractionParamsPath)
+			if err != nil {
+				return
+			}
+			params, err := parseOccultationParameters(file)
+			if closeErr := file.Close(); closeErr != nil {
+				fmt.Printf("Failed to close parameters file: %v\n", closeErr)
+			}
+			if err != nil || params.FundamentalPlaneWidthNumPoints == 0 {
+				return
+			}
+			stepSize := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+			if stepSize <= 0 {
+				return
+			}
+			numSteps := int(math.Abs(finalVal-initVal)/stepSize) + 1
+			fyne.Do(func() {
+				searchNumStepsEntry.SetText(fmt.Sprintf("%d", numSteps))
+			})
+		}()
+	}
+
+	searchInitialOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
+	searchFinalOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
 
 	// Preview window for search range paths — kept so we can update in place
 	var searchPreviewWindow fyne.Window
@@ -4065,37 +4102,6 @@ func main() {
 				searchPreviewWindow.Show()
 			})
 		}()
-	}
-
-	searchInitialOffsetEntry.OnChanged = func(_ string) {
-		if searchRangeManualCheck.Checked || suppressSearchChange {
-			return
-		}
-		suppressSearchChange = true
-		searchInitialOffsetEntry.SetText(lockedInitialVal)
-		suppressSearchChange = false
-		if !searchRangeLockDialogShowing {
-			searchRangeLockDialogShowing = true
-			d := dialog.NewInformation("Manual search range entry for path offsets is disabled",
-				"Check 'Enable manual entry of search range' to edit these fields.\n\nYou may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.\n\nRemember to click Run Fit Search after doing manual search range selection because the Monte Carlo trials use the path range from the last click on Run Fit Search.", w)
-			d.SetOnClosed(func() { searchRangeLockDialogShowing = false })
-			d.Show()
-		}
-	}
-	searchFinalOffsetEntry.OnChanged = func(_ string) {
-		if searchRangeManualCheck.Checked || suppressSearchChange {
-			return
-		}
-		suppressSearchChange = true
-		searchFinalOffsetEntry.SetText(lockedFinalVal)
-		suppressSearchChange = false
-		if !searchRangeLockDialogShowing {
-			searchRangeLockDialogShowing = true
-			d := dialog.NewInformation("Manual search range entry for path offsets is disabled",
-				"Check 'Enable manual entry of search range' to edit these fields.\n\nYou may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.\n\nRemember to click Run Fit Search after doing manual search range selection because the Monte Carlo trials use the path range from the last click on Run Fit Search.", w)
-			d.SetOnClosed(func() { searchRangeLockDialogShowing = false })
-			d.Show()
-		}
 	}
 
 	searchRangeForm := widget.NewForm(
@@ -4684,12 +4690,13 @@ func main() {
 			occTitle = lastFitParams.Title
 		}
 		showSodisReportDialog(w, &sodisPreFill{
-			fitResult: lastFitResult,
-			mcResult:  lastMCResult,
-			fitParams: lastFitParams,
-			lcData:    loadedLightCurveData,
-			occTitle:  occTitle,
-			sitePath:  lastLoadedSitePath,
+			fitResult:   lastFitResult,
+			mcResult:    lastMCResult,
+			fitParams:   lastFitParams,
+			lcData:      loadedLightCurveData,
+			occTitle:    occTitle,
+			sitePath:    lastLoadedSitePath,
+			occelmntXml: lastLoadedOccelmntXml,
 		})
 	})
 	fillSodisBtn.Importance = widget.HighImportance
@@ -4709,7 +4716,7 @@ func main() {
 		container.NewHBox(calcBaselineMeanBtn),
 		widget.NewSeparator(),
 		searchRangeCard,
-		container.NewHBox(fitBtn, fitAbortBtn, searchRangeManualCheck),
+		container.NewHBox(fitBtn, fitAbortBtn, widget.NewButton("Help", showSearchRangeHelp)),
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
@@ -4808,10 +4815,9 @@ func main() {
 					ns := numSteps
 					fv := finalVal
 					fyne.Do(func() {
-						lockedInitialVal = "0.0"
-						lockedFinalVal = strconv.FormatFloat(fv, 'f', -1, 64)
-						searchInitialOffsetEntry.SetText(lockedInitialVal)
-						searchFinalOffsetEntry.SetText(lockedFinalVal)
+						searchInitialOffsetEntry.SetText("0.0")
+						searchFinalOffsetEntry.SetText(strconv.FormatFloat(fv, 'f', -1, 64))
+
 						if ns > 0 {
 							searchNumStepsEntry.SetText(fmt.Sprintf("%d", ns))
 						}
