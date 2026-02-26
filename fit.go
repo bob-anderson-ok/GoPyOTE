@@ -542,6 +542,14 @@ func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noiseSig
 	}
 	pathOffsets := make([]float64, 0, numTrials)
 
+	// Throttle progress callbacks to at most 100 updates so the event queue
+	// is not flooded (MC trials are fast and could generate thousands of
+	// fyne.Do calls before the abort button click is ever processed).
+	progressStep := numTrials / 100
+	if progressStep < 1 {
+		progressStep = 1
+	}
+
 	for trial := 0; trial < numTrials; trial++ {
 		if abort != nil && abort.Load() {
 			fmt.Printf("Monte Carlo aborted after %d trials\n", trial)
@@ -559,9 +567,12 @@ func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noiseSig
 			}
 		}
 		pathOffsets = append(pathOffsets, mcResult.pathOffset)
-		if onProgress != nil {
+		if onProgress != nil && (trial+1)%progressStep == 0 {
 			onProgress(float64(trial+1) / float64(numTrials))
 		}
+	}
+	if onProgress != nil {
+		onProgress(1.0)
 	}
 
 	// Compute mean and std for each edge

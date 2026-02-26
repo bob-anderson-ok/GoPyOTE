@@ -438,6 +438,107 @@ func FresnelScale(wavelengthNm, ZAu float64) float64 {
 	return math.Sqrt(wavelengthKm * ZKm / 2)
 }
 
+// ObserverT0CorrectionFromOWC computes the observer-specific event time by projecting
+// the observer's position onto the fundamental plane and finding when the shadow
+// centre passes closest to the observer.
+//
+// Returns:
+//
+//	geocentricT0   – geocentric predicted event time (from occelmnt UT field)
+//	observerT0     – time when shadow centre is closest to observer
+//	correctionSecs – observerT0 minus geocentricT0 in seconds (positive = later)
+func ObserverT0CorrectionFromOWC(
+	xmlText string,
+	latDeg, lonDeg, hMeters float64,
+	dut1Seconds, xpArcsec, ypArcsec float64,
+) (geocentricT0, observerT0 time.Time, correctionSecs float64, err error) {
+
+	// Parse XML
+	var occ Occultations
+	if err = xml.Unmarshal([]byte(xmlText), &occ); err != nil {
+		return
+	}
+	if len(occ.Events) == 0 {
+		err = fmt.Errorf("no Event found in XML")
+		return
+	}
+	ev := occ.Events[0]
+
+	pe, err := parseElementsCSV(ev.Elements)
+	if err != nil {
+		return
+	}
+
+	raRad, decRad, err := parseStarRADec(ev.Star)
+	if err != nil {
+		return
+	}
+
+	// Reconstruct geocentricT0 from Elements year/month/day/UT fields
+	parts := splitCSVPreserveEmpty(strings.TrimSpace(ev.Elements))
+	if len(parts) < 6 {
+		err = fmt.Errorf("elements missing date fields")
+		return
+	}
+	yearF, e := mustFloat(parts[2])
+	if e != nil {
+		err = fmt.Errorf("elements year parse: %w", e)
+		return
+	}
+	monthF, e := mustFloat(parts[3])
+	if e != nil {
+		err = fmt.Errorf("elements month parse: %w", e)
+		return
+	}
+	dayF, e := mustFloat(parts[4])
+	if e != nil {
+		err = fmt.Errorf("elements day parse: %w", e)
+		return
+	}
+
+	utSeconds := pe.UT * 3600.0
+	h := int(utSeconds / 3600.0)
+	utSeconds -= float64(h) * 3600.0
+	m := int(utSeconds / 60.0)
+	utSeconds -= float64(m) * 60.0
+	s := int(utSeconds)
+	ns := int((utSeconds - float64(s)) * 1e9)
+	geocentricT0 = time.Date(int(yearF), time.Month(int(monthF)), int(dayF), h, m, s, ns, time.UTC)
+
+	// Compute observer position on the fundamental plane in Earth radii
+	latRad := deg2rad(latDeg)
+	lonRad := deg2rad(lonDeg)
+	xpRad := xpArcsec * (math.Pi / 180.0) / 3600.0
+	ypRad := ypArcsec * (math.Pi / 180.0) / 3600.0
+
+	rECEF := geodeticToECEF(latRad, lonRad, hMeters)
+	rPEF := applyPolarMotion(rECEF, xpRad, ypRad)
+
+	jdUTC := julianDateUTC(geocentricT0)
+	jdUT1 := jdUTC + dut1Seconds/86400.0
+	era := earthRotationAngle(jdUT1)
+
+	rECI := Rz(era, rPEF)             // meters
+	rECI_Re := rECI.Mul(1.0 / wgs84A) // Earth radii
+
+	sHat := starUnitFromRADec(raRad, decRad)
+	e1, e2 := fundamentalPlaneBasis(sHat)
+	xObs, yObs := projectToPlane(rECI_Re, e1, e2)
+
+	// t0 correction: time when shadow centre is closest to observer
+	// τ = -[(X - xObs)*dX + (Y - yObs)*dY] / (dX² + dY²)  [hours]
+	denom := pe.dX*pe.dX + pe.dY*pe.dY
+	if denom == 0 {
+		err = fmt.Errorf("shadow velocity is zero; cannot compute t0 correction")
+		return
+	}
+	tauHours := -((pe.X-xObs)*pe.dX + (pe.Y-yObs)*pe.dY) / denom
+	correctionSecs = tauHours * 3600.0
+	observerT0 = geocentricT0.Add(time.Duration(correctionSecs * float64(time.Second)))
+
+	return
+}
+
 // Compute relative shadow velocity on the plane: vRel = vShadow - vObs (both on the same plane basis).
 func relativeShadowVelocityFromEvent(
 	tUTC time.Time,

@@ -1487,11 +1487,12 @@ type sodisPreFill struct {
 	mcResult        *mcTrialsResult
 	fitParams       *OccultationParameters
 	lcData          *LightCurveData
-	occTitle        string  // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
-	sitePath        string  // path to the last-loaded .site file
-	occelmntXml     string  // raw occelmnt XML text — first <Star> CSV field used for #STAR
-	noiseSigma      float64 // baseline noise sigma — used for Signal/Noise (1/sigma)
-	csvExposureSecs float64 // CSV-measured median exposure time — used for Exp_Time
+	occTitle        string    // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
+	sitePath        string    // path to the last-loaded .site file
+	occelmntXml     string    // raw occelmnt XML text — first <Star> CSV field used for #STAR
+	noiseSigma      float64   // baseline noise sigma — used for Signal/Noise (1/sigma)
+	csvExposureSecs float64   // CSV-measured median exposure time — used for Exp_Time
+	observerT0      time.Time // observer-corrected event time (zero = not available; use geocentric)
 }
 
 // formatSecondsForSODIS formats total seconds as HH:MM:SS.sss (3 decimal places),
@@ -1642,7 +1643,7 @@ func buildSodisReportText(templateLines []string, entries map[string]*widget.Ent
 						} else {
 							sb.WriteString("#")
 							sb.WriteString(word)
-							sb.WriteString(":")
+							sb.WriteString(":  ")
 							if val != "" {
 								sb.WriteString(val)
 							}
@@ -1869,11 +1870,11 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 			setEntry("R", "R"+formatSecondsForSODIS(t1))
 			setEntry("Duration", fmt.Sprintf("%.3f", t1-t0))
 
-			// Acc_D and Acc_R from the most recent Monte Carlo run (1-sigma values)
+			// Acc_D and Acc_R from the most recent Monte Carlo run (3-sigma values)
 			if fill.mcResult != nil && fill.mcResult.numEdges == 2 &&
 				len(fill.mcResult.edgeStds) == 2 {
-				setEntry("Acc_D", fmt.Sprintf("%.3f", fill.mcResult.edgeStds[dIdx]))
-				setEntry("Acc_R", fmt.Sprintf("%.3f", fill.mcResult.edgeStds[rIdx]))
+				setEntry("Acc_D", fmt.Sprintf("%.3f", 3*fill.mcResult.edgeStds[dIdx]))
+				setEntry("Acc_R", fmt.Sprintf("%.3f", 3*fill.mcResult.edgeStds[rIdx]))
 			}
 		}
 
@@ -1947,12 +1948,24 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 							// DATE: "D MonthName YYYY"
 							setEntry("DATE", fmt.Sprintf("%d %s %d", day, monthNames[month], year))
 							// PREDICTTIME: "DD Mon; HH:MM:SS UT"
-							if utErr == nil {
+							// Use observer-corrected t0 when available, else fall back to geocentric.
+							fmt.Printf("[SODIS PREDICTTIME] fill.observerT0=%v  IsZero=%v\n", fill.observerT0, fill.observerT0.IsZero())
+							if !fill.observerT0.IsZero() {
+								t := fill.observerT0.UTC()
+								val := fmt.Sprintf("%02d %s; %02d:%02d:%02d UT",
+									t.Day(), monthAbbrevs[int(t.Month())], t.Hour(), t.Minute(), t.Second())
+								fmt.Printf("[SODIS PREDICTTIME] using observerT0 -> %q\n", val)
+								setEntry("PREDICTTIME", val)
+							} else if utErr == nil {
 								totalSec := int(math.Round(utHours * 3600))
 								h := totalSec / 3600
 								m := (totalSec % 3600) / 60
 								s := totalSec % 60
-								setEntry("PREDICTTIME", fmt.Sprintf("%02d %s; %02d:%02d:%02d UT", day, monthAbbrevs[month], h, m, s))
+								val := fmt.Sprintf("%02d %s; %02d:%02d:%02d UT", day, monthAbbrevs[month], h, m, s)
+								fmt.Printf("[SODIS PREDICTTIME] using geocentric -> %q\n", val)
+								setEntry("PREDICTTIME", val)
+							} else {
+								fmt.Printf("[SODIS PREDICTTIME] skipped: observerT0 is zero AND utErr=%v\n", utErr)
 							}
 						}
 					}

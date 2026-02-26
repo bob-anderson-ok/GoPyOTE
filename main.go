@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.39"
+const Version = "1.1.40"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -79,6 +79,13 @@ var lastLoadedOccelmntXml string
 
 // Track the CSV-measured median exposure time (seconds) for use by the Fill SODIS Report dialog
 var lastCsvExposureSecs float64
+
+// Track the observer GPS location from the last successful ObserverT0CorrectionFromOWC call.
+// Persisted in preferences so the SODIS fill works across sessions.
+var lastObserverLatDeg float64
+var lastObserverLonDeg float64
+var lastObserverAltMeters float64
+var lastObserverLocationSet bool
 
 // Track the parameters file used for the last IOTAdiffraction run (for startup display)
 var lastDiffractionParamsPath string
@@ -600,6 +607,12 @@ func showOccultationParametersDialog(w fyne.Window) {
 				return
 			}
 
+			// Require exposure time to be explicitly entered (0 is acceptable)
+			if strings.TrimSpace(exposureTimeSecsEntry.Text) == "" {
+				dialog.ShowError(fmt.Errorf("exposure time (secs) is required — a 0 value can be used for test purposes"), w)
+				return
+			}
+
 			// Build parameters struct from entry fields
 			params := OccultationParameters{
 				WindowSizePixels:               parseInt(windowSizeEntry.Text),
@@ -717,9 +730,6 @@ func showProcessOccelemntDialog(w fyne.Window) {
 	pasteEntry := widget.NewMultiLineEntry()
 	pasteEntry.SetPlaceHolder("Use Load button above or paste from the clipboard (Ctrl V) to fill this panel")
 	pasteEntry.Wrapping = fyne.TextWrapOff
-	if lastLoadedOccelmntXml != "" {
-		pasteEntry.SetText(lastLoadedOccelmntXml)
-	}
 
 	// --- Load occelmnt file button ---
 	loadOccelmntBtn := widget.NewButton("Load occelmnt.xml", func() {
@@ -1217,6 +1227,21 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			return
 		}
 
+		geocT0, obsT0, corrSecs, t0Err := ObserverT0CorrectionFromOWC(xmlContent, lat, lon, alt, 0.0, 0.0, 0.0)
+
+		// Persist the observer location so the SODIS fill can use it even after app restart.
+		if t0Err == nil {
+			lastObserverLatDeg = lat
+			lastObserverLonDeg = lon
+			lastObserverAltMeters = alt
+			lastObserverLocationSet = true
+			p := fyne.CurrentApp().Preferences()
+			p.SetFloat("lastObserverLatDeg", lat)
+			p.SetFloat("lastObserverLonDeg", lon)
+			p.SetFloat("lastObserverAltMeters", alt)
+			p.SetBool("lastObserverLocationSet", true)
+		}
+
 		// Parse <Object> or <object> for distance_au (index 4) and body diameter (index 3)
 		var occ Occultations
 		if xmlErr := xml.Unmarshal([]byte(xmlContent), &occ); xmlErr != nil {
@@ -1292,24 +1317,37 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		}
 		showOccultationParametersDialog(w)
 
-		// Calculate and display Fresnel scale
+		// Calculate and display t0 correction and Fresnel scale
 		wavelength := float64(params.ObservationWavelengthNm)
 		if wavelength == 0 {
 			wavelength = 550
 		}
+		infoMsg := ""
+		if t0Err == nil {
+			infoMsg += fmt.Sprintf(
+				"Geocentric t0:        %s UTC\nObserver event time:  %s UTC\nCorrection:           %+.3f sec",
+				geocT0.Format("15:04:05.000"),
+				obsT0.Format("15:04:05.000"),
+				corrSecs)
+		}
 		if params.DistanceAu > 0 {
 			fresnelKm := FresnelScale(wavelength, params.DistanceAu)
 			fresnelM := fresnelKm * 1000
-			msg := fmt.Sprintf("Fresnel scale: %.4f km (%.1f m)\n\nWavelength: %.0f nm\nDistance: %.4f AU",
+			if infoMsg != "" {
+				infoMsg += "\n\n"
+			}
+			infoMsg += fmt.Sprintf("Fresnel scale: %.4f km (%.1f m)\n\nWavelength: %.0f nm\nDistance: %.4f AU",
 				fresnelKm, fresnelM, wavelength, params.DistanceAu)
 			if params.FundamentalPlaneWidthKm > 0 && params.FundamentalPlaneWidthNumPoints > 0 {
 				samplesPerFresnel := int(float64(params.FundamentalPlaneWidthNumPoints) * fresnelKm / params.FundamentalPlaneWidthKm)
-				msg += fmt.Sprintf("\n\nSamples per Fresnel scale: %d", samplesPerFresnel)
+				infoMsg += fmt.Sprintf("\n\nSamples per Fresnel scale: %d", samplesPerFresnel)
 			}
-			msg += "\n\nIf your observation exhibits diffraction effects (sloped D and R transitions), " +
+			infoMsg += "\n\nIf your observation exhibits diffraction effects (sloped D and R transitions), " +
 				"you will need the Samples per Fresnel scale to be 5 or 6 at a minimum. " +
 				"See the Help Topics entry titled 'Fresnel scale resolution' for more information."
-			dialog.ShowInformation("Fresnel Scale", msg, w)
+		}
+		if infoMsg != "" {
+			dialog.ShowInformation("Event Prediction & Fresnel Scale", infoMsg, w)
 		}
 	})
 	calcDxDyBtn.Importance = widget.HighImportance
@@ -1384,6 +1422,13 @@ func main() {
 	lastLoadedParamsPath = prefs.StringWithFallback("lastLoadedParamsPath", "")
 	// Restore last loaded occelmnt XML text
 	lastLoadedOccelmntXml = prefs.StringWithFallback("lastLoadedOccelmntXml", "")
+	// Restore observer GPS location for SODIS fill
+	lastObserverLocationSet = prefs.BoolWithFallback("lastObserverLocationSet", false)
+	if lastObserverLocationSet {
+		lastObserverLatDeg = prefs.FloatWithFallback("lastObserverLatDeg", 0.0)
+		lastObserverLonDeg = prefs.FloatWithFallback("lastObserverLonDeg", 0.0)
+		lastObserverAltMeters = prefs.FloatWithFallback("lastObserverAltMeters", 0.0)
+	}
 	// Only restore the diffraction image data if the user opted to reuse it across sessions
 	if prefs.BoolWithFallback("reuseCurrentDiffractionImage", false) {
 		lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
@@ -4367,6 +4412,46 @@ func main() {
 			dialog.ShowError(fmt.Errorf("number of Monte Carlo trials must be a positive integer"), w)
 			return
 		}
+		// Re-sync candidate curves to the current UI search parameters when the
+		// step count has changed since the last Fit Search was run.
+		searchInitialMC := strings.TrimSpace(searchInitialOffsetEntry.Text)
+		searchFinalMC := strings.TrimSpace(searchFinalOffsetEntry.Text)
+		searchStepsMC := strings.TrimSpace(searchNumStepsEntry.Text)
+		if searchInitialMC != "" && searchFinalMC != "" && searchStepsMC != "" {
+			initValMC, err1 := strconv.ParseFloat(searchInitialMC, 64)
+			finalValMC, err2 := strconv.ParseFloat(searchFinalMC, 64)
+			stepsValMC, err3 := strconv.Atoi(searchStepsMC)
+			if err1 == nil && err2 == nil && err3 == nil && stepsValMC >= 1 && stepsValMC != len(lastFitCandidates) {
+				fmt.Printf("MC: candidate count mismatch (UI=%d, last fit=%d) — re-running fit search to sync\n", stepsValMC, len(lastFitCandidates))
+				paramsCopyMC := *lastFitParams
+				fitProgressBar.SetValue(0)
+				fitProgressBar.Show()
+				mcBtn.Disable()
+				fitAbortFlag.Store(false)
+				go func() {
+					fsr, resyncErr := runFitSearch(&paramsCopyMC, lastFitTargetTimes, lastFitTargetValues, initValMC, finalValMC, stepsValMC, &fitAbortFlag, func(p float64) {
+						fyne.Do(func() { fitProgressBar.SetValue(p) })
+					})
+					fyne.Do(func() {
+						fitProgressBar.Hide()
+						mcBtn.Enable()
+						if resyncErr != nil {
+							dialog.ShowError(fmt.Errorf("MC candidate re-sync failed: %v", resyncErr), w)
+							return
+						}
+						newCandidates := make([]*precomputedCurve, 0, len(fsr.results))
+						for _, sr := range fsr.results {
+							newCandidates = append(newCandidates, sr.pc)
+						}
+						lastFitCandidates = newCandidates
+						fmt.Printf("MC: re-sync complete — %d candidates ready\n", len(newCandidates))
+						mcBtn.Tapped(nil)
+					})
+				}()
+				return
+			}
+		}
+		fmt.Printf("MC: using %d candidates from last fit search\n", len(lastFitCandidates))
 		mcProgressBar.SetValue(0)
 		mcProgressBar.Show()
 		mcBtn.Disable()
@@ -4719,6 +4804,17 @@ func main() {
 		if lastFitParams != nil && lastFitParams.Title != "" {
 			occTitle = lastFitParams.Title
 		}
+		// Compute observer-corrected t0 using the persisted observer GPS location.
+		var computedObserverT0 time.Time
+		if lastLoadedOccelmntXml != "" && lastObserverLocationSet {
+			_, obsT0, _, t0Err := ObserverT0CorrectionFromOWC(
+				lastLoadedOccelmntXml,
+				lastObserverLatDeg, lastObserverLonDeg, lastObserverAltMeters,
+				0, 0, 0)
+			if t0Err == nil {
+				computedObserverT0 = obsT0
+			}
+		}
 		showSodisReportDialog(w, &sodisPreFill{
 			fitResult:       lastFitResult,
 			mcResult:        lastMCResult,
@@ -4729,6 +4825,7 @@ func main() {
 			occelmntXml:     lastLoadedOccelmntXml,
 			noiseSigma:      noiseSigma,
 			csvExposureSecs: lastCsvExposureSecs,
+			observerT0:      computedObserverT0,
 		})
 	})
 	fillSodisBtn.Importance = widget.HighImportance
