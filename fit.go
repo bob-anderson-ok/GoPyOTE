@@ -89,6 +89,11 @@ type fitResult struct {
 	bestShift    float64
 	sampledTimes []float64
 	sampledVals  []float64
+	// The bestScale is the amplitude scale factor (0–1) found by the post-fit drop search.
+	// scaledTLC = bestTLC * bestScale + (1 - bestScale).
+	// The NIE event drop is (1 - bestScale): how far the scaled curve falls from baseline.
+	// Zero means the search has not yet run; valid values are in [0, 1].
+	bestScale float64
 }
 
 // precomputedCurve holds a theoretical light curve and edge times for a specific path offset,
@@ -282,18 +287,42 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 
 	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", fr.bestShift, fr.bestNCC)
 
-	overlayImg, err := createOverlayPlotImage(fr.curve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, fr.sampledVals, fr.bestNCC, params.Title, 1200, 500, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create overlay plot: %w", err)
-	}
+	// --- Scale (drop amplitude) search ---
+	// scaledTLC = bestTLC * scale + (1 - scale), sweep scale 1.0→0.0 in 100 steps.
+	// MSE is minimized (NCC cannot discriminate amplitude — it is scale-invariant).
+	// NIE event drop = 1 - scale (how far the scaled curve falls from the baseline).
+	if len(fr.sampledVals) > 0 && len(targetValues) > 0 {
+		bestScale, scaleMSE, scaledSampledVals := findBestScale(fr.sampledVals, targetValues)
+		fr.bestScale = bestScale // persist for NIE and future use
 
-	overlayWindow := app.NewWindow("Fit Result — Theoretical vs Observed")
-	overlayCanvas := canvas.NewImageFromImage(overlayImg)
-	overlayCanvas.FillMode = canvas.ImageFillContain
-	overlayWindow.SetContent(overlayCanvas)
-	overlayWindow.Resize(fyne.NewSize(1250, 550))
-	overlayWindow.CenterOnScreen()
-	overlayWindow.Show()
+		// Scale the full theoretical curve for plotting
+		scaledCurve := make([]timeIntensityPoint, len(fr.curve))
+		for i, pt := range fr.curve {
+			scaledCurve[i] = timeIntensityPoint{
+				time:      pt.time,
+				intensity: pt.intensity*bestScale + (1.0 - bestScale),
+			}
+		}
+
+		logAction(fmt.Sprintf("Scale search: best scale=%.4f, percent drop=%.2f, MSE=%.6f", bestScale, bestScale*100, scaleMSE))
+
+		// Show scaled overlay plot; nil edgeStds saves it as fitPlot.png
+		scaleOverlayImg, scaleErr := createOverlayPlotImage(
+			scaledCurve, fr.bestShift, fr.edgeTimes,
+			targetTimes, targetValues, fr.sampledTimes, scaledSampledVals,
+			fr.bestNCC, params.Title, 1200, 500, nil,
+		)
+		if scaleErr == nil {
+			scaleWindowTitle := fmt.Sprintf("Scaled Fit Result (percent drop = %.2f) — Theoretical vs Observed", bestScale*100)
+			scaleOverlayWindow := app.NewWindow(scaleWindowTitle)
+			scaleOverlayCanvas := canvas.NewImageFromImage(scaleOverlayImg)
+			scaleOverlayCanvas.FillMode = canvas.ImageFillContain
+			scaleOverlayWindow.SetContent(scaleOverlayCanvas)
+			scaleOverlayWindow.Resize(fyne.NewSize(1250, 550))
+			scaleOverlayWindow.CenterOnScreen()
+			scaleOverlayWindow.Show()
+		}
+	}
 
 	displayImg, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "diffractionImage8bit.png"))
 	if err != nil {
@@ -778,7 +807,7 @@ func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop floa
 		vLine.Width = vg.Points(2)
 		vLine.Dashes = []vg.Length{vg.Points(6), vg.Points(3)}
 		plt.Add(vLine)
-		plt.Legend.Add(fmt.Sprintf("Event bottom @ %.4f", eventDrop), vLine)
+		plt.Legend.Add(fmt.Sprintf("Percent drop %.1f", (1.0-eventDrop)*100), vLine)
 	}
 
 	// Gray vertical line at x=0.0 (zero level) — half the height of the event line
@@ -1684,4 +1713,43 @@ func createNoiseHistogramImage(noise []float64, occultationTitle string, plotWid
 	}
 
 	return histImg, mean, sigma, nil
+}
+
+// findBestScale sweeps scale from 1.0 to 0.0 in 100 steps, choosing the scale that
+// minimizes the Mean Squared Error between
+//
+//	scaledTLC[i] = sampledVals[i]*scale + (1.0 - scale)
+//
+// and targetValues. NCC cannot be used here because it is invariant to linear
+// amplitude scaling, so MSE is used instead.
+// Returns the best scale value (lowest MSE), its MSE, and the scaled sampled values.
+// The corresponding NIE event drop is (1 - bestScale).
+func findBestScale(sampledVals, targetValues []float64) (bestScale, bestMSE float64, scaledVals []float64) {
+	const numSteps = 100
+	bestMSE = math.MaxFloat64
+	bestScale = 1.0
+	n := len(sampledVals)
+
+	for step := 0; step <= numSteps; step++ {
+		scale := 1.0 - float64(step)/float64(numSteps)
+		var mse float64
+		scaled := make([]float64, n)
+		for i, v := range sampledVals {
+			scaled[i] = v*scale + (1.0 - scale)
+			d := targetValues[i] - scaled[i]
+			mse += d * d
+		}
+		mse /= float64(n)
+		if mse < bestMSE {
+			bestMSE = mse
+			bestScale = scale
+			scaledVals = scaled
+		}
+	}
+
+	if scaledVals == nil {
+		scaledVals = make([]float64, n)
+		copy(scaledVals, sampledVals)
+	}
+	return
 }

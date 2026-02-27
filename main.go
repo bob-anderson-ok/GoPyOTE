@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.40"
+const Version = "1.1.41"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -4611,12 +4611,28 @@ func main() {
 					mcContainer = container.NewVBox(mcSpacer, summaryLabel)
 				}
 				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
-				// Create a fit overlay plot with ±3σ edge uncertainty lines
+				// Create a fit overlay plot with ±3σ edge uncertainty lines, using the
+				// scale-adjusted theoretical curve (bestScale from the post-fit scale search).
 				if len(lastFitTargetTimes) > 0 && len(lastFitTargetValues) > 0 {
+					mcScale := lastFitResult.bestScale
+					if mcScale == 0 {
+						mcScale = 1.0
+					}
+					mcScaledCurve := make([]timeIntensityPoint, len(lastFitResult.curve))
+					for i, pt := range lastFitResult.curve {
+						mcScaledCurve[i] = timeIntensityPoint{
+							time:      pt.time,
+							intensity: pt.intensity*mcScale + (1.0 - mcScale),
+						}
+					}
+					mcScaledSampledVals := make([]float64, len(lastFitResult.sampledVals))
+					for i, v := range lastFitResult.sampledVals {
+						mcScaledSampledVals[i] = v*mcScale + (1.0 - mcScale)
+					}
 					mcOverlayImg, err := createOverlayPlotImage(
-						lastFitResult.curve, lastFitResult.bestShift, lastFitResult.edgeTimes,
+						mcScaledCurve, lastFitResult.bestShift, lastFitResult.edgeTimes,
 						lastFitTargetTimes, lastFitTargetValues,
-						lastFitResult.sampledTimes, lastFitResult.sampledVals,
+						lastFitResult.sampledTimes, mcScaledSampledVals,
 						lastFitResult.bestNCC, lastDiffractionTitle,
 						1200, 500, result.edgeStds,
 					)
@@ -4783,17 +4799,11 @@ func main() {
 				dialog.ShowError(fmt.Errorf("no target samples found between event edges â check fit result"), w)
 				return
 			}
-			// Event drop = minimum theoretical value between the fit edges.
-			eventDrop := 1.0
-			first := true
-			for i, t := range lastFitResult.sampledTimes {
-				if t >= edge1Abs && t <= edge2Abs {
-					if first || lastFitResult.sampledVals[i] < eventDrop {
-						eventDrop = lastFitResult.sampledVals[i]
-						first = false
-					}
-				}
-			}
+			// Event drop = 1 - bestScale, where bestScale is the amplitude scale factor
+			// found by the post-fit scale search (scaledTLC = bestTLC*scale + (1-scale)).
+			// bestScale==0 (zero value, search not run) maps naturally to eventDrop=1.0 (full drop).
+			eventDrop := 1.0 - lastFitResult.bestScale
+			logAction(fmt.Sprintf("NIE fit-derived: bestScale=%.4f, eventDrop=%.4f", lastFitResult.bestScale, eventDrop))
 			launchNIE(windowWidth, eventDrop, false)
 		}
 	})
