@@ -225,7 +225,26 @@ func (vt *VizieRTab) ClearInputs() {
 	vt.ObserverNameEntry.SetText("")
 	vt.AsteroidNumberEntry.SetText("")
 	vt.AsteroidNameEntry.SetText("")
-	vt.StatusLabel.SetText("Inputs cleared")
+}
+
+// FillStarFromOccelmntXml parses the first <Event>'s <Star> element from the
+// supplied occelmnt XML. If the first comma-separated field starts with "UCAC4"
+// (case-insensitive), the UCAC4 identifier that follows is written to StarUCAC4Entry.
+func (vt *VizieRTab) FillStarFromOccelmntXml(xmlText string) {
+	if xmlText == "" {
+		return
+	}
+	var occ Occultations
+	if err := xml.Unmarshal([]byte(xmlText), &occ); err != nil || len(occ.Events) == 0 {
+		return
+	}
+	star := strings.TrimSpace(strings.SplitN(occ.Events[0].Star, ",", 2)[0])
+	if strings.HasPrefix(strings.ToUpper(star), "UCAC4") {
+		fields := strings.Fields(star)
+		if len(fields) >= 2 {
+			vt.StarUCAC4Entry.SetText(fields[1])
+		}
+	}
 }
 
 // ValidateInputs validates all input fields and returns an error if any are invalid
@@ -1953,7 +1972,7 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 							if !fill.observerT0.IsZero() {
 								t := fill.observerT0.UTC()
 								val := fmt.Sprintf("%02d %s; %02d:%02d:%02d UT",
-									t.Day(), monthAbbrevs[int(t.Month())], t.Hour(), t.Minute(), t.Second())
+									t.Day(), monthAbbrevs[t.Month()], t.Hour(), t.Minute(), t.Second())
 								fmt.Printf("[SODIS PREDICTTIME] using observerT0 -> %q\n", val)
 								setEntry("PREDICTTIME", val)
 							} else if utErr == nil {

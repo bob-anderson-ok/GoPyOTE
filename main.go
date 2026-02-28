@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.43"
+const Version = "1.1.44"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -275,6 +275,17 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 // Pass clearAll=true to open with all entries blank (e.g., from the Edit Occultation Parameters button).
 // Pass a non-nil preload to pre-populate entries directly (e.g., from Create Occultation).
 func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *OccultationParameters) {
+	// Build dropdown choices from files in the CAMERA-QE folder
+	cameraQEDir := filepath.Join(appDir, "CAMERA-QE")
+	var qeFileNames []string
+	if dirEntries, err := os.ReadDir(cameraQEDir); err == nil {
+		for _, entry := range dirEntries {
+			if !entry.IsDir() {
+				qeFileNames = append(qeFileNames, entry.Name())
+			}
+		}
+	}
+
 	// Create entry fields for all parameters
 	windowSizeEntry := widget.NewEntry()
 	titleEntry := widget.NewEntry()
@@ -282,7 +293,16 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 	fundamentalPlaneWidthNumPointsEntry := widget.NewEntry()
 	parallaxArcsecEntry := widget.NewEntry()
 	distanceAuEntry := widget.NewEntry()
-	pathToQeTableFileEntry := widget.NewEntry()
+	pathToQeTableFileSelect := widget.NewSelect(qeFileNames, nil)
+	pathToQeTableFileSelect.PlaceHolder = "(none)"
+	// setQeSelected sets the dropdown from a stored path (may include CAMERA-QE/ prefix)
+	setQeSelected := func(path string) {
+		if path == "" {
+			pathToQeTableFileSelect.ClearSelected()
+			return
+		}
+		pathToQeTableFileSelect.SetSelected(filepath.Base(path))
+	}
 	observationWavelengthNmEntry := widget.NewEntry()
 	dXKmPerSecEntry := widget.NewEntry()
 	dYKmPerSecEntry := widget.NewEntry()
@@ -340,7 +360,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 				fundamentalPlaneWidthNumPointsEntry.SetText(strconv.Itoa(params.FundamentalPlaneWidthNumPoints))
 				parallaxArcsecEntry.SetText(strconv.FormatFloat(params.ParallaxArcsec, 'f', -1, 64))
 				distanceAuEntry.SetText(strconv.FormatFloat(params.DistanceAu, 'f', -1, 64))
-				pathToQeTableFileEntry.SetText(params.PathToQeTableFile)
+				setQeSelected(params.PathToQeTableFile)
 				observationWavelengthNmEntry.SetText(strconv.Itoa(params.ObservationWavelengthNm))
 				dXKmPerSecEntry.SetText(strconv.FormatFloat(params.DXKmPerSec, 'f', -1, 64))
 				dYKmPerSecEntry.SetText(strconv.FormatFloat(params.DYKmPerSec, 'f', -1, 64))
@@ -376,7 +396,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 		fundamentalPlaneWidthNumPointsEntry.SetText(strconv.Itoa(preload.FundamentalPlaneWidthNumPoints))
 		parallaxArcsecEntry.SetText(strconv.FormatFloat(preload.ParallaxArcsec, 'f', -1, 64))
 		distanceAuEntry.SetText(strconv.FormatFloat(preload.DistanceAu, 'f', -1, 64))
-		pathToQeTableFileEntry.SetText(preload.PathToQeTableFile)
+		setQeSelected(preload.PathToQeTableFile)
 		observationWavelengthNmEntry.SetText(strconv.Itoa(preload.ObservationWavelengthNm))
 		dXKmPerSecEntry.SetText(strconv.FormatFloat(preload.DXKmPerSec, 'f', -1, 64))
 		dYKmPerSecEntry.SetText(strconv.FormatFloat(preload.DYKmPerSec, 'f', -1, 64))
@@ -399,10 +419,10 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 		fileNameLabel.SetText("New parameters — use Write to save")
 	}
 
-	// If the QE file entry is still empty, fill from the saved preference (skipped when clearAll or preload is set)
-	if !clearAll && preload == nil && pathToQeTableFileEntry.Text == "" {
+	// If the QE file dropdown is still unset, fill from the saved preference (skipped when clearAll or preload is set)
+	if !clearAll && preload == nil && pathToQeTableFileSelect.Selected == "" {
 		if savedQe := prefs.StringWithFallback("stickyQeTableFile", ""); savedQe != "" {
-			pathToQeTableFileEntry.SetText(savedQe)
+			setQeSelected(savedQe)
 		}
 	}
 
@@ -410,7 +430,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 	allEntries := []*widget.Entry{
 		windowSizeEntry, titleEntry, fundamentalPlaneWidthKmEntry,
 		fundamentalPlaneWidthNumPointsEntry, parallaxArcsecEntry, distanceAuEntry,
-		pathToQeTableFileEntry, observationWavelengthNmEntry, dXKmPerSecEntry,
+		observationWavelengthNmEntry, dXKmPerSecEntry,
 		dYKmPerSecEntry, pathPerpendicularOffsetKmEntry, percentMagDropEntry,
 		starDiamOnPlaneMasEntry, limbDarkeningCoeffEntry, starClassEntry,
 		mainBodyXCenterEntry, mainBodyYCenterEntry, mainBodyMajorAxisEntry,
@@ -424,6 +444,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 	for i, e := range allEntries {
 		initialValues[i] = e.Text
 	}
+	qeInitialValue := pathToQeTableFileSelect.Selected
 
 	// Helper to wrap entry in a fixed-width container
 	entryWidth := float32(280)
@@ -439,7 +460,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 		&widget.FormItem{Text: "Fund. Plane Width (pts)", Widget: wrapEntry(fundamentalPlaneWidthNumPointsEntry)},
 		&widget.FormItem{Text: "Parallax (arcsec)", Widget: wrapEntry(parallaxArcsecEntry)},
 		&widget.FormItem{Text: "Distance (AU)", Widget: wrapEntry(distanceAuEntry)},
-		&widget.FormItem{Text: "Name of camera QE file", Widget: wrapEntry(pathToQeTableFileEntry)},
+		&widget.FormItem{Text: "Name of camera QE file", Widget: pathToQeTableFileSelect},
 		&widget.FormItem{Text: "Obs. Wavelength (nm)", Widget: wrapEntry(observationWavelengthNmEntry)},
 		&widget.FormItem{Text: "dX (km/sec)", Widget: wrapEntry(dXKmPerSecEntry)},
 		&widget.FormItem{Text: "dY (km/sec)", Widget: wrapEntry(dYKmPerSecEntry)},
@@ -478,7 +499,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 	var customDialog *dialog.CustomDialog
 	cancelBtn := widget.NewButton("Cancel", func() {
 		// Check if any entry has been modified
-		dirty := false
+		dirty := pathToQeTableFileSelect.Selected != qeInitialValue
 		for i, e := range allEntries {
 			if e.Text != initialValues[i] {
 				dirty = true
@@ -527,7 +548,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 			fundamentalPlaneWidthNumPointsEntry.SetText(strconv.Itoa(params.FundamentalPlaneWidthNumPoints))
 			parallaxArcsecEntry.SetText(strconv.FormatFloat(params.ParallaxArcsec, 'f', -1, 64))
 			distanceAuEntry.SetText(strconv.FormatFloat(params.DistanceAu, 'f', -1, 64))
-			pathToQeTableFileEntry.SetText(params.PathToQeTableFile)
+			setQeSelected(params.PathToQeTableFile)
 			observationWavelengthNmEntry.SetText(strconv.Itoa(params.ObservationWavelengthNm))
 			dXKmPerSecEntry.SetText(strconv.FormatFloat(params.DXKmPerSec, 'f', -1, 64))
 			dYKmPerSecEntry.SetText(strconv.FormatFloat(params.DYKmPerSec, 'f', -1, 64))
@@ -562,6 +583,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 			for i, e := range allEntries {
 				initialValues[i] = e.Text
 			}
+			qeInitialValue = pathToQeTableFileSelect.Selected
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
 		occParamsDir := filepath.Join(appDir, "OCCULTATION-PARAMETERS")
@@ -622,7 +644,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 				FundamentalPlaneWidthNumPoints: parseInt(fundamentalPlaneWidthNumPointsEntry.Text),
 				ParallaxArcsec:                 parseFloat(parallaxArcsecEntry.Text),
 				DistanceAu:                     parseFloat(distanceAuEntry.Text),
-				PathToQeTableFile:              pathToQeTableFileEntry.Text,
+				PathToQeTableFile:              pathToQeTableFileSelect.Selected,
 				ObservationWavelengthNm:        parseInt(observationWavelengthNmEntry.Text),
 				DXKmPerSec:                     parseFloat(dXKmPerSecEntry.Text),
 				DYKmPerSec:                     parseFloat(dYKmPerSecEntry.Text),
@@ -679,8 +701,8 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 			loadedFileName = filepath.Base(savePath)
 			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
 
-			// Persist QE file name so it autofill next time
-			if qe := strings.TrimSpace(pathToQeTableFileEntry.Text); qe != "" {
+			// Persist QE file name so it autofills next time
+			if qe := pathToQeTableFileSelect.Selected; qe != "" {
 				prefs.SetString("stickyQeTableFile", qe)
 			}
 
@@ -688,6 +710,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 			for i, e := range allEntries {
 				initialValues[i] = e.Text
 			}
+			qeInitialValue = pathToQeTableFileSelect.Selected
 
 			// Close the parameters dialog after a successful save
 			customDialog.Hide()
@@ -742,7 +765,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 	customDialog.Show()
 }
 
-func showProcessOccelemntDialog(w fyne.Window) {
+func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab) {
 	pasteEntry := widget.NewMultiLineEntry()
 	pasteEntry.SetPlaceHolder("Use Load button above or paste from the clipboard (Ctrl V) to fill this panel")
 	pasteEntry.Wrapping = fyne.TextWrapOff
@@ -771,6 +794,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			pasteEntry.SetText(xmlStr)
 			lastLoadedOccelmntXml = xmlStr
 			fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", xmlStr)
+			vt.FillStarFromOccelmntXml(xmlStr)
 			logAction(fmt.Sprintf("Loaded occelmnt file: %s", reader.URI().Path()))
 		}, w)
 		occelmntDir := filepath.Join(appDir, "OCCELMNT-FOLDER")
@@ -1218,6 +1242,7 @@ func showProcessOccelemntDialog(w fyne.Window) {
 		}
 		lastLoadedOccelmntXml = xmlContent
 		fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
+		vt.FillStarFromOccelmntXml(xmlContent)
 		lat, err := strconv.ParseFloat(strings.TrimSpace(latDecimalEntry.Text), 64)
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("invalid latitude (degrees): %v", err), w)
@@ -1377,6 +1402,10 @@ func showProcessOccelemntDialog(w fyne.Window) {
 }
 
 func main() {
+	// Declared early so all closures throughout main() can reference it;
+	// initialized below after the tab structure is ready.
+	var vizierTab *VizieRTab
+
 	// Determine the directory containing the executable so that relative file
 	// references (diffraction images, IOTAdiffraction.exe, etc.) resolve correctly
 	// regardless of how the program is launched (e.g., from an IDE).
@@ -2568,9 +2597,22 @@ func main() {
 	})
 
 	// Create VizieR tab early so it can be populated from RAVF headers during a file load
-	vizierTab := NewVizieRTab()
+	vizierTab = NewVizieRTab()
 	// Register vizier tab background for dark mode toggling
 	tabBgs = append(tabBgs, tabBgEntry{vizierTab.TabBg, color.RGBA{R: 210, G: 220, B: 210, A: 255}, color.RGBA{R: 60, G: 70, B: 60, A: 255}})
+	// Pre-fill asteroid number and name from the persisted diffraction title (e.g. "(2731) Cucula")
+	if strings.HasPrefix(lastDiffractionTitle, "(") {
+		if end := strings.Index(lastDiffractionTitle, ")"); end > 0 {
+			if num := strings.TrimSpace(lastDiffractionTitle[1:end]); num != "" {
+				vizierTab.AsteroidNumberEntry.SetText(num)
+			}
+			if name := strings.TrimSpace(lastDiffractionTitle[end+1:]); name != "" {
+				vizierTab.AsteroidNameEntry.SetText(name)
+			}
+		}
+	}
+	// Pre-fill UCAC4 star entry from persisted occelmnt XML
+	vizierTab.FillStarFromOccelmntXml(lastLoadedOccelmntXml)
 
 	// Track if csv ops tab has been opened for the first time
 	csvOpsTabFirstOpen := true
@@ -2690,6 +2732,10 @@ func main() {
 			lightCurvePlot.SetSeries(nil)
 			smoothedSeries = nil         // Clear any previous smooth curve
 			normalizationApplied = false // Reset normalization flag
+			theorySeries = nil
+			lightCurvePlot.SetVerticalLines(nil, false)
+			lightCurvePlot.SetSigmaLines(nil, false)
+			lightCurvePlot.ShowBaselineLine = false
 
 			// Clear range entries and reset the user bounds flag
 			userSetBounds = false
@@ -2976,6 +3022,10 @@ func main() {
 		startupOverlay.Hide()
 		normalizationApplied = false
 		smoothedSeries = nil
+		theorySeries = nil
+		lightCurvePlot.SetVerticalLines(nil, false)
+		lightCurvePlot.SetSigmaLines(nil, false)
+		lightCurvePlot.ShowBaselineLine = false
 
 		// Reset interpolated/negative delta indices
 		resetInterpolatedIndices()
@@ -3628,6 +3678,10 @@ func main() {
 		startupOverlay.Hide()
 		normalizationApplied = false
 		smoothedSeries = nil
+		theorySeries = nil
+		lightCurvePlot.SetVerticalLines(nil, false)
+		lightCurvePlot.SetSigmaLines(nil, false)
+		lightCurvePlot.ShowBaselineLine = false
 
 		// Reset interpolated/negative delta indices
 		resetInterpolatedIndices()
@@ -5141,6 +5195,7 @@ func main() {
 					if p.OccelmntXml != "" {
 						lastLoadedOccelmntXml = p.OccelmntXml
 						prefs.SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
+						vizierTab.FillStarFromOccelmntXml(lastLoadedOccelmntXml)
 					}
 				}
 				if err := f.Close(); err != nil {
@@ -5148,6 +5203,17 @@ func main() {
 				}
 			}
 			prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
+			// Fill VizieR Number and Name entries from title (e.g. "(2731) Cucula" → "2731", "Cucula")
+			if strings.HasPrefix(lastDiffractionTitle, "(") {
+				if end := strings.Index(lastDiffractionTitle, ")"); end > 0 {
+					if num := strings.TrimSpace(lastDiffractionTitle[1:end]); num != "" {
+						vizierTab.AsteroidNumberEntry.SetText(num)
+					}
+					if name := strings.TrimSpace(lastDiffractionTitle[end+1:]); name != "" {
+						vizierTab.AsteroidNameEntry.SetText(name)
+					}
+				}
+			}
 			runIOTAdiffraction(paramFilePath)
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
@@ -5163,7 +5229,7 @@ func main() {
 		showOccultationParametersDialog(w, true, nil)
 	})
 	btnProcessOccelemnt := widget.NewButton("Process OWC occelmnt.xml", func() {
-		showProcessOccelemntDialog(w)
+		showProcessOccelemntDialog(w, vizierTab)
 	})
 	buttons := container.NewHBox(btnProcessOccelemnt, btnOccultParams, btnIOTA)
 
