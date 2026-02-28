@@ -385,29 +385,6 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 			msg += fmt.Sprintf("\nEvent duration: %.4f sec\n", duration)
 		}
 
-		// Count samples between event edges and find the minimum theoretical value
-		if len(fr.edgeTimes) == 2 && len(fr.sampledTimes) > 0 {
-			edge1Abs := fr.edgeTimes[0] + fr.bestShift
-			edge2Abs := fr.edgeTimes[1] + fr.bestShift
-			if edge1Abs > edge2Abs {
-				edge1Abs, edge2Abs = edge2Abs, edge1Abs
-			}
-			sampleCount := 0
-			minTheoretical := math.MaxFloat64
-			for i, t := range fr.sampledTimes {
-				if t >= edge1Abs && t <= edge2Abs {
-					sampleCount++
-					if fr.sampledVals[i] < minTheoretical {
-						minTheoretical = fr.sampledVals[i]
-					}
-				}
-			}
-			msg += fmt.Sprintf("\nSamples between event edges: %d\n", sampleCount)
-			if sampleCount > 0 {
-				msg += fmt.Sprintf("Minimum theoretical value at event: %.4f\n", minTheoretical)
-			}
-		}
-
 		fmt.Print(msg)
 
 		// Log fit results

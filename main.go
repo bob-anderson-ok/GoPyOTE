@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.41"
+const Version = "1.1.42"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -271,8 +271,10 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 	customDialog.Show()
 }
 
-// showOccultationParametersDialog displays a form dialog for editing occultation parameters
-func showOccultationParametersDialog(w fyne.Window) {
+// showOccultationParametersDialog displays a form dialog for editing occultation parameters.
+// Pass clearAll=true to open with all entries blank (e.g. from Edit Occultation Parameters button).
+// Pass a non-nil preload to pre-populate entries directly (e.g. from Create Occultation).
+func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *OccultationParameters) {
 	// Create entry fields for all parameters
 	windowSizeEntry := widget.NewEntry()
 	titleEntry := widget.NewEntry()
@@ -305,7 +307,6 @@ func showOccultationParametersDialog(w fyne.Window) {
 	satellitePaDegreesEntry := widget.NewEntry()
 
 	pathToExternalImageEntry := widget.NewEntry()
-	exposureTimeSecsEntry := widget.NewEntry()
 
 	// Track the currently loaded file name for save dialog default
 	var loadedFileName string
@@ -323,8 +324,8 @@ func showOccultationParametersDialog(w fyne.Window) {
 	// occelmntXml associated with the currently displayed params file (empty if none)
 	var dialogOccelmntXml string
 
-	// Auto-load previously opened parameters file if available
-	if lastLoadedParamsPath != "" {
+	// Auto-load previously opened parameters file if available (skipped when clearAll or preload is set)
+	if !clearAll && preload == nil && lastLoadedParamsPath != "" {
 		file, err := os.Open(lastLoadedParamsPath)
 		if err == nil {
 			params, parseErr := parseOccultationParameters(file)
@@ -359,24 +360,47 @@ func showOccultationParametersDialog(w fyne.Window) {
 				satelliteMinorAxisEntry.SetText(strconv.FormatFloat(params.Satellite.MinorAxisKm, 'f', -1, 64))
 				satellitePaDegreesEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisPaDegrees, 'f', -1, 64))
 				pathToExternalImageEntry.SetText(params.PathToExternalImage)
-				if params.ExposureTimeSecs != 0.0 {
-					exposureTimeSecsEntry.SetText(strconv.FormatFloat(params.ExposureTimeSecs, 'f', -1, 64))
-				} else {
-					exposureTimeSecsEntry.SetText("")
-				}
 				loadedFileName = filepath.Base(lastLoadedParamsPath)
-				if loadedFileName == "from_occelmnt" {
-					fileNameLabel.SetText("File being displayed:  from_occelmnt (a temp file - you will need to rename this during a write)")
-				} else {
-					fileNameLabel.SetText("File being displayed:  " + loadedFileName)
-				}
+				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
 				logAction(fmt.Sprintf("Auto-loaded parameters file: %s", lastLoadedParamsPath))
 			}
 		}
 	}
 
-	// If the QE file entry is still empty, fill from the saved preference
-	if pathToQeTableFileEntry.Text == "" {
+	// Populate entries from preload if provided (e.g. from Create Occultation)
+	if preload != nil {
+		dialogOccelmntXml = preload.OccelmntXml
+		windowSizeEntry.SetText(strconv.Itoa(preload.WindowSizePixels))
+		titleEntry.SetText(preload.Title)
+		fundamentalPlaneWidthKmEntry.SetText(strconv.FormatFloat(preload.FundamentalPlaneWidthKm, 'f', -1, 64))
+		fundamentalPlaneWidthNumPointsEntry.SetText(strconv.Itoa(preload.FundamentalPlaneWidthNumPoints))
+		parallaxArcsecEntry.SetText(strconv.FormatFloat(preload.ParallaxArcsec, 'f', -1, 64))
+		distanceAuEntry.SetText(strconv.FormatFloat(preload.DistanceAu, 'f', -1, 64))
+		pathToQeTableFileEntry.SetText(preload.PathToQeTableFile)
+		observationWavelengthNmEntry.SetText(strconv.Itoa(preload.ObservationWavelengthNm))
+		dXKmPerSecEntry.SetText(strconv.FormatFloat(preload.DXKmPerSec, 'f', -1, 64))
+		dYKmPerSecEntry.SetText(strconv.FormatFloat(preload.DYKmPerSec, 'f', -1, 64))
+		pathPerpendicularOffsetKmEntry.SetText(strconv.FormatFloat(preload.PathPerpendicularOffsetKm, 'f', -1, 64))
+		percentMagDropEntry.SetText(strconv.Itoa(preload.PercentMagDrop))
+		starDiamOnPlaneMasEntry.SetText(strconv.FormatFloat(preload.StarDiamOnPlaneMas, 'f', -1, 64))
+		limbDarkeningCoeffEntry.SetText(strconv.FormatFloat(preload.LimbDarkeningCoeff, 'f', -1, 64))
+		starClassEntry.SetText(preload.StarClass)
+		mainBodyXCenterEntry.SetText(strconv.FormatFloat(preload.MainBody.XCenterKm, 'f', -1, 64))
+		mainBodyYCenterEntry.SetText(strconv.FormatFloat(preload.MainBody.YCenterKm, 'f', -1, 64))
+		mainBodyMajorAxisEntry.SetText(strconv.FormatFloat(preload.MainBody.MajorAxisKm, 'f', -1, 64))
+		mainBodyMinorAxisEntry.SetText(strconv.FormatFloat(preload.MainBody.MinorAxisKm, 'f', -1, 64))
+		mainBodyPaDegreesEntry.SetText(strconv.FormatFloat(preload.MainBody.MajorAxisPaDegrees, 'f', -1, 64))
+		satelliteXCenterEntry.SetText(strconv.FormatFloat(preload.Satellite.XCenterKm, 'f', -1, 64))
+		satelliteYCenterEntry.SetText(strconv.FormatFloat(preload.Satellite.YCenterKm, 'f', -1, 64))
+		satelliteMajorAxisEntry.SetText(strconv.FormatFloat(preload.Satellite.MajorAxisKm, 'f', -1, 64))
+		satelliteMinorAxisEntry.SetText(strconv.FormatFloat(preload.Satellite.MinorAxisKm, 'f', -1, 64))
+		satellitePaDegreesEntry.SetText(strconv.FormatFloat(preload.Satellite.MajorAxisPaDegrees, 'f', -1, 64))
+		pathToExternalImageEntry.SetText(preload.PathToExternalImage)
+		fileNameLabel.SetText("New parameters — use Write to save")
+	}
+
+	// If the QE file entry is still empty, fill from the saved preference (skipped when clearAll or preload is set)
+	if !clearAll && preload == nil && pathToQeTableFileEntry.Text == "" {
 		if savedQe := prefs.StringWithFallback("stickyQeTableFile", ""); savedQe != "" {
 			pathToQeTableFileEntry.SetText(savedQe)
 		}
@@ -393,7 +417,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 		mainBodyMinorAxisEntry, mainBodyPaDegreesEntry,
 		satelliteXCenterEntry, satelliteYCenterEntry, satelliteMajorAxisEntry,
 		satelliteMinorAxisEntry, satellitePaDegreesEntry,
-		pathToExternalImageEntry, exposureTimeSecsEntry,
+		pathToExternalImageEntry,
 	}
 	// Snapshot initial values so we can detect edits
 	initialValues := make([]string, len(allEntries))
@@ -422,7 +446,6 @@ func showOccultationParametersDialog(w fyne.Window) {
 		&widget.FormItem{Text: "Path Perp. Offset (km)", Widget: wrapEntry(pathPerpendicularOffsetKmEntry)},
 		&widget.FormItem{Text: "Percent Mag Drop", Widget: wrapEntry(percentMagDropEntry)},
 		&widget.FormItem{Text: "Star Diam. (mas)", Widget: wrapEntry(starDiamOnPlaneMasEntry)},
-		&widget.FormItem{Text: "Exposure time (secs)", Widget: wrapEntry(exposureTimeSecsEntry)},
 	)
 
 	// Create a right column form
@@ -524,11 +547,6 @@ func showOccultationParametersDialog(w fyne.Window) {
 			satelliteMinorAxisEntry.SetText(strconv.FormatFloat(params.Satellite.MinorAxisKm, 'f', -1, 64))
 			satellitePaDegreesEntry.SetText(strconv.FormatFloat(params.Satellite.MajorAxisPaDegrees, 'f', -1, 64))
 			pathToExternalImageEntry.SetText(params.PathToExternalImage)
-			if params.ExposureTimeSecs != 0.0 {
-				exposureTimeSecsEntry.SetText(strconv.FormatFloat(params.ExposureTimeSecs, 'f', -1, 64))
-			} else {
-				exposureTimeSecsEntry.SetText("")
-			}
 
 			dialogOccelmntXml = params.OccelmntXml
 
@@ -538,11 +556,7 @@ func showOccultationParametersDialog(w fyne.Window) {
 			lastLoadedParamsPath = reader.URI().Path()
 			// Persist to preferences so it autoloads next time
 			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
-			if loadedFileName == "from_occelmnt" {
-				fileNameLabel.SetText("File being displayed:  from_occelmnt (a temp file - you will need to rename this during a write)")
-			} else {
-				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
-			}
+			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
 			logAction(fmt.Sprintf("Loaded parameters file: %s", lastLoadedParamsPath))
 			// Re-snapshot so a fresh load is considered clean
 			for i, e := range allEntries {
@@ -600,19 +614,6 @@ func showOccultationParametersDialog(w fyne.Window) {
 				}
 			}
 
-			// Reject writing to the auto-generated from_occelmnt file
-			baseName := filepath.Base(savePath)
-			if baseName == "from_occelmnt" || baseName == "from_occelmnt.occparams" {
-				dialog.ShowError(fmt.Errorf("cannot overwrite the auto-generated 'from_occelmnt' file — please choose a different name"), w)
-				return
-			}
-
-			// Require exposure time to be explicitly entered (0 is acceptable)
-			if strings.TrimSpace(exposureTimeSecsEntry.Text) == "" {
-				dialog.ShowError(fmt.Errorf("exposure time (secs) is required — a 0 value can be used for test purposes"), w)
-				return
-			}
-
 			// Build parameters struct from entry fields
 			params := OccultationParameters{
 				WindowSizePixels:               parseInt(windowSizeEntry.Text),
@@ -645,7 +646,8 @@ func showOccultationParametersDialog(w fyne.Window) {
 					MajorAxisPaDegrees: parseFloat(satellitePaDegreesEntry.Text),
 				},
 				PathToExternalImage: pathToExternalImageEntry.Text,
-				ExposureTimeSecs:    parseFloat(exposureTimeSecsEntry.Text),
+				ExposureTimeSecs:    0,
+				OccelmntXml:         dialogOccelmntXml,
 			}
 
 			// Marshal to JSON5
@@ -671,6 +673,12 @@ func showOccultationParametersDialog(w fyne.Window) {
 
 			logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
 
+			// Track the saved path so CSV-read auto-fill and future Browse defaults use it
+			lastLoadedParamsPath = savePath
+			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
+			loadedFileName = filepath.Base(savePath)
+			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+
 			// Persist QE file name so it autofill next time
 			if qe := strings.TrimSpace(pathToQeTableFileEntry.Text); qe != "" {
 				prefs.SetString("stickyQeTableFile", qe)
@@ -685,8 +693,16 @@ func showOccultationParametersDialog(w fyne.Window) {
 			customDialog.Hide()
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
-		if loadedFileName != "" && loadedFileName != "from_occelmnt" {
+		if loadedFileName != "" {
 			fileDialog.SetFileName(loadedFileName)
+		} else if title := strings.TrimSpace(titleEntry.Text); title != "" {
+			sanitized := strings.Map(func(r rune) rune {
+				if strings.ContainsRune(`\/:*?"<>|`, r) {
+					return '_'
+				}
+				return r
+			}, title)
+			fileDialog.SetFileName(sanitized + ".occparams")
 		}
 		// Always save to the OCCULTATION-PARAMETERS directory, creating it if needed
 		occParamsDir := filepath.Join(appDir, "OCCULTATION-PARAMETERS")
@@ -1291,31 +1307,11 @@ func showProcessOccelemntDialog(w fyne.Window) {
 			OccelmntXml: xmlContent,
 		}
 
-		// Marshal to JSON5 and write to the from_occelmnt file
-		data, jerr := json5.Marshal(params)
-		if jerr != nil {
-			dialog.ShowError(fmt.Errorf("failed to encode parameters: %v", jerr), w)
-			return
-		}
-		var indented []byte
-		if ierr := json5.Indent(&indented, data, "", "  "); ierr != nil {
-			dialog.ShowError(fmt.Errorf("failed to format parameters: %v", ierr), w)
-			return
-		}
-
-		paramsPath := filepath.Join(appDir, "from_occelmnt")
-		if werr := os.WriteFile(paramsPath, indented, 0644); werr != nil {
-			dialog.ShowError(fmt.Errorf("failed to write parameters file: %v", werr), w)
-			return
-		}
-
-		// Set as the loaded parameters path, close this dialog, and open the parameters dialog
-		lastLoadedParamsPath = paramsPath
-		fyne.CurrentApp().Preferences().SetString("lastLoadedParamsPath", lastLoadedParamsPath)
+		// Close this dialog and open the parameters dialog pre-populated from the computed values
 		if occelmntDialog != nil {
 			occelmntDialog.Hide()
 		}
-		showOccultationParametersDialog(w)
+		showOccultationParametersDialog(w, false, &params)
 
 		// Calculate and display t0 correction and Fresnel scale
 		wavelength := float64(params.ObservationWavelengthNm)
@@ -2674,25 +2670,8 @@ func main() {
 					dialog.ShowInformation("Timing Analysis", report, w)
 				}
 
-				// Warn if CSV-measured exposure time differs from the parameters file by more than 5%
 				if timingResult != nil {
-					csvExposure := timingResult.MedianTimeStep
-					lastCsvExposureSecs = csvExposure
-					var paramExposure float64
-					if lastDiffractionParamsPath != "" {
-						if f, ferr := os.Open(lastDiffractionParamsPath); ferr == nil {
-							if p, perr := parseOccultationParameters(f); perr == nil {
-								paramExposure = p.ExposureTimeSecs
-							}
-							if cerr := f.Close(); cerr != nil {
-								fmt.Printf("Warning: failed to close parameters file: %v\n", cerr)
-							}
-						}
-					}
-					if paramExposure > 0 && math.Abs(csvExposure-paramExposure)/paramExposure > 0.05 {
-						msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
-						dialog.ShowError(fmt.Errorf("Exposure time mismatch warning\n\n%s", msg), w)
-					}
+					lastCsvExposureSecs = timingResult.MedianTimeStep
 				}
 			}
 
@@ -3024,25 +3003,8 @@ func main() {
 				}
 			}
 
-			// Warn if CSV-measured exposure time differs from the parameters file by more than 5%
 			if timingResult != nil {
-				csvExposure := timingResult.MedianTimeStep
-				lastCsvExposureSecs = csvExposure
-				var paramExposure float64
-				if lastDiffractionParamsPath != "" {
-					if f, ferr := os.Open(lastDiffractionParamsPath); ferr == nil {
-						if p, perr := parseOccultationParameters(f); perr == nil {
-							paramExposure = p.ExposureTimeSecs
-						}
-						if cerr := f.Close(); cerr != nil {
-							fmt.Printf("Warning: failed to close parameters file: %v\n", cerr)
-						}
-					}
-				}
-				if paramExposure > 0 && math.Abs(csvExposure-paramExposure)/paramExposure > 0.05 {
-					msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
-					dialog.ShowError(fmt.Errorf("Exposure time mismatch warning\n\n%s", msg), w)
-				}
+				lastCsvExposureSecs = timingResult.MedianTimeStep
 			}
 		}
 
@@ -3693,25 +3655,8 @@ func main() {
 				}
 			}
 
-			// Warn if CSV-measured exposure time differs from the parameters file by more than 5%
 			if timingResult != nil {
-				csvExposure := timingResult.MedianTimeStep
-				lastCsvExposureSecs = csvExposure
-				var paramExposure float64
-				if lastDiffractionParamsPath != "" {
-					if f, ferr := os.Open(lastDiffractionParamsPath); ferr == nil {
-						if p, perr := parseOccultationParameters(f); perr == nil {
-							paramExposure = p.ExposureTimeSecs
-						}
-						if cerr := f.Close(); cerr != nil {
-							fmt.Printf("Warning: failed to close parameters file: %v\n", cerr)
-						}
-					}
-				}
-				if paramExposure > 0 && math.Abs(csvExposure-paramExposure)/paramExposure > 0.05 {
-					msg := fmt.Sprintf("CSV-measured exposure time (median cadence): %.6f seconds\nParameters file exposure time: %.6f seconds", csvExposure, paramExposure)
-					dialog.ShowError(fmt.Errorf("Exposure time mismatch warning\n\n%s", msg), w)
-				}
+				lastCsvExposureSecs = timingResult.MedianTimeStep
 			}
 		}
 
@@ -4302,6 +4247,12 @@ func main() {
 				return
 			}
 
+			params.ExposureTimeSecs = lastCsvExposureSecs
+			if lastCsvExposureSecs == 0 {
+				logAction("Fit: camera exposure time not set (0 seconds)")
+			} else {
+				logAction(fmt.Sprintf("Fit: camera exposure time: %.6f seconds", lastCsvExposureSecs))
+			}
 			// Check if search range fields are all filled in
 			searchInitial := strings.TrimSpace(searchInitialOffsetEntry.Text)
 			searchFinal := strings.TrimSpace(searchFinalOffsetEntry.Text)
@@ -4500,6 +4451,11 @@ func main() {
 				// Final report: fit edge times (as timestamps) with MC uncertainty
 				logAction("--- Final Report ---")
 				logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", lastFitResult.bestNCC, lastFitParams.PathPerpendicularOffsetKm))
+				if lastCsvExposureSecs > 0 {
+					logAction(fmt.Sprintf("  Camera exposure time: %.6f seconds", lastCsvExposureSecs))
+				} else {
+					logAction("  Camera exposure time: not set")
+				}
 				for i, et := range lastFitResult.edgeTimes {
 					absTime := et + lastFitResult.bestShift
 					ts := formatSecondsAsTimestamp(absTime)
@@ -5158,7 +5114,7 @@ func main() {
 		fileDialog.Show()
 	})
 	btnOccultParams := widget.NewButton("Edit Occultation Parameters", func() {
-		showOccultationParametersDialog(w)
+		showOccultationParametersDialog(w, true, nil)
 	})
 	btnProcessOccelemnt := widget.NewButton("Process OWC occelmnt.xml", func() {
 		showProcessOccelemntDialog(w)
