@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.45"
+const Version = "1.1.46"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2729,7 +2729,7 @@ func main() {
 
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
-		showFileOpenWithRecents(w, prefs, "Select OBS Folder", nil, func(reader fyne.URIReadCloser, err error) {
+		showFileOpenWithRecents(w, prefs, "Select OBS folder then select the light curve csv file", nil, func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -2742,11 +2742,11 @@ func main() {
 				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
 			}
 
-			// Create a -RESULTS folder in the application directory
+			// Create a -RESULTS folder in the observation folder
 			base := filepath.Base(filePath)
 			ext := filepath.Ext(base)
 			nameWithoutExt := base[:len(base)-len(ext)]
-			resultsFolder = filepath.Join(appDir, nameWithoutExt+"-RESULTS")
+			resultsFolder = filepath.Join(filepath.Dir(filePath), nameWithoutExt+"-RESULTS")
 			if err := os.MkdirAll(resultsFolder, 0755); err != nil {
 				fmt.Printf("Warning: could not create results folder %s: %v\n", resultsFolder, err)
 				resultsFolder = ""
@@ -4829,7 +4829,9 @@ func main() {
 					}
 					lightCurvePlot.SetSigmaLines(sigmaXVals, len(sigmaXVals) > 0)
 					lightCurvePlot.ShowBaselineLine = false
+					savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
 					rebuildPlot()
+					lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 				}
 			})
 		}()
@@ -5369,6 +5371,22 @@ func main() {
 		fileDialog.Show()
 	})
 	btnOccultParams := widget.NewButton("Edit Occultation Parameters", func() {
+		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
+			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
+			if entries, err := os.ReadDir(obsDir); err == nil {
+				for _, entry := range entries {
+					if !entry.IsDir() && strings.ToLower(filepath.Ext(entry.Name())) == ".occparams" {
+						lastLoadedParamsPath = filepath.Join(obsDir, entry.Name())
+						showOccultationParametersDialog(w, false, nil, obsDir)
+						return
+					}
+				}
+			}
+			dialog.ShowInformation("No .occparams file found",
+				"No .occparams file was found in the current observation folder.\n\n"+
+					"Use the \"Process occelmnt file\" button to create one.", w)
+			return
+		}
 		showOccultationParametersDialog(w, true, nil, "")
 	})
 	btnProcessOccelemnt := widget.NewButton("Process occelmnt file", func() {
@@ -5487,6 +5505,14 @@ func main() {
 		)
 		for col, cw := range colWidths {
 			table.SetColumnWidth(col, cw)
+		}
+		table.OnSelected = func(id widget.TableCellID) {
+			cellValue := ""
+			if id.Row < len(rows) && id.Col < len(rows[id.Row]) {
+				cellValue = rows[id.Row][id.Col]
+			}
+			w.Clipboard().SetContent(cellValue)
+			dialog.ShowInformation("Copied to clipboard", fmt.Sprintf("%q", cellValue), w)
 		}
 		closeBtn := widget.NewButton("Close", nil)
 		var dlg dialog.Dialog
