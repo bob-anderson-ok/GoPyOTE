@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"embed"
+	"encoding/csv"
 	"encoding/xml"
 	"fmt"
 	"image/color"
@@ -66,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.44"
+const Version = "1.1.45"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -274,7 +275,8 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 // showOccultationParametersDialog displays a form dialog for editing occultation parameters.
 // Pass clearAll=true to open with all entries blank (e.g., from the Edit Occultation Parameters button).
 // Pass a non-nil preload to pre-populate entries directly (e.g., from Create Occultation).
-func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *OccultationParameters) {
+// Pass a non-empty obsDir to have the Write button auto-save directly to that folder (no file dialog).
+func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *OccultationParameters, obsDir string) {
 	// Build dropdown choices from files in the CAMERA-QE folder
 	cameraQEDir := filepath.Join(appDir, "CAMERA-QE")
 	var qeFileNames []string
@@ -607,6 +609,102 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 
 	// File save button
 	saveBtn := widget.NewButton("Write", func() {
+		if obsDir != "" {
+			// Auto-save directly to the observation folder — no file dialog
+			saveFileName := "occultation.occparams"
+			if title := strings.TrimSpace(titleEntry.Text); title != "" {
+				sanitized := strings.Map(func(r rune) rune {
+					if strings.ContainsRune(`\/:*?"<>|`, r) {
+						return '_'
+					}
+					return r
+				}, title)
+				saveFileName = sanitized + ".occparams"
+			} else if loadedFileName != "" {
+				saveFileName = loadedFileName
+			}
+			savePath := filepath.Join(obsDir, saveFileName)
+			// Build parameters struct from entry fields
+			params := OccultationParameters{
+				WindowSizePixels:               parseInt(windowSizeEntry.Text),
+				Title:                          titleEntry.Text,
+				FundamentalPlaneWidthKm:        parseFloat(fundamentalPlaneWidthKmEntry.Text),
+				FundamentalPlaneWidthNumPoints: parseInt(fundamentalPlaneWidthNumPointsEntry.Text),
+				ParallaxArcsec:                 parseFloat(parallaxArcsecEntry.Text),
+				DistanceAu:                     parseFloat(distanceAuEntry.Text),
+				PathToQeTableFile:              pathToQeTableFileSelect.Selected,
+				ObservationWavelengthNm:        parseInt(observationWavelengthNmEntry.Text),
+				DXKmPerSec:                     parseFloat(dXKmPerSecEntry.Text),
+				DYKmPerSec:                     parseFloat(dYKmPerSecEntry.Text),
+				PathPerpendicularOffsetKm:      parseFloat(pathPerpendicularOffsetKmEntry.Text),
+				PercentMagDrop:                 parseInt(percentMagDropEntry.Text),
+				StarDiamOnPlaneMas:             parseFloat(starDiamOnPlaneMasEntry.Text),
+				LimbDarkeningCoeff:             parseFloat(limbDarkeningCoeffEntry.Text),
+				StarClass:                      starClassEntry.Text,
+				MainBody: EllipseParams{
+					XCenterKm:          parseFloat(mainBodyXCenterEntry.Text),
+					YCenterKm:          parseFloat(mainBodyYCenterEntry.Text),
+					MajorAxisKm:        parseFloat(mainBodyMajorAxisEntry.Text),
+					MinorAxisKm:        parseFloat(mainBodyMinorAxisEntry.Text),
+					MajorAxisPaDegrees: parseFloat(mainBodyPaDegreesEntry.Text),
+				},
+				Satellite: EllipseParams{
+					XCenterKm:          parseFloat(satelliteXCenterEntry.Text),
+					YCenterKm:          parseFloat(satelliteYCenterEntry.Text),
+					MajorAxisKm:        parseFloat(satelliteMajorAxisEntry.Text),
+					MinorAxisKm:        parseFloat(satelliteMinorAxisEntry.Text),
+					MajorAxisPaDegrees: parseFloat(satellitePaDegreesEntry.Text),
+				},
+				PathToExternalImage: pathToExternalImageEntry.Text,
+				ExposureTimeSecs:    0,
+				OccelmntXml:         dialogOccelmntXml,
+			}
+
+			// Marshal to JSON5
+			data, err := json5.Marshal(params)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to encode parameters: %w", err), w)
+				return
+			}
+
+			// Indent the JSON5 output
+			var indented []byte
+			if err := json5.Indent(&indented, data, "", "  "); err != nil {
+				dialog.ShowError(fmt.Errorf("failed to format parameters: %w", err), w)
+				return
+			}
+			data = indented
+
+			// Write to the file with the enforced extension
+			if werr := os.WriteFile(savePath, data, 0644); werr != nil {
+				dialog.ShowError(fmt.Errorf("failed to write file: %w", werr), w)
+				return
+			}
+
+			logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
+
+			// Track the saved path so CSV-read autofill and future Browse defaults use it
+			lastLoadedParamsPath = savePath
+			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
+			loadedFileName = filepath.Base(savePath)
+			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+
+			// Persist QE file name so it autofills next time
+			if qe := pathToQeTableFileSelect.Selected; qe != "" {
+				prefs.SetString("stickyQeTableFile", qe)
+			}
+
+			// Re-snapshot so saved state is considered clean
+			for i, e := range allEntries {
+				initialValues[i] = e.Text
+			}
+			qeInitialValue = pathToQeTableFileSelect.Selected
+
+			// Close the parameters dialog after a successful save
+			customDialog.Hide()
+			return
+		}
+
 		fileDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -765,10 +863,13 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 	customDialog.Show()
 }
 
-func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab) {
+func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string) {
 	pasteEntry := widget.NewMultiLineEntry()
 	pasteEntry.SetPlaceHolder("Use Load button above or paste from the clipboard (Ctrl V) to fill this panel")
 	pasteEntry.Wrapping = fyne.TextWrapOff
+	if initialXml != "" {
+		pasteEntry.SetText(initialXml)
+	}
 
 	// --- Load occelmnt file button ---
 	loadOccelmntBtn := widget.NewButton("Load occelmnt.xml", func() {
@@ -1076,10 +1177,15 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab) {
 				if strings.HasPrefix(line, "altitude:") {
 					value := strings.TrimSpace(strings.TrimPrefix(line, "altitude:"))
 					altitudeEntry.SetText(value)
+					if value != "" {
+						vt.SiteAltitudeEntry.SetText(value)
+					}
 					continue
 				}
 				if strings.HasPrefix(line, "observer1:") {
-					observer1Entry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "observer1:")))
+					val := strings.TrimSpace(strings.TrimPrefix(line, "observer1:"))
+					observer1Entry.SetText(val)
+					vt.ObserverNameEntry.SetText(val)
 					continue
 				}
 				if strings.HasPrefix(line, "observer2:") {
@@ -1336,7 +1442,11 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab) {
 		if occelmntDialog != nil {
 			occelmntDialog.Hide()
 		}
-		showOccultationParametersDialog(w, false, &params)
+		obsDir := ""
+		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
+			obsDir = filepath.Dir(loadedLightCurveData.SourceFilePath)
+		}
+		showOccultationParametersDialog(w, false, &params, obsDir)
 
 		// Calculate and display t0 correction and Fresnel scale
 		wavelength := float64(params.ObservationWavelengthNm)
@@ -2619,7 +2729,7 @@ func main() {
 
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
-		showFileOpenWithRecents(w, prefs, "Select CSV Folder", storage.NewExtensionFileFilter([]string{".csv"}), func(reader fyne.URIReadCloser, err error) {
+		showFileOpenWithRecents(w, prefs, "Select OBS Folder", nil, func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -2837,7 +2947,7 @@ func main() {
 		nil,                  // right
 		lightCurveListScroll, // center
 	)))
-	tab3 := container.NewTabItem("Csv", tab3Content)
+	tab3 := container.NewTabItem("OBS select", tab3Content)
 
 	// Tab 5: Block integration
 	tab5Bg := makeTabBg(color.RGBA{R: 200, G: 220, B: 200, A: 255}, color.RGBA{R: 50, G: 70, B: 50, A: 255})
@@ -4475,6 +4585,11 @@ func main() {
 		mcAbortBtn.Show()
 		mcAbortBtn.Enable()
 		go func() {
+			// Yield for two Fyne render frames (~32 ms at 60 fps) before starting trials.
+			// Without this, a fast MC run can post fyne.Do(Hide) to the event queue
+			// before the Show() calls above have been rendered, making the progress bar
+			// and Abort button appear to never show up (rare race condition).
+			time.Sleep(32 * time.Millisecond)
 			result, err := runMonteCarloTrials(lastFitCandidates, lastFitResult, noiseSigma, numTrials, &mcAbortFlag, func(progress float64) {
 				fyne.Do(func() {
 					mcProgressBar.SetValue(progress)
@@ -4892,6 +5007,7 @@ func main() {
 			noiseSigma:      noiseSigma,
 			csvExposureSecs: lastCsvExposureSecs,
 			observerT0:      computedObserverT0,
+			vt:              vizierTab,
 		})
 	})
 	fillSodisBtn.Importance = widget.HighImportance
@@ -5040,6 +5156,9 @@ func main() {
 		}
 	}
 
+	// Select the OBS select tab on startup
+	tabs.Select(tab3)
+
 	// Helper function to run IOTAdiffraction with a given parameter file
 	runIOTAdiffraction := func(paramFilePath string) {
 		// If the parameters file has a non-empty path_to_qe_table_file, prefix it with CAMERA-QE/
@@ -5169,21 +5288,8 @@ func main() {
 	}
 
 	btnIOTA := widget.NewButton("Run IOTAdiffraction", func() {
-		// Open the OCCULTATION-PARAMETERS directory and show only .occparams files
-		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-			if err != nil {
-				dialog.ShowError(err, w)
-				return
-			}
-			if reader == nil {
-				return // User cancelled
-			}
-			// Get the file path and close the reader (we don't need to read the content)
-			paramFilePath := reader.URI().Path()
-			if cerr := reader.Close(); cerr != nil {
-				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
-			}
-
+		// useParamFile runs IOTAdiffraction with the given .occparams file path
+		useParamFile := func(paramFilePath string) {
 			logAction(fmt.Sprintf("Running IOTAdiffraction with parameters file: %s", paramFilePath))
 			lastDiffractionParamsPath = paramFilePath
 			prefs.SetString("lastDiffractionParamsPath", paramFilePath)
@@ -5215,6 +5321,43 @@ func main() {
 				}
 			}
 			runIOTAdiffraction(paramFilePath)
+		}
+
+		// Auto-detect a .occparams file in the current observation folder
+		if loadedLightCurveData != nil {
+			if srcPath := loadedLightCurveData.SourceFilePath; srcPath != "" {
+				obsDir := filepath.Dir(srcPath)
+				if entries, err := os.ReadDir(obsDir); err == nil {
+					for _, entry := range entries {
+						if !entry.IsDir() && strings.ToLower(filepath.Ext(entry.Name())) == ".occparams" {
+							useParamFile(filepath.Join(obsDir, entry.Name()))
+							return
+						}
+					}
+					// No .occparams found in the obs folder-prompt the user to create one
+					dialog.ShowInformation("No .occparams file found",
+						"No .occparams file was found in the current observation folder.\n\n"+
+							"Use the \"Process occelmnt file\" button to create one.", w)
+					return
+				}
+			}
+		}
+
+		// No CSV loaded - fall back to the file dialog
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if reader == nil {
+				return // User cancelled
+			}
+			// Get the file path and close the reader (we don't need to read the content)
+			paramFilePath := reader.URI().Path()
+			if cerr := reader.Close(); cerr != nil {
+				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+			}
+			useParamFile(paramFilePath)
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
 		occParamsDir := filepath.Join(appDir, "OCCULTATION-PARAMETERS")
@@ -5226,12 +5369,136 @@ func main() {
 		fileDialog.Show()
 	})
 	btnOccultParams := widget.NewButton("Edit Occultation Parameters", func() {
-		showOccultationParametersDialog(w, true, nil)
+		showOccultationParametersDialog(w, true, nil, "")
 	})
-	btnProcessOccelemnt := widget.NewButton("Process OWC occelmnt.xml", func() {
-		showProcessOccelemntDialog(w, vizierTab)
+	btnProcessOccelemnt := widget.NewButton("Process occelmnt file", func() {
+		// Autoload the first file whose name starts with "occ" from the CSV directory
+		autoXml := ""
+		if loadedLightCurveData != nil {
+			if srcPath := loadedLightCurveData.SourceFilePath; srcPath != "" {
+				obsDir := filepath.Dir(srcPath)
+				if entries, err := os.ReadDir(obsDir); err == nil {
+					for _, entry := range entries {
+						if !entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "occ") {
+							fullPath := filepath.Join(obsDir, entry.Name())
+							if data, rerr := os.ReadFile(fullPath); rerr == nil {
+								autoXml = strings.TrimPrefix(string(data), "\xef\xbb\xbf")
+								lastLoadedOccelmntXml = autoXml
+								prefs.SetString("lastLoadedOccelmntXml", autoXml)
+								vizierTab.FillStarFromOccelmntXml(autoXml)
+								logAction(fmt.Sprintf("Auto-loaded occelmnt file: %s", fullPath))
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+		showProcessOccelemntDialog(w, vizierTab, autoXml)
 	})
-	buttons := container.NewHBox(btnProcessOccelemnt, btnOccultParams, btnIOTA)
+	btnShowDetails := widget.NewButton("Show details file", func() {
+		if loadedLightCurveData == nil || loadedLightCurveData.SourceFilePath == "" {
+			dialog.ShowInformation("No observation folder", "Please load a CSV file first.", w)
+			return
+		}
+		obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
+		// Find the first file whose name starts with "detail"
+		detailPath := ""
+		if entries, err := os.ReadDir(obsDir); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "detail") {
+					detailPath = filepath.Join(obsDir, entry.Name())
+					break
+				}
+			}
+		}
+		if detailPath == "" {
+			dialog.ShowInformation("No details file", "No file starting with \"detail\" was found in the current observation folder.", w)
+			return
+		}
+		// Read and parse as CSV
+		fileData, rerr := os.ReadFile(detailPath)
+		if rerr != nil {
+			dialog.ShowError(fmt.Errorf("failed to read details file: %w", rerr), w)
+			return
+		}
+		reader := csv.NewReader(bytes.NewReader(fileData))
+		reader.FieldsPerRecord = -1
+		reader.TrimLeadingSpace = true
+		var rows [][]string
+		for {
+			record, err := reader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to parse details file: %w", err), w)
+				return
+			}
+			rows = append(rows, record)
+		}
+		if len(rows) == 0 {
+			dialog.ShowInformation("Details file", "The details file is empty.", w)
+			return
+		}
+		numCols := 0
+		for _, row := range rows {
+			if len(row) > numCols {
+				numCols = len(row)
+			}
+		}
+		// Compute column widths from content
+		colWidths := make([]float32, numCols)
+		for _, row := range rows {
+			for c, cell := range row {
+				w := float32(len(cell))*7.5 + 20
+				if w > colWidths[c] {
+					colWidths[c] = w
+				}
+				if colWidths[c] < 60 {
+					colWidths[c] = 60
+				}
+				if colWidths[c] > 300 {
+					colWidths[c] = 300
+				}
+			}
+		}
+		table := widget.NewTable(
+			func() (int, int) { return len(rows), numCols },
+			func() fyne.CanvasObject {
+				lbl := widget.NewLabel("")
+				lbl.Wrapping = fyne.TextWrapOff
+				return lbl
+			},
+			func(id widget.TableCellID, cell fyne.CanvasObject) {
+				lbl := cell.(*widget.Label)
+				if id.Row < len(rows) && id.Col < len(rows[id.Row]) {
+					lbl.SetText(rows[id.Row][id.Col])
+				} else {
+					lbl.SetText("")
+				}
+				if id.Row == 0 {
+					lbl.TextStyle = fyne.TextStyle{Bold: true}
+				} else {
+					lbl.TextStyle = fyne.TextStyle{}
+				}
+				lbl.Refresh()
+			},
+		)
+		for col, cw := range colWidths {
+			table.SetColumnWidth(col, cw)
+		}
+		closeBtn := widget.NewButton("Close", nil)
+		var dlg dialog.Dialog
+		closeBtn.OnTapped = func() { dlg.Hide() }
+		tableScroll := container.NewScroll(table)
+		tableScroll.SetMinSize(fyne.NewSize(800, 400))
+		content := container.NewBorder(nil, container.NewHBox(layout.NewSpacer(), closeBtn), nil, nil, tableScroll)
+		dlg = dialog.NewCustomWithoutButtons("Details: "+filepath.Base(detailPath), content, w)
+		dlg.Resize(fyne.NewSize(900, 520))
+		dlg.Show()
+	})
+	buttons := container.NewHBox(btnProcessOccelemnt, btnOccultParams, btnIOTA, btnShowDetails)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)

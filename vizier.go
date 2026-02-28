@@ -1506,12 +1506,13 @@ type sodisPreFill struct {
 	mcResult        *mcTrialsResult
 	fitParams       *OccultationParameters
 	lcData          *LightCurveData
-	occTitle        string    // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
-	sitePath        string    // path to the last-loaded .site file
-	occelmntXml     string    // raw occelmnt XML text — first <Star> CSV field used for #STAR
-	noiseSigma      float64   // baseline noise sigma — used for Signal/Noise (1/sigma)
-	csvExposureSecs float64   // CSV-measured median exposure time — used for Exp_Time
-	observerT0      time.Time // observer-corrected event time (zero = not available; use geocentric)
+	occTitle        string     // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
+	sitePath        string     // path to the last-loaded .site file
+	occelmntXml     string     // raw occelmnt XML text — first <Star> CSV field used for #STAR
+	noiseSigma      float64    // baseline noise sigma — used for Signal/Noise (1/sigma)
+	csvExposureSecs float64    // CSV-measured median exposure time — used for Exp_Time
+	observerT0      time.Time  // observer-corrected event time (zero = not available; use geocentric)
+	vt              *VizieRTab // VizieR tab — used to propagate the observer name when a site file loads
 }
 
 // formatSecondsForSODIS formats total seconds as HH:MM:SS.sss (3 decimal places),
@@ -1996,6 +1997,9 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 		if fill.sitePath != "" {
 			site := parseSiteFileToMap(fill.sitePath)
 			setEntry("Observer1", site["observer1"])
+			if fill.vt != nil && site["observer1"] != "" {
+				fill.vt.ObserverNameEntry.SetText(site["observer1"])
+			}
 			setEntry("Observer2", site["observer2"])
 			setEntry("Observatory", site["observatory"])
 			setEntry("E-mail", site["email"])
@@ -2020,6 +2024,9 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 				}
 			}
 			setEntry("Altitude", site["altitude"])
+			if fill.vt != nil && site["altitude"] != "" {
+				fill.vt.SiteAltitudeEntry.SetText(site["altitude"])
+			}
 		}
 	}
 
@@ -2188,6 +2195,9 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 				}
 			}
 			setIfPresent("Observer1", site["observer1"])
+			if fill.vt != nil && site["observer1"] != "" {
+				fill.vt.ObserverNameEntry.SetText(site["observer1"])
+			}
 			setIfPresent("Observer2", site["observer2"])
 			setIfPresent("Observatory", site["observatory"])
 			setIfPresent("E-mail", site["email"])
@@ -2232,6 +2242,9 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 				}
 			}
 			setIfPresent("Altitude", site["altitude"])
+			if fill.vt != nil && site["altitude"] != "" {
+				fill.vt.SiteAltitudeEntry.SetText(site["altitude"])
+			}
 			logAction(fmt.Sprintf("SODIS site info updated from: %s", filePath))
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".site"}))
