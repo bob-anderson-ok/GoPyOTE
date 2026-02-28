@@ -66,7 +66,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.42"
+const Version = "1.1.43"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -272,8 +272,8 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 }
 
 // showOccultationParametersDialog displays a form dialog for editing occultation parameters.
-// Pass clearAll=true to open with all entries blank (e.g. from Edit Occultation Parameters button).
-// Pass a non-nil preload to pre-populate entries directly (e.g. from Create Occultation).
+// Pass clearAll=true to open with all entries blank (e.g., from the Edit Occultation Parameters button).
+// Pass a non-nil preload to pre-populate entries directly (e.g., from Create Occultation).
 func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *OccultationParameters) {
 	// Create entry fields for all parameters
 	windowSizeEntry := widget.NewEntry()
@@ -324,7 +324,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 	// occelmntXml associated with the currently displayed params file (empty if none)
 	var dialogOccelmntXml string
 
-	// Auto-load previously opened parameters file if available (skipped when clearAll or preload is set)
+	// Autoload previously opened parameters file if available (skipped when clearAll or preload is set)
 	if !clearAll && preload == nil && lastLoadedParamsPath != "" {
 		file, err := os.Open(lastLoadedParamsPath)
 		if err == nil {
@@ -367,7 +367,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 		}
 	}
 
-	// Populate entries from preload if provided (e.g. from Create Occultation)
+	// Populate entries from preload if provided (e.g., from Create Occultation)
 	if preload != nil {
 		dialogOccelmntXml = preload.OccelmntXml
 		windowSizeEntry.SetText(strconv.Itoa(preload.WindowSizePixels))
@@ -673,7 +673,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 
 			logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
 
-			// Track the saved path so CSV-read auto-fill and future Browse defaults use it
+			// Track the saved path so CSV-read autofill and future Browse defaults use it
 			lastLoadedParamsPath = savePath
 			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
 			loadedFileName = filepath.Base(savePath)
@@ -2015,6 +2015,9 @@ func main() {
 	// Savitzky-Golay smoothed series (nil if no smoothing has been applied)
 	var smoothedSeries *PlotSeries
 
+	// Theoretical lightcurve series overlaid after a Monte Carlo run (nil if not set)
+	var theorySeries *PlotSeries
+
 	// Track the current frame range for filtering plot data
 	var frameRangeStart, frameRangeEnd float64
 	// Save min/max frame numbers from loaded CSV for validation
@@ -2124,6 +2127,11 @@ func main() {
 				})
 				displayedNames = append(displayedNames, smoothedSeries.Name)
 			}
+		}
+
+		// Add theoretical lightcurve series if available (from the last Monte Carlo run)
+		if theorySeries != nil {
+			allSeries = append(allSeries, *theorySeries)
 		}
 
 		if len(allSeries) == 0 {
@@ -4191,6 +4199,9 @@ func main() {
 			lastFitCandidates = nil
 			lastFitTargetTimes = nil
 			lastFitTargetValues = nil
+			theorySeries = nil
+			lightCurvePlot.SetVerticalLines(nil, false)
+			lightCurvePlot.SetSigmaLines(nil, false)
 
 			// Load parameters from the file used to generate the diffraction image
 			file, err := os.Open(lastDiffractionParamsPath)
@@ -4451,6 +4462,9 @@ func main() {
 				// Final report: fit edge times (as timestamps) with MC uncertainty
 				logAction("--- Final Report ---")
 				logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", lastFitResult.bestNCC, lastFitParams.PathPerpendicularOffsetKm))
+				if lastFitResult.bestScale > 0 {
+					logAction(fmt.Sprintf("  Percent drop: %.2f%%", lastFitResult.bestScale*100.0))
+				}
 				if lastCsvExposureSecs > 0 {
 					logAction(fmt.Sprintf("  Camera exposure time: %.6f seconds", lastCsvExposureSecs))
 				} else {
@@ -4615,6 +4629,38 @@ func main() {
 						mcOverlayWin.CenterOnScreen()
 						mcOverlayWin.Show()
 					}
+
+					// Update main plot: overlay theoretical curve, edge lines, and ±3σ lines
+					theoryPoints := make([]PlotPoint, len(mcScaledCurve))
+					for i, pt := range mcScaledCurve {
+						theoryPoints[i] = PlotPoint{
+							X:     pt.time + lastFitResult.bestShift,
+							Y:     pt.intensity,
+							Index: -1,
+						}
+					}
+					theorySeries = &PlotSeries{
+						Points:   theoryPoints,
+						Color:    color.RGBA{R: 255, G: 170, B: 170, A: 255},
+						Name:     "Theoretical (fit)",
+						LineOnly: true,
+					}
+					edgeXVals := make([]float64, len(lastFitResult.edgeTimes))
+					for i, et := range lastFitResult.edgeTimes {
+						edgeXVals[i] = et + lastFitResult.bestShift
+					}
+					lightCurvePlot.SetVerticalLines(edgeXVals, true)
+					var sigmaXVals []float64
+					for i, et := range lastFitResult.edgeTimes {
+						if i < len(result.edgeStds) {
+							edgeX := et + lastFitResult.bestShift
+							sigma3 := 3.0 * result.edgeStds[i]
+							sigmaXVals = append(sigmaXVals, edgeX-sigma3, edgeX+sigma3)
+						}
+					}
+					lightCurvePlot.SetSigmaLines(sigmaXVals, len(sigmaXVals) > 0)
+					lightCurvePlot.ShowBaselineLine = false
+					rebuildPlot()
 				}
 			})
 		}()

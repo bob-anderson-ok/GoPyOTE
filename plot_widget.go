@@ -65,6 +65,10 @@ type LightCurvePlot struct {
 	VerticalLines     []float64 // X values for vertical lines
 	ShowVerticalLines bool      // Whether to draw the vertical lines
 
+	// Sigma lines: ±3σ uncertainty lines around fit edges
+	SigmaLines     []float64 // X values for ±3σ lines (two per edge: edge−3σ, edge+3σ)
+	ShowSigmaLines bool      // Whether to draw the sigma lines
+
 	// Plot bounds for coordinate conversion
 	minX, maxX, minY, maxY float64
 	// Plot area margins (in pixels) - approximate values for gonum/plot
@@ -157,6 +161,13 @@ func (p *LightCurvePlot) SetOnWarning(callback func(message string)) {
 func (p *LightCurvePlot) SetVerticalLines(xValues []float64, show bool) {
 	p.VerticalLines = xValues
 	p.ShowVerticalLines = show
+	p.Refresh()
+}
+
+// SetSigmaLines sets the X positions for ±3σ edge uncertainty lines
+func (p *LightCurvePlot) SetSigmaLines(xValues []float64, show bool) {
+	p.SigmaLines = xValues
+	p.ShowSigmaLines = show
 	p.Refresh()
 }
 
@@ -737,18 +748,22 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			pts[i].Y = pt.Y
 		}
 
-		// Create line
-		line, err := plotter.NewLine(pts)
-		if err != nil {
-			fmt.Printf("Error creating line plot: %v\n", err)
-			continue
+		// Create a line (unless scatter-only)
+		var line *plotter.Line
+		if !series.ScatterOnly {
+			var err error
+			line, err = plotter.NewLine(pts)
+			if err != nil {
+				fmt.Printf("Error creating line plot: %v\n", err)
+				continue
+			}
+			line.Color = series.Color
+			line.Width = vg.Points(2)
+			plt.Add(line)
 		}
-		line.Color = series.Color
-		line.Width = vg.Points(2)
-		plt.Add(line)
 
-		// Create scatter points for regular (non-interpolated) points
-		if len(regularPts) > 0 {
+		// Create scatter points for regular (non-interpolated) points (unless line-only)
+		if !series.LineOnly && len(regularPts) > 0 {
 			scatter, err := plotter.NewScatter(regularPts)
 			if err != nil {
 				fmt.Printf("Error creating scatter plot: %v\n", err)
@@ -885,14 +900,21 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			}
 		}
 
-		// Add to legend (create a dummy scatter for legend entry)
+		// Add to legend
 		legendScatter, _ := plotter.NewScatter(pts)
 		if legendScatter != nil {
 			legendScatter.Color = series.Color
 			legendScatter.GlyphStyle.Shape = draw.CircleGlyph{}
 			legendScatter.GlyphStyle.Radius = vg.Points(4)
+		}
+		switch {
+		case series.LineOnly && line != nil:
+			plt.Legend.Add(series.Name, line)
+		case series.ScatterOnly && legendScatter != nil:
+			plt.Legend.Add(series.Name, legendScatter)
+		case line != nil && legendScatter != nil:
 			plt.Legend.Add(series.Name, line, legendScatter)
-		} else {
+		case line != nil:
 			plt.Legend.Add(series.Name, line)
 		}
 	}
@@ -927,6 +949,24 @@ func (r *lightCurvePlotRenderer) Refresh() {
 				vline.Width = vg.Points(2)
 				vline.Dashes = []vg.Length{vg.Points(6), vg.Points(4)} // Dashed line
 				plt.Add(vline)
+			}
+		}
+	}
+
+	// Draw ±3σ uncertainty lines if enabled
+	if p.ShowSigmaLines {
+		for _, xVal := range p.SigmaLines {
+			sPts := make(plotter.XYs, 2)
+			sPts[0].X = xVal
+			sPts[0].Y = p.minY
+			sPts[1].X = xVal
+			sPts[1].Y = p.maxY
+			sLine, err := plotter.NewLine(sPts)
+			if err == nil {
+				sLine.Color = color.RGBA{R: 0, G: 180, B: 0, A: 255} // Green
+				sLine.Width = vg.Points(1.5)
+				sLine.Dashes = []vg.Length{vg.Points(6), vg.Points(4)}
+				plt.Add(sLine)
 			}
 		}
 	}

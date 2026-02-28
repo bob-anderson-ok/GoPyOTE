@@ -62,9 +62,11 @@ type PlotPoint struct {
 
 // PlotSeries represents a single light curve series
 type PlotSeries struct {
-	Points []PlotPoint
-	Color  color.RGBA
-	Name   string
+	Points      []PlotPoint
+	Color       color.RGBA
+	Name        string
+	LineOnly    bool // If true, draw line only — no scatter dots
+	ScatterOnly bool // If true, draw scatter dots only — no line
 }
 
 // PointPair represents a pair of selected points (for multi-pair selection mode)
