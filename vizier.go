@@ -2127,11 +2127,21 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 	})
 
 	saveBtn := widget.NewButton("Save", func() {
-		saveDir := resultsFolder
-		if saveDir == "" {
-			saveDir = filepath.Join(appDir, "SODIS-FOLDER")
-			_ = os.MkdirAll(saveDir, 0755)
+		reportText := buildSodisReportText(rawLines, entries)
+		if resultsFolder != "" {
+			savePath := filepath.Join(resultsFolder, "SODIS-REPORT.txt")
+			if werr := os.WriteFile(savePath, []byte(reportText), 0644); werr != nil {
+				dialog.ShowError(fmt.Errorf("error writing SODIS report: %w", werr), w)
+				return
+			}
+			logAction(fmt.Sprintf("SODIS report saved: %s", savePath))
+			dlg.Hide()
+			dialog.ShowInformation("Saved", "SODIS report saved successfully.", w)
+			return
 		}
+		// No results folder yet — fall back to a file dialog in SODIS-FOLDER
+		saveDir := filepath.Join(appDir, "SODIS-FOLDER")
+		_ = os.MkdirAll(saveDir, 0755)
 		fileSave := dialog.NewFileSave(func(wr fyne.URIWriteCloser, ferr error) {
 			if ferr != nil {
 				dialog.ShowError(ferr, w)
@@ -2145,7 +2155,6 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 					dialog.ShowError(fmt.Errorf("error closing file: %w", cerr), w)
 				}
 			}()
-			reportText := buildSodisReportText(rawLines, entries)
 			if _, werr := wr.Write([]byte(reportText)); werr != nil {
 				dialog.ShowError(fmt.Errorf("error writing SODIS report: %w", werr), w)
 				return

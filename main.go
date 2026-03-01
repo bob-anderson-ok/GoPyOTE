@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.46"
+const Version = "1.1.47"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -5345,30 +5345,10 @@ func main() {
 			}
 		}
 
-		// No CSV loaded - fall back to the file dialog
-		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-			if err != nil {
-				dialog.ShowError(err, w)
-				return
-			}
-			if reader == nil {
-				return // User cancelled
-			}
-			// Get the file path and close the reader (we don't need to read the content)
-			paramFilePath := reader.URI().Path()
-			if cerr := reader.Close(); cerr != nil {
-				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
-			}
-			useParamFile(paramFilePath)
-		}, w)
-		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
-		occParamsDir := filepath.Join(appDir, "OCCULTATION-PARAMETERS")
-		folderURI := storage.NewFileURI(occParamsDir)
-		if listableURI, err := storage.ListerForURI(folderURI); err == nil {
-			fileDialog.SetLocation(listableURI)
-		}
-		fileDialog.Resize(fyne.NewSize(1200, 800))
-		fileDialog.Show()
+		// No CSV loaded - tell the user to load one first
+		dialog.ShowInformation("No light curve loaded",
+			"A light curve CSV must be opened before running IOTAdiffraction.\n\n"+
+				"Click on the Open browser to select csv file button and select a light curve file.", w)
 	})
 	btnOccultParams := widget.NewButton("Edit Occultation Parameters", func() {
 		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
