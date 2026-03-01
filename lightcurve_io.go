@@ -16,6 +16,10 @@ var loadedLightCurveData *LightCurveData
 // Flag to track if normalization has been applied (for filename generation)
 var normalizationApplied bool
 
+// Flag to track if the baseline has been scaled to unity via calcBaselineMeanBtn.
+// Reset on a new CSV load; NOT cleared by cosmetic plot state changes.
+var baselineScaledToUnity bool
+
 // parseLightCurveCSV reads a CSV file, skipping comments and blank lines,
 // and extracts light curve data
 func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
@@ -125,7 +129,7 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 
 // writeSelectedLightCurves writes the selected light curves to a CSV file
 // The output file is named originalname + "_GoPyOTE.csv" in the same directory
-// If normalization has been applied, "_NORMALIZED" is inserted in the filename
+// If normalization has been applied, "_NORMALIZED" is inserted in the filename.
 // Only rows within the frame range [startFrame, endFrame] are written
 func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool, startFrame, endFrame float64) (string, error) {
 	if data == nil {

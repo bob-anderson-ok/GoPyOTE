@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.48"
+const Version = "1.1.49"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2727,6 +2727,10 @@ func main() {
 	// Track if csv ops tab has been opened for the first time
 	csvOpsTabFirstOpen := true
 
+	// resetFitButtons restores all four fit-page action buttons to their default
+	// (HighImportance) color. Assigned after the buttons are created below.
+	var resetFitButtons func()
+
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
 		showFileOpenWithRecents(w, prefs, "Select OBS folder then select the light curve csv file", nil, func(reader fyne.URIReadCloser, err error) {
@@ -2770,6 +2774,9 @@ func main() {
 			}
 
 			loadedLightCurveData = data
+			if resetFitButtons != nil {
+				resetFitButtons()
+			}
 			startupOverlay.Hide()
 			if !reuseImageCheck.Checked && !iotaRanSuccessfully {
 				dialog.ShowInformation("IOTAdiffraction reminder",
@@ -2843,6 +2850,7 @@ func main() {
 			lightCurvePlot.SetSeries(nil)
 			smoothedSeries = nil         // Clear any previous smooth curve
 			normalizationApplied = false // Reset normalization flag
+			baselineScaledToUnity = false
 			theorySeries = nil
 			lightCurvePlot.SetVerticalLines(nil, false)
 			lightCurvePlot.SetSigmaLines(nil, false)
@@ -4114,6 +4122,7 @@ func main() {
 		lightCurvePlot.BaselineValue = 1.0
 		lightCurvePlot.ShowBaselineLine = true
 		lightCurvePlot.SelectedPairs = nil
+		baselineScaledToUnity = true
 
 		savedMinY, savedMaxY := lightCurvePlot.GetYBounds()
 		rebuildPlot()
@@ -4189,6 +4198,16 @@ func main() {
 
 	searchInitialOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
 	searchFinalOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
+	searchInitialOffsetEntry.OnChanged = func(_ string) {
+		if resetFitButtons != nil {
+			resetFitButtons()
+		}
+	}
+	searchFinalOffsetEntry.OnChanged = func(_ string) {
+		if resetFitButtons != nil {
+			resetFitButtons()
+		}
+	}
 
 	// Preview window for search range paths — kept so we can update in place
 	var searchPreviewWindow fyne.Window
@@ -4337,7 +4356,7 @@ func main() {
 		}
 
 		// Check 2: Scaled to unity
-		if !lightCurvePlot.ShowBaselineLine || lightCurvePlot.BaselineValue != 1.0 {
+		if !baselineScaledToUnity {
 			issues = append(issues, "Light curve has not been scaled to unity")
 		}
 
@@ -4483,6 +4502,8 @@ func main() {
 								}
 								lastFitTargetTimes = targetTimes
 								lastFitTargetValues = targetValues
+								fitBtn.Importance = widget.WarningImportance
+								fitBtn.Refresh()
 							}
 						}
 					})
@@ -4498,6 +4519,8 @@ func main() {
 					lastFitCandidates = []*precomputedCurve{pc}
 					lastFitTargetTimes = targetTimes
 					lastFitTargetValues = targetValues
+					fitBtn.Importance = widget.WarningImportance
+					fitBtn.Refresh()
 				}
 			}
 		}
@@ -4605,6 +4628,8 @@ func main() {
 					return
 				}
 				lastMCResult = result
+				mcBtn.Importance = widget.WarningImportance
+				mcBtn.Refresh()
 				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
 				for i := 0; i < result.numEdges && i < len(lastFitResult.edgeTimes); i++ {
 					absTime := lastFitResult.edgeTimes[i] + lastFitResult.bestShift
@@ -4914,6 +4939,8 @@ func main() {
 					histWindow.Resize(fyne.NewSize(850, 550))
 					histWindow.CenterOnScreen()
 					histWindow.Show()
+					runNieBtn.Importance = widget.WarningImportance
+					runNieBtn.Refresh()
 				})
 			}()
 		}
@@ -4983,7 +5010,8 @@ func main() {
 	})
 	runNieBtn.Importance = widget.HighImportance
 
-	fillSodisBtn := widget.NewButton("Fill SODIS report", func() {
+	var fillSodisBtn *widget.Button
+	fillSodisBtn = widget.NewButton("Fill SODIS report", func() {
 		occTitle := lastDiffractionTitle
 		if lastFitParams != nil && lastFitParams.Title != "" {
 			occTitle = lastFitParams.Title
@@ -5011,9 +5039,23 @@ func main() {
 			csvExposureSecs: lastCsvExposureSecs,
 			observerT0:      computedObserverT0,
 			vt:              vizierTab,
+		}, func() {
+			fillSodisBtn.Importance = widget.WarningImportance
+			fillSodisBtn.Refresh()
 		})
 	})
 	fillSodisBtn.Importance = widget.HighImportance
+
+	resetFitButtons = func() {
+		fitBtn.Importance = widget.HighImportance
+		fitBtn.Refresh()
+		mcBtn.Importance = widget.HighImportance
+		mcBtn.Refresh()
+		runNieBtn.Importance = widget.HighImportance
+		runNieBtn.Refresh()
+		fillSodisBtn.Importance = widget.HighImportance
+		fillSodisBtn.Refresh()
+	}
 
 	fillNaBtn := widget.NewButton("Fill NA spreadsheet", func() {
 		dialog.ShowInformation("Not Implemented", "This function is not yet implemented.", w)

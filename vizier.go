@@ -1686,7 +1686,7 @@ func buildSodisReportText(templateLines []string, entries map[string]*widget.Ent
 // Fields for which current data is available (fit edges, MC uncertainty, observation
 // times, exposure time) are pre-filled automatically.  All other fields start empty.
 // Use "Load SODIS template" to pre-fill further from a saved template file.
-func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
+func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 	// Read the blank SODIS template to drive the form structure
 	templatePath := filepath.Join(appDir, "SODIS-FOLDER", "1 BLANK SODIS TEMPLATE.txt")
 	data, err := os.ReadFile(templatePath)
@@ -2135,6 +2135,7 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 				return
 			}
 			logAction(fmt.Sprintf("SODIS report saved: %s", savePath))
+			onSave()
 			dlg.Hide()
 			dialog.ShowInformation("Saved", "SODIS report saved successfully.", w)
 			return
@@ -2160,6 +2161,7 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill) {
 				return
 			}
 			logAction(fmt.Sprintf("SODIS report saved: %s", wr.URI().Path()))
+			onSave()
 			dlg.Hide()
 			dialog.ShowInformation("Saved", "SODIS report saved successfully.", w)
 		}, w)
