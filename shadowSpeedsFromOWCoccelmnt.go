@@ -440,12 +440,12 @@ func FresnelScale(wavelengthNm, ZAu float64) float64 {
 
 // ObserverT0CorrectionFromOWC computes the observer-specific event time by projecting
 // the observer's position onto the fundamental plane and finding when the shadow
-// centre passes closest to the observer.
+// center passes closest to the observer.
 //
 // Returns:
 //
 //	geocentricT0   – geocentric predicted event time (from occelmnt UT field)
-//	observerT0     – time when shadow centre is closest to observer
+//	observerT0     – time when a shadow center is closest to observer
 //	correctionSecs – observerT0 minus geocentricT0 in seconds (positive = later)
 func ObserverT0CorrectionFromOWC(
 	xmlText string,
@@ -518,12 +518,12 @@ func ObserverT0CorrectionFromOWC(
 	jdUT1 := jdUTC + dut1Seconds/86400.0
 	era := earthRotationAngle(jdUT1)
 
-	rECI := Rz(era, rPEF)             // meters
-	rECI_Re := rECI.Mul(1.0 / wgs84A) // Earth radii
+	rECI := Rz(era, rPEF)            // meters
+	reciRe := rECI.Mul(1.0 / wgs84A) // Earth radii
 
 	sHat := starUnitFromRADec(raRad, decRad)
 	e1, e2 := fundamentalPlaneBasis(sHat)
-	xObs, yObs := projectToPlane(rECI_Re, e1, e2)
+	xObs, yObs := projectToPlane(reciRe, e1, e2)
 
 	// t0 correction: time when shadow centre is closest to observer
 	// τ = -[(X - xObs)*dX + (Y - yObs)*dY] / (dX² + dY²)  [hours]

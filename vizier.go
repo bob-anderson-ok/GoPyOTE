@@ -2007,10 +2007,31 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 			setEntry("NearestCity", site["nearest_city"])
 			setEntry("Countrycode", site["country_code"])
 			setEntry("Telescope", site["telescope"])
+			if telescopeSelect != nil {
+				if e, ok := entries["Telescope"]; ok {
+					if opt, ok2 := telescopeValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						telescopeSelect.SetSelected(opt)
+					}
+				}
+			}
 			setEntry("Aperture", site["aperture"])
 			setEntry("FocalLength", site["focal_length"])
 			setEntry("ObservingMethod", site["observing_method"])
+			if observingMethodSelect != nil {
+				if e, ok := entries["ObservingMethod"]; ok {
+					if opt, ok2 := observingMethodValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						observingMethodSelect.SetSelected(opt)
+					}
+				}
+			}
 			setEntry("Timesource", site["time_source"])
+			if timesourceSelect != nil {
+				if e, ok := entries["Timesource"]; ok {
+					if opt, ok2 := timesourceValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						timesourceSelect.SetSelected(opt)
+					}
+				}
+			}
 			setEntry("Camera", site["camera"])
 			// Convert decimal lat/lon to SODIS DMS notation
 			if latStr := site["latitude_decimal"]; latStr != "" {

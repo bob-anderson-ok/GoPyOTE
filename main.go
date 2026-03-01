@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.49"
+const Version = "1.1.50"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -609,234 +609,249 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 
 	// File save button
 	saveBtn := widget.NewButton("Write", func() {
-		if obsDir != "" {
-			// Auto-save directly to the observation folder — no file dialog
-			saveFileName := "occultation.occparams"
-			if title := strings.TrimSpace(titleEntry.Text); title != "" {
+		doSave := func() {
+			if obsDir != "" {
+				// Auto-save directly to the observation folder — no file dialog
+				saveFileName := "occultation.occparams"
+				if title := strings.TrimSpace(titleEntry.Text); title != "" {
+					sanitized := strings.Map(func(r rune) rune {
+						if strings.ContainsRune(`\/:*?"<>|`, r) {
+							return '_'
+						}
+						return r
+					}, title)
+					saveFileName = sanitized + ".occparams"
+				} else if loadedFileName != "" {
+					saveFileName = loadedFileName
+				}
+				savePath := filepath.Join(obsDir, saveFileName)
+				// Build parameters struct from entry fields
+				params := OccultationParameters{
+					WindowSizePixels:               parseInt(windowSizeEntry.Text),
+					Title:                          titleEntry.Text,
+					FundamentalPlaneWidthKm:        parseFloat(fundamentalPlaneWidthKmEntry.Text),
+					FundamentalPlaneWidthNumPoints: parseInt(fundamentalPlaneWidthNumPointsEntry.Text),
+					ParallaxArcsec:                 parseFloat(parallaxArcsecEntry.Text),
+					DistanceAu:                     parseFloat(distanceAuEntry.Text),
+					PathToQeTableFile:              pathToQeTableFileSelect.Selected,
+					ObservationWavelengthNm:        parseInt(observationWavelengthNmEntry.Text),
+					DXKmPerSec:                     parseFloat(dXKmPerSecEntry.Text),
+					DYKmPerSec:                     parseFloat(dYKmPerSecEntry.Text),
+					PathPerpendicularOffsetKm:      parseFloat(pathPerpendicularOffsetKmEntry.Text),
+					PercentMagDrop:                 parseInt(percentMagDropEntry.Text),
+					StarDiamOnPlaneMas:             parseFloat(starDiamOnPlaneMasEntry.Text),
+					LimbDarkeningCoeff:             parseFloat(limbDarkeningCoeffEntry.Text),
+					StarClass:                      starClassEntry.Text,
+					MainBody: EllipseParams{
+						XCenterKm:          parseFloat(mainBodyXCenterEntry.Text),
+						YCenterKm:          parseFloat(mainBodyYCenterEntry.Text),
+						MajorAxisKm:        parseFloat(mainBodyMajorAxisEntry.Text),
+						MinorAxisKm:        parseFloat(mainBodyMinorAxisEntry.Text),
+						MajorAxisPaDegrees: parseFloat(mainBodyPaDegreesEntry.Text),
+					},
+					Satellite: EllipseParams{
+						XCenterKm:          parseFloat(satelliteXCenterEntry.Text),
+						YCenterKm:          parseFloat(satelliteYCenterEntry.Text),
+						MajorAxisKm:        parseFloat(satelliteMajorAxisEntry.Text),
+						MinorAxisKm:        parseFloat(satelliteMinorAxisEntry.Text),
+						MajorAxisPaDegrees: parseFloat(satellitePaDegreesEntry.Text),
+					},
+					PathToExternalImage: pathToExternalImageEntry.Text,
+					ExposureTimeSecs:    0,
+					OccelmntXml:         dialogOccelmntXml,
+				}
+
+				// Marshal to JSON5
+				data, err := json5.Marshal(params)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("failed to encode parameters: %w", err), w)
+					return
+				}
+
+				// Indent the JSON5 output
+				var indented []byte
+				if err := json5.Indent(&indented, data, "", "  "); err != nil {
+					dialog.ShowError(fmt.Errorf("failed to format parameters: %w", err), w)
+					return
+				}
+				data = indented
+
+				// Write to the file with the enforced extension
+				if werr := os.WriteFile(savePath, data, 0644); werr != nil {
+					dialog.ShowError(fmt.Errorf("failed to write file: %w", werr), w)
+					return
+				}
+
+				logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
+
+				// Track the saved path so CSV-read autofill and future Browse defaults use it
+				lastLoadedParamsPath = savePath
+				prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
+				loadedFileName = filepath.Base(savePath)
+				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+
+				// Persist QE file name so it autofills next time
+				if qe := pathToQeTableFileSelect.Selected; qe != "" {
+					prefs.SetString("stickyQeTableFile", qe)
+				}
+
+				// Re-snapshot so saved state is considered clean
+				for i, e := range allEntries {
+					initialValues[i] = e.Text
+				}
+				qeInitialValue = pathToQeTableFileSelect.Selected
+
+				// Close the parameters dialog after a successful save
+				customDialog.Hide()
+				return
+			}
+
+			fileDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				if writer == nil {
+					return // User cancelled
+				}
+
+				// Enforce .occparams extension
+				originalSavePath := writer.URI().Path()
+				savePath := originalSavePath
+				ext := filepath.Ext(savePath)
+				if strings.ToLower(ext) != ".occparams" {
+					savePath = strings.TrimSuffix(savePath, ext) + ".occparams"
+				}
+
+				// Close the writer first so the file handle is released
+				if cerr := writer.Close(); cerr != nil {
+					dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
+				}
+
+				// Remove the empty file created by the save dialog if the path changed
+				if savePath != originalSavePath {
+					if rerr := os.Remove(originalSavePath); rerr != nil {
+						fmt.Printf("Warning: could not remove empty file %s: %v\n", originalSavePath, rerr)
+					}
+				}
+
+				// Build parameters struct from entry fields
+				params := OccultationParameters{
+					WindowSizePixels:               parseInt(windowSizeEntry.Text),
+					Title:                          titleEntry.Text,
+					FundamentalPlaneWidthKm:        parseFloat(fundamentalPlaneWidthKmEntry.Text),
+					FundamentalPlaneWidthNumPoints: parseInt(fundamentalPlaneWidthNumPointsEntry.Text),
+					ParallaxArcsec:                 parseFloat(parallaxArcsecEntry.Text),
+					DistanceAu:                     parseFloat(distanceAuEntry.Text),
+					PathToQeTableFile:              pathToQeTableFileSelect.Selected,
+					ObservationWavelengthNm:        parseInt(observationWavelengthNmEntry.Text),
+					DXKmPerSec:                     parseFloat(dXKmPerSecEntry.Text),
+					DYKmPerSec:                     parseFloat(dYKmPerSecEntry.Text),
+					PathPerpendicularOffsetKm:      parseFloat(pathPerpendicularOffsetKmEntry.Text),
+					PercentMagDrop:                 parseInt(percentMagDropEntry.Text),
+					StarDiamOnPlaneMas:             parseFloat(starDiamOnPlaneMasEntry.Text),
+					LimbDarkeningCoeff:             parseFloat(limbDarkeningCoeffEntry.Text),
+					StarClass:                      starClassEntry.Text,
+					MainBody: EllipseParams{
+						XCenterKm:          parseFloat(mainBodyXCenterEntry.Text),
+						YCenterKm:          parseFloat(mainBodyYCenterEntry.Text),
+						MajorAxisKm:        parseFloat(mainBodyMajorAxisEntry.Text),
+						MinorAxisKm:        parseFloat(mainBodyMinorAxisEntry.Text),
+						MajorAxisPaDegrees: parseFloat(mainBodyPaDegreesEntry.Text),
+					},
+					Satellite: EllipseParams{
+						XCenterKm:          parseFloat(satelliteXCenterEntry.Text),
+						YCenterKm:          parseFloat(satelliteYCenterEntry.Text),
+						MajorAxisKm:        parseFloat(satelliteMajorAxisEntry.Text),
+						MinorAxisKm:        parseFloat(satelliteMinorAxisEntry.Text),
+						MajorAxisPaDegrees: parseFloat(satellitePaDegreesEntry.Text),
+					},
+					PathToExternalImage: pathToExternalImageEntry.Text,
+					ExposureTimeSecs:    0,
+					OccelmntXml:         dialogOccelmntXml,
+				}
+
+				// Marshal to JSON5
+				data, err := json5.Marshal(params)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("failed to encode parameters: %w", err), w)
+					return
+				}
+
+				// Indent the JSON5 output
+				var indented []byte
+				if err := json5.Indent(&indented, data, "", "  "); err != nil {
+					dialog.ShowError(fmt.Errorf("failed to format parameters: %w", err), w)
+					return
+				}
+				data = indented
+
+				// Write to the file with the enforced extension
+				if werr := os.WriteFile(savePath, data, 0644); werr != nil {
+					dialog.ShowError(fmt.Errorf("failed to write file: %w", werr), w)
+					return
+				}
+
+				logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
+
+				// Track the saved path so CSV-read autofill and future Browse defaults use it
+				lastLoadedParamsPath = savePath
+				prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
+				loadedFileName = filepath.Base(savePath)
+				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
+
+				// Persist QE file name so it autofills next time
+				if qe := pathToQeTableFileSelect.Selected; qe != "" {
+					prefs.SetString("stickyQeTableFile", qe)
+				}
+
+				// Re-snapshot so saved state is considered clean
+				for i, e := range allEntries {
+					initialValues[i] = e.Text
+				}
+				qeInitialValue = pathToQeTableFileSelect.Selected
+
+				// Close the parameters dialog after a successful save
+				customDialog.Hide()
+			}, w)
+			fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
+			if loadedFileName != "" {
+				fileDialog.SetFileName(loadedFileName)
+			} else if title := strings.TrimSpace(titleEntry.Text); title != "" {
 				sanitized := strings.Map(func(r rune) rune {
 					if strings.ContainsRune(`\/:*?"<>|`, r) {
 						return '_'
 					}
 					return r
 				}, title)
-				saveFileName = sanitized + ".occparams"
-			} else if loadedFileName != "" {
-				saveFileName = loadedFileName
+				fileDialog.SetFileName(sanitized + ".occparams")
 			}
-			savePath := filepath.Join(obsDir, saveFileName)
-			// Build parameters struct from entry fields
-			params := OccultationParameters{
-				WindowSizePixels:               parseInt(windowSizeEntry.Text),
-				Title:                          titleEntry.Text,
-				FundamentalPlaneWidthKm:        parseFloat(fundamentalPlaneWidthKmEntry.Text),
-				FundamentalPlaneWidthNumPoints: parseInt(fundamentalPlaneWidthNumPointsEntry.Text),
-				ParallaxArcsec:                 parseFloat(parallaxArcsecEntry.Text),
-				DistanceAu:                     parseFloat(distanceAuEntry.Text),
-				PathToQeTableFile:              pathToQeTableFileSelect.Selected,
-				ObservationWavelengthNm:        parseInt(observationWavelengthNmEntry.Text),
-				DXKmPerSec:                     parseFloat(dXKmPerSecEntry.Text),
-				DYKmPerSec:                     parseFloat(dYKmPerSecEntry.Text),
-				PathPerpendicularOffsetKm:      parseFloat(pathPerpendicularOffsetKmEntry.Text),
-				PercentMagDrop:                 parseInt(percentMagDropEntry.Text),
-				StarDiamOnPlaneMas:             parseFloat(starDiamOnPlaneMasEntry.Text),
-				LimbDarkeningCoeff:             parseFloat(limbDarkeningCoeffEntry.Text),
-				StarClass:                      starClassEntry.Text,
-				MainBody: EllipseParams{
-					XCenterKm:          parseFloat(mainBodyXCenterEntry.Text),
-					YCenterKm:          parseFloat(mainBodyYCenterEntry.Text),
-					MajorAxisKm:        parseFloat(mainBodyMajorAxisEntry.Text),
-					MinorAxisKm:        parseFloat(mainBodyMinorAxisEntry.Text),
-					MajorAxisPaDegrees: parseFloat(mainBodyPaDegreesEntry.Text),
-				},
-				Satellite: EllipseParams{
-					XCenterKm:          parseFloat(satelliteXCenterEntry.Text),
-					YCenterKm:          parseFloat(satelliteYCenterEntry.Text),
-					MajorAxisKm:        parseFloat(satelliteMajorAxisEntry.Text),
-					MinorAxisKm:        parseFloat(satelliteMinorAxisEntry.Text),
-					MajorAxisPaDegrees: parseFloat(satellitePaDegreesEntry.Text),
-				},
-				PathToExternalImage: pathToExternalImageEntry.Text,
-				ExposureTimeSecs:    0,
-				OccelmntXml:         dialogOccelmntXml,
-			}
-
-			// Marshal to JSON5
-			data, err := json5.Marshal(params)
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to encode parameters: %w", err), w)
+			// Always save to the OCCULTATION-PARAMETERS directory, creating it if needed
+			occParamsDir := filepath.Join(appDir, "OCCULTATION-PARAMETERS")
+			if merr := os.MkdirAll(occParamsDir, 0755); merr != nil {
+				dialog.ShowError(fmt.Errorf("failed to create OCCULTATION-PARAMETERS directory: %w", merr), w)
 				return
 			}
-
-			// Indent the JSON5 output
-			var indented []byte
-			if err := json5.Indent(&indented, data, "", "  "); err != nil {
-				dialog.ShowError(fmt.Errorf("failed to format parameters: %w", err), w)
-				return
+			folderURI := storage.NewFileURI(occParamsDir)
+			if listableURI, locErr := storage.ListerForURI(folderURI); locErr == nil {
+				fileDialog.SetLocation(listableURI)
 			}
-			data = indented
+			fileDialog.Resize(fyne.NewSize(1200, 800))
+			fileDialog.Show()
+		} // end doSave
 
-			// Write to the file with the enforced extension
-			if werr := os.WriteFile(savePath, data, 0644); werr != nil {
-				dialog.ShowError(fmt.Errorf("failed to write file: %w", werr), w)
-				return
-			}
-
-			logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
-
-			// Track the saved path so CSV-read autofill and future Browse defaults use it
-			lastLoadedParamsPath = savePath
-			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
-			loadedFileName = filepath.Base(savePath)
-			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
-
-			// Persist QE file name so it autofills next time
-			if qe := pathToQeTableFileSelect.Selected; qe != "" {
-				prefs.SetString("stickyQeTableFile", qe)
-			}
-
-			// Re-snapshot so saved state is considered clean
-			for i, e := range allEntries {
-				initialValues[i] = e.Text
-			}
-			qeInitialValue = pathToQeTableFileSelect.Selected
-
-			// Close the parameters dialog after a successful save
-			customDialog.Hide()
+		if pathToQeTableFileSelect.Selected == "" {
+			dialog.ShowConfirm(
+				"No camera QE file",
+				"No camera QE file is selected. Save without one?",
+				func(saveWithout bool) {
+					if saveWithout {
+						doSave()
+					}
+				}, w)
 			return
 		}
-
-		fileDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
-			if err != nil {
-				dialog.ShowError(err, w)
-				return
-			}
-			if writer == nil {
-				return // User cancelled
-			}
-
-			// Enforce .occparams extension
-			originalSavePath := writer.URI().Path()
-			savePath := originalSavePath
-			ext := filepath.Ext(savePath)
-			if strings.ToLower(ext) != ".occparams" {
-				savePath = strings.TrimSuffix(savePath, ext) + ".occparams"
-			}
-
-			// Close the writer first so the file handle is released
-			if cerr := writer.Close(); cerr != nil {
-				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
-			}
-
-			// Remove the empty file created by the save dialog if the path changed
-			if savePath != originalSavePath {
-				if rerr := os.Remove(originalSavePath); rerr != nil {
-					fmt.Printf("Warning: could not remove empty file %s: %v\n", originalSavePath, rerr)
-				}
-			}
-
-			// Build parameters struct from entry fields
-			params := OccultationParameters{
-				WindowSizePixels:               parseInt(windowSizeEntry.Text),
-				Title:                          titleEntry.Text,
-				FundamentalPlaneWidthKm:        parseFloat(fundamentalPlaneWidthKmEntry.Text),
-				FundamentalPlaneWidthNumPoints: parseInt(fundamentalPlaneWidthNumPointsEntry.Text),
-				ParallaxArcsec:                 parseFloat(parallaxArcsecEntry.Text),
-				DistanceAu:                     parseFloat(distanceAuEntry.Text),
-				PathToQeTableFile:              pathToQeTableFileSelect.Selected,
-				ObservationWavelengthNm:        parseInt(observationWavelengthNmEntry.Text),
-				DXKmPerSec:                     parseFloat(dXKmPerSecEntry.Text),
-				DYKmPerSec:                     parseFloat(dYKmPerSecEntry.Text),
-				PathPerpendicularOffsetKm:      parseFloat(pathPerpendicularOffsetKmEntry.Text),
-				PercentMagDrop:                 parseInt(percentMagDropEntry.Text),
-				StarDiamOnPlaneMas:             parseFloat(starDiamOnPlaneMasEntry.Text),
-				LimbDarkeningCoeff:             parseFloat(limbDarkeningCoeffEntry.Text),
-				StarClass:                      starClassEntry.Text,
-				MainBody: EllipseParams{
-					XCenterKm:          parseFloat(mainBodyXCenterEntry.Text),
-					YCenterKm:          parseFloat(mainBodyYCenterEntry.Text),
-					MajorAxisKm:        parseFloat(mainBodyMajorAxisEntry.Text),
-					MinorAxisKm:        parseFloat(mainBodyMinorAxisEntry.Text),
-					MajorAxisPaDegrees: parseFloat(mainBodyPaDegreesEntry.Text),
-				},
-				Satellite: EllipseParams{
-					XCenterKm:          parseFloat(satelliteXCenterEntry.Text),
-					YCenterKm:          parseFloat(satelliteYCenterEntry.Text),
-					MajorAxisKm:        parseFloat(satelliteMajorAxisEntry.Text),
-					MinorAxisKm:        parseFloat(satelliteMinorAxisEntry.Text),
-					MajorAxisPaDegrees: parseFloat(satellitePaDegreesEntry.Text),
-				},
-				PathToExternalImage: pathToExternalImageEntry.Text,
-				ExposureTimeSecs:    0,
-				OccelmntXml:         dialogOccelmntXml,
-			}
-
-			// Marshal to JSON5
-			data, err := json5.Marshal(params)
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to encode parameters: %w", err), w)
-				return
-			}
-
-			// Indent the JSON5 output
-			var indented []byte
-			if err := json5.Indent(&indented, data, "", "  "); err != nil {
-				dialog.ShowError(fmt.Errorf("failed to format parameters: %w", err), w)
-				return
-			}
-			data = indented
-
-			// Write to the file with the enforced extension
-			if werr := os.WriteFile(savePath, data, 0644); werr != nil {
-				dialog.ShowError(fmt.Errorf("failed to write file: %w", werr), w)
-				return
-			}
-
-			logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
-
-			// Track the saved path so CSV-read autofill and future Browse defaults use it
-			lastLoadedParamsPath = savePath
-			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
-			loadedFileName = filepath.Base(savePath)
-			fileNameLabel.SetText("File being displayed:  " + loadedFileName)
-
-			// Persist QE file name so it autofills next time
-			if qe := pathToQeTableFileSelect.Selected; qe != "" {
-				prefs.SetString("stickyQeTableFile", qe)
-			}
-
-			// Re-snapshot so saved state is considered clean
-			for i, e := range allEntries {
-				initialValues[i] = e.Text
-			}
-			qeInitialValue = pathToQeTableFileSelect.Selected
-
-			// Close the parameters dialog after a successful save
-			customDialog.Hide()
-		}, w)
-		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
-		if loadedFileName != "" {
-			fileDialog.SetFileName(loadedFileName)
-		} else if title := strings.TrimSpace(titleEntry.Text); title != "" {
-			sanitized := strings.Map(func(r rune) rune {
-				if strings.ContainsRune(`\/:*?"<>|`, r) {
-					return '_'
-				}
-				return r
-			}, title)
-			fileDialog.SetFileName(sanitized + ".occparams")
-		}
-		// Always save to the OCCULTATION-PARAMETERS directory, creating it if needed
-		occParamsDir := filepath.Join(appDir, "OCCULTATION-PARAMETERS")
-		if merr := os.MkdirAll(occParamsDir, 0755); merr != nil {
-			dialog.ShowError(fmt.Errorf("failed to create OCCULTATION-PARAMETERS directory: %w", merr), w)
-			return
-		}
-		folderURI := storage.NewFileURI(occParamsDir)
-		if listableURI, locErr := storage.ListerForURI(folderURI); locErr == nil {
-			fileDialog.SetLocation(listableURI)
-		}
-		fileDialog.Resize(fyne.NewSize(1200, 800))
-		fileDialog.Show()
+		doSave()
 	})
 
 	showOccelmntBtn := widget.NewButton("Show associated occelmnt.xml", func() {
@@ -1073,9 +1088,19 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 	countryCodeEntry.SetPlaceHolder("e.g. US")
 	countryCodeContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(60, 36)), countryCodeEntry)
 
-	telescopeEntry := widget.NewEntry()
-	telescopeEntry.SetPlaceHolder("telescope description")
-	telescopeContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(220, 36)), telescopeEntry)
+	// Telescope dropdown
+	telescopeOpts := []string{"unstated", "1=Refractor", "2=Newtonian", "3=SCT", "4=Dobsonian", "5=Binoculars", "6=Other", "7=None", "8=eVscope"}
+	telescopeOptToVal := map[string]string{
+		"unstated": "", "1=Refractor": "1", "2=Newtonian": "2", "3=SCT": "3",
+		"4=Dobsonian": "4", "5=Binoculars": "5", "6=Other": "6", "7=None": "7", "8=eVscope": "8",
+	}
+	telescopeValToOpt := map[string]string{
+		"": "unstated", "1": "1=Refractor", "2": "2=Newtonian", "3": "3=SCT",
+		"4": "4=Dobsonian", "5": "5=Binoculars", "6": "6=Other", "7": "7=None", "8": "8=eVscope",
+	}
+	telescopeSelect := widget.NewSelect(telescopeOpts, nil)
+	telescopeSelect.SetSelected("unstated")
+	telescopeContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(220, 36)), telescopeSelect)
 
 	apertureEntry := widget.NewEntry()
 	apertureEntry.SetPlaceHolder("e.g. 80mm")
@@ -1085,13 +1110,33 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 	focalLengthEntry.SetPlaceHolder("e.g. 500mm")
 	focalLengthContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(90, 36)), focalLengthEntry)
 
-	observingMethodEntry := widget.NewEntry()
-	observingMethodEntry.SetPlaceHolder("e.g. video")
-	observingMethodContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), observingMethodEntry)
+	// Observing method dropdown
+	observingMethodOpts := []string{"unspecified", "a=Analogue & digital video", "b=Digital SLR-camera video", "c=Photometer", "d=Sequential images", "e=Drift scan", "f=Visual", "g=Other"}
+	observingMethodOptToVal := map[string]string{
+		"unspecified": "", "a=Analogue & digital video": "a", "b=Digital SLR-camera video": "b",
+		"c=Photometer": "c", "d=Sequential images": "d", "e=Drift scan": "e", "f=Visual": "f", "g=Other": "g",
+	}
+	observingMethodValToOpt := map[string]string{
+		"": "unspecified", "a": "a=Analogue & digital video", "b": "b=Digital SLR-camera video",
+		"c": "c=Photometer", "d": "d=Sequential images", "e": "e=Drift scan", "f": "f=Visual", "g": "g=Other",
+	}
+	observingMethodSelect := widget.NewSelect(observingMethodOpts, nil)
+	observingMethodSelect.SetSelected("unspecified")
+	observingMethodContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(250, 36)), observingMethodSelect)
 
-	timeSourceEntry := widget.NewEntry()
-	timeSourceEntry.SetPlaceHolder("e.g. GPS")
-	timeSourceContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), timeSourceEntry)
+	// Time source dropdown
+	timeSourceOpts := []string{"unspecified", "a=GPS", "b=NTP", "c=Telephone (fixed or mobile)", "d=Radio time signal", "e=Internal clock of recorder", "f=Stopwatch", "g=Other"}
+	timeSourceOptToVal := map[string]string{
+		"unspecified": "", "a=GPS": "a", "b=NTP": "b", "c=Telephone (fixed or mobile)": "c",
+		"d=Radio time signal": "d", "e=Internal clock of recorder": "e", "f=Stopwatch": "f", "g=Other": "g",
+	}
+	timeSourceValToOpt := map[string]string{
+		"": "unspecified", "a": "a=GPS", "b": "b=NTP", "c": "c=Telephone (fixed or mobile)",
+		"d": "d=Radio time signal", "e": "e=Internal clock of recorder", "f": "f=Stopwatch", "g": "g=Other",
+	}
+	timeSourceSelect := widget.NewSelect(timeSourceOpts, nil)
+	timeSourceSelect.SetSelected("unspecified")
+	timeSourceContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(250, 36)), timeSourceSelect)
 
 	cameraEntry := widget.NewEntry()
 	cameraEntry.SetPlaceHolder("camera model")
@@ -1139,11 +1184,11 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			addressEntry.SetText("")
 			nearestCityEntry.SetText("")
 			countryCodeEntry.SetText("")
-			telescopeEntry.SetText("")
+			telescopeSelect.SetSelected("unstated")
 			apertureEntry.SetText("")
 			focalLengthEntry.SetText("")
-			observingMethodEntry.SetText("")
-			timeSourceEntry.SetText("")
+			observingMethodSelect.SetSelected("unspecified")
+			timeSourceSelect.SetSelected("unspecified")
 			cameraEntry.SetText("")
 
 			// Parse the site file and fill the entry fields
@@ -1213,7 +1258,10 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 					continue
 				}
 				if strings.HasPrefix(line, "telescope:") {
-					telescopeEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "telescope:")))
+					val := strings.TrimSpace(strings.TrimPrefix(line, "telescope:"))
+					if opt, ok := telescopeValToOpt[val]; ok {
+						telescopeSelect.SetSelected(opt)
+					}
 					continue
 				}
 				if strings.HasPrefix(line, "aperture:") {
@@ -1225,11 +1273,17 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 					continue
 				}
 				if strings.HasPrefix(line, "observing_method:") {
-					observingMethodEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "observing_method:")))
+					val := strings.TrimSpace(strings.TrimPrefix(line, "observing_method:"))
+					if opt, ok := observingMethodValToOpt[val]; ok {
+						observingMethodSelect.SetSelected(opt)
+					}
 					continue
 				}
 				if strings.HasPrefix(line, "time_source:") {
-					timeSourceEntry.SetText(strings.TrimSpace(strings.TrimPrefix(line, "time_source:")))
+					val := strings.TrimSpace(strings.TrimPrefix(line, "time_source:"))
+					if opt, ok := timeSourceValToOpt[val]; ok {
+						timeSourceSelect.SetSelected(opt)
+					}
 					continue
 				}
 				if strings.HasPrefix(line, "camera:") {
@@ -1306,11 +1360,11 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			sb.WriteString("address: " + strings.TrimSpace(addressEntry.Text) + "\n")
 			sb.WriteString("nearest_city: " + strings.TrimSpace(nearestCityEntry.Text) + "\n")
 			sb.WriteString("country_code: " + strings.TrimSpace(countryCodeEntry.Text) + "\n")
-			sb.WriteString("telescope: " + strings.TrimSpace(telescopeEntry.Text) + "\n")
+			sb.WriteString("telescope: " + telescopeOptToVal[telescopeSelect.Selected] + "\n")
 			sb.WriteString("aperture: " + strings.TrimSpace(apertureEntry.Text) + "\n")
 			sb.WriteString("focal_length: " + strings.TrimSpace(focalLengthEntry.Text) + "\n")
-			sb.WriteString("observing_method: " + strings.TrimSpace(observingMethodEntry.Text) + "\n")
-			sb.WriteString("time_source: " + strings.TrimSpace(timeSourceEntry.Text) + "\n")
+			sb.WriteString("observing_method: " + observingMethodOptToVal[observingMethodSelect.Selected] + "\n")
+			sb.WriteString("time_source: " + timeSourceOptToVal[timeSourceSelect.Selected] + "\n")
 			sb.WriteString("camera: " + strings.TrimSpace(cameraEntry.Text) + "\n")
 			siteContent := sb.String()
 
@@ -4562,46 +4616,6 @@ func main() {
 			dialog.ShowError(fmt.Errorf("number of Monte Carlo trials must be a positive integer"), w)
 			return
 		}
-		// Re-sync candidate curves to the current UI search parameters when the
-		// step count has changed since the last Fit Search was run.
-		searchInitialMC := strings.TrimSpace(searchInitialOffsetEntry.Text)
-		searchFinalMC := strings.TrimSpace(searchFinalOffsetEntry.Text)
-		searchStepsMC := strings.TrimSpace(searchNumStepsEntry.Text)
-		if searchInitialMC != "" && searchFinalMC != "" && searchStepsMC != "" {
-			initValMC, err1 := strconv.ParseFloat(searchInitialMC, 64)
-			finalValMC, err2 := strconv.ParseFloat(searchFinalMC, 64)
-			stepsValMC, err3 := strconv.Atoi(searchStepsMC)
-			if err1 == nil && err2 == nil && err3 == nil && stepsValMC >= 1 && stepsValMC != len(lastFitCandidates) {
-				fmt.Printf("MC: candidate count mismatch (UI=%d, last fit=%d) — re-running fit search to sync\n", stepsValMC, len(lastFitCandidates))
-				paramsCopyMC := *lastFitParams
-				fitProgressBar.SetValue(0)
-				fitProgressBar.Show()
-				mcBtn.Disable()
-				fitAbortFlag.Store(false)
-				go func() {
-					fsr, resyncErr := runFitSearch(&paramsCopyMC, lastFitTargetTimes, lastFitTargetValues, initValMC, finalValMC, stepsValMC, &fitAbortFlag, func(p float64) {
-						fyne.Do(func() { fitProgressBar.SetValue(p) })
-					})
-					fyne.Do(func() {
-						fitProgressBar.Hide()
-						mcBtn.Enable()
-						if resyncErr != nil {
-							dialog.ShowError(fmt.Errorf("MC candidate re-sync failed: %v", resyncErr), w)
-							return
-						}
-						newCandidates := make([]*precomputedCurve, 0, len(fsr.results))
-						for _, sr := range fsr.results {
-							newCandidates = append(newCandidates, sr.pc)
-						}
-						lastFitCandidates = newCandidates
-						fmt.Printf("MC: re-sync complete — %d candidates ready\n", len(newCandidates))
-						mcBtn.Tapped(nil)
-					})
-				}()
-				return
-			}
-		}
-		fmt.Printf("MC: using %d candidates from last fit search\n", len(lastFitCandidates))
 		mcProgressBar.SetValue(0)
 		mcProgressBar.Show()
 		mcBtn.Disable()
