@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.47"
+const Version = "1.1.48"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2781,6 +2781,7 @@ func main() {
 				fmt.Printf("Warning: could not create log file: %v\n", err)
 			}
 			logAction(fmt.Sprintf("Loaded CSV with %d columns and %d data points", len(data.Columns), len(data.TimeValues)))
+			w.SetTitle("GoPyOTE Version: " + Version + " — " + filePath)
 
 			// Check if the timestamp column was empty (all zeros)
 			timestampsEmpty := true
