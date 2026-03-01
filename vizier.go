@@ -1512,7 +1512,7 @@ type sodisPreFill struct {
 	noiseSigma         float64    // baseline noise sigma — used for Signal/Noise (1/sigma)
 	csvExposureSecs    float64    // CSV-measured median exposure time — used for Exp_Time
 	observerT0         time.Time  // observer-corrected event time (zero = not available; use geocentric)
-	detailsEventTimeUT string     // "Event Time (UT)" from details file, e.g. "26 Feb 2026 20:27:55"; overrides calculated time when non-empty
+	detailsEventTimeUT string     // "Event Time (UT)" from the details file, e.g. "26 Feb 2026 20:27:55"; overrides calculated time when non-empty
 	vt                 *VizieRTab // VizieR tab — used to propagate the observer name when a site file loads
 }
 
@@ -1745,6 +1745,26 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 	}
 	var stabilitySelect *widget.Select
 
+	windOpts := []string{
+		"0=Calm (0-1 kts)", "1=Light Air (1-3 kts)", "2=Light Breeze (4-6 kts)", "3=Gentle Breeze (7-10 kts)",
+		"4=Moderate Breeze (11-16 kts)", "5=Fresh Breeze (17-21 kts)", "6=Strong Breeze (22-27 kts)",
+		"7=Near Gale (28-33 kts)", "8=Gale (34-40 kts)", "9=Severe Gale (41-47 kts)",
+		"10=Storm (48-55 kts)", "11=Violent Storm (56-63 kts)", "12=Hurricane (64-71 kts)",
+	}
+	windOptToVal := map[string]string{
+		"0=Calm (0-1 kts)": "0", "1=Light Air (1-3 kts)": "1", "2=Light Breeze (4-6 kts)": "2", "3=Gentle Breeze (7-10 kts)": "3",
+		"4=Moderate Breeze (11-16 kts)": "4", "5=Fresh Breeze (17-21 kts)": "5", "6=Strong Breeze (22-27 kts)": "6",
+		"7=Near Gale (28-33 kts)": "7", "8=Gale (34-40 kts)": "8", "9=Severe Gale (41-47 kts)": "9",
+		"10=Storm (48-55 kts)": "10", "11=Violent Storm (56-63 kts)": "11", "12=Hurricane (64-71 kts)": "12",
+	}
+	windValToOpt := map[string]string{
+		"0": "0=Calm (0-1 kts)", "1": "1=Light Air (1-3 kts)", "2": "2=Light Breeze (4-6 kts)", "3": "3=Gentle Breeze (7-10 kts)",
+		"4": "4=Moderate Breeze (11-16 kts)", "5": "5=Fresh Breeze (17-21 kts)", "6": "6=Strong Breeze (22-27 kts)",
+		"7": "7=Near Gale (28-33 kts)", "8": "8=Gale (34-40 kts)", "9": "9=Severe Gale (41-47 kts)",
+		"10": "10=Storm (48-55 kts)", "11": "11=Violent Storm (56-63 kts)", "12": "12=Hurricane (64-71 kts)",
+	}
+	var windSelect *widget.Select
+
 	transparencyOpts := []string{
 		"1=Clear", "2=Fog", "3=Thin cloud < 2 [mag loss < 2mag]",
 		"4=Thick cloud > 2 [mag loss > 2mag]", "5=Broken opaque cloud [that is, observed thru gaps in the cloud]",
@@ -1835,6 +1855,18 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 			})
 			stabilitySelect = sel
 			fi := widget.NewFormItem("Stability:", sel)
+			if item.hint != "" {
+				fi.HintText = item.hint
+			}
+			currentFormItems = append(currentFormItems, fi)
+		} else if item.name == "Wind" {
+			backingEntry := widget.NewEntry()
+			entries["Wind"] = backingEntry
+			sel := widget.NewSelect(windOpts, func(opt string) {
+				backingEntry.SetText(windOptToVal[opt])
+			})
+			windSelect = sel
+			fi := widget.NewFormItem("Wind:", sel)
 			if item.hint != "" {
 				fi.HintText = item.hint
 			}
@@ -2064,6 +2096,17 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 		}
 	}
 
+	// Default Transparency to 1=Clear, Stability (Seeing) to 1=Steady, and Wind to 0=Calm.
+	if transparencySelect != nil && transparencySelect.Selected == "" {
+		transparencySelect.SetSelected("1=Clear")
+	}
+	if stabilitySelect != nil && stabilitySelect.Selected == "" {
+		stabilitySelect.SetSelected("1=Steady")
+	}
+	if windSelect != nil && windSelect.Selected == "" {
+		windSelect.SetSelected("0=Calm (0-1 kts)")
+	}
+
 	scroll := container.NewVScroll(container.NewVBox(vboxContent...))
 	scroll.SetMinSize(fyne.NewSize(740, 500))
 
@@ -2147,6 +2190,14 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 				if e, ok := entries["Transparency"]; ok {
 					if opt, ok2 := transparencyValToOpt[strings.TrimSpace(e.Text)]; ok2 {
 						transparencySelect.SetSelected(opt)
+					}
+				}
+			}
+			// Sync Wind select from the backing entry
+			if windSelect != nil {
+				if e, ok := entries["Wind"]; ok {
+					if opt, ok2 := windValToOpt[strings.TrimSpace(e.Text)]; ok2 {
+						windSelect.SetSelected(opt)
 					}
 				}
 			}
