@@ -1502,17 +1502,18 @@ func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
 // sodisPreFill carries the current fit/MC/lightcurve/site data used to
 // pre-populate the SODIS report dialog. All fields are optional (zero = not available).
 type sodisPreFill struct {
-	fitResult       *fitResult
-	mcResult        *mcTrialsResult
-	fitParams       *OccultationParameters
-	lcData          *LightCurveData
-	occTitle        string     // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
-	sitePath        string     // path to the last-loaded .site file
-	occelmntXml     string     // raw occelmnt XML text — first <Star> CSV field used for #STAR
-	noiseSigma      float64    // baseline noise sigma — used for Signal/Noise (1/sigma)
-	csvExposureSecs float64    // CSV-measured median exposure time — used for Exp_Time
-	observerT0      time.Time  // observer-corrected event time (zero = not available; use geocentric)
-	vt              *VizieRTab // VizieR tab — used to propagate the observer name when a site file loads
+	fitResult          *fitResult
+	mcResult           *mcTrialsResult
+	fitParams          *OccultationParameters
+	lcData             *LightCurveData
+	occTitle           string     // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
+	sitePath           string     // path to the last-loaded .site file
+	occelmntXml        string     // raw occelmnt XML text — first <Star> CSV field used for #STAR
+	noiseSigma         float64    // baseline noise sigma — used for Signal/Noise (1/sigma)
+	csvExposureSecs    float64    // CSV-measured median exposure time — used for Exp_Time
+	observerT0         time.Time  // observer-corrected event time (zero = not available; use geocentric)
+	detailsEventTimeUT string     // "Event Time (UT)" from details file, e.g. "26 Feb 2026 20:27:55"; overrides calculated time when non-empty
+	vt                 *VizieRTab // VizieR tab — used to propagate the observer name when a site file loads
 }
 
 // formatSecondsForSODIS formats total seconds as HH:MM:SS.sss (3 decimal places),
@@ -1990,6 +1991,18 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 						}
 					}
 				}
+			}
+		}
+
+		// Details file Event Time (UT) overrides any calculated PREDICTTIME.
+		if fill.detailsEventTimeUT != "" {
+			monthAbbrevs := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+			if t, perr := time.Parse("02 Jan 2006 15:04:05", fill.detailsEventTimeUT); perr == nil {
+				val := fmt.Sprintf("%02d %s; %02d:%02d:%02d UT",
+					t.Day(), monthAbbrevs[t.Month()], t.Hour(), t.Minute(), t.Second())
+				setEntry("PREDICTTIME", val)
+			} else {
+				setEntry("PREDICTTIME", fill.detailsEventTimeUT)
 			}
 		}
 

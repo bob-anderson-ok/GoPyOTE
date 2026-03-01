@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.50"
+const Version = "1.1.51"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -5041,18 +5041,46 @@ func main() {
 				computedObserverT0 = obsT0
 			}
 		}
+		// Read "Event Time (UT)" from the details file if present.
+		var detailsEventTimeUT string
+		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
+			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
+			if dirEntries, derr := os.ReadDir(obsDir); derr == nil {
+				for _, entry := range dirEntries {
+					if !entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "detail") {
+						if fileData, rerr := os.ReadFile(filepath.Join(obsDir, entry.Name())); rerr == nil {
+							reader := csv.NewReader(bytes.NewReader(fileData))
+							reader.FieldsPerRecord = -1
+							reader.TrimLeadingSpace = true
+							for {
+								record, rerr2 := reader.Read()
+								if rerr2 != nil {
+									break
+								}
+								if len(record) >= 2 && strings.TrimSpace(record[0]) == "Event Time (UT)" && strings.TrimSpace(record[1]) != "" {
+									detailsEventTimeUT = strings.TrimSpace(record[1])
+									break
+								}
+							}
+						}
+						break
+					}
+				}
+			}
+		}
 		showSodisReportDialog(w, &sodisPreFill{
-			fitResult:       lastFitResult,
-			mcResult:        lastMCResult,
-			fitParams:       lastFitParams,
-			lcData:          loadedLightCurveData,
-			occTitle:        occTitle,
-			sitePath:        lastLoadedSitePath,
-			occelmntXml:     lastLoadedOccelmntXml,
-			noiseSigma:      noiseSigma,
-			csvExposureSecs: lastCsvExposureSecs,
-			observerT0:      computedObserverT0,
-			vt:              vizierTab,
+			fitResult:          lastFitResult,
+			mcResult:           lastMCResult,
+			fitParams:          lastFitParams,
+			lcData:             loadedLightCurveData,
+			occTitle:           occTitle,
+			sitePath:           lastLoadedSitePath,
+			occelmntXml:        lastLoadedOccelmntXml,
+			noiseSigma:         noiseSigma,
+			csvExposureSecs:    lastCsvExposureSecs,
+			observerT0:         computedObserverT0,
+			detailsEventTimeUT: detailsEventTimeUT,
+			vt:                 vizierTab,
 		}, func() {
 			fillSodisBtn.Importance = widget.WarningImportance
 			fillSodisBtn.Refresh()
