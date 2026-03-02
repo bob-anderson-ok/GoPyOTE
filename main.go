@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.52"
+const Version = "1.1.53"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -97,6 +97,11 @@ var lastDiffractionTitle string
 // resultsFolder is the path to the -RESULTS folder created alongside the opened CSV file.
 // Various outputs (fit plots, histograms, etc.) are written here.
 var resultsFolder string
+
+// afterOccParamsSaved, when non-nil, is called with the saved file path immediately after
+// showOccultationParametersDialog successfully writes a new .occparams file.
+// Assigned in main() once all UI elements needed by IOTAdiffraction are initialized.
+var afterOccParamsSaved func(string)
 
 // appDir is the directory containing the executable. Used to resolve relative file paths
 // (diffraction images, IOTAdiffraction.exe, etc.) regardless of the OS working directory.
@@ -279,7 +284,7 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *OccultationParameters, obsDir string) {
 	// Build dropdown choices from files in the CAMERA-QE folder
 	cameraQEDir := filepath.Join(appDir, "CAMERA-QE")
-	var qeFileNames []string
+	qeFileNames := []string{"(none)"}
 	if dirEntries, err := os.ReadDir(cameraQEDir); err == nil {
 		for _, entry := range dirEntries {
 			if !entry.IsDir() {
@@ -296,14 +301,20 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 	parallaxArcsecEntry := widget.NewEntry()
 	distanceAuEntry := widget.NewEntry()
 	pathToQeTableFileSelect := widget.NewSelect(qeFileNames, nil)
-	pathToQeTableFileSelect.PlaceHolder = "(none)"
 	// setQeSelected sets the dropdown from a stored path (may include CAMERA-QE/ prefix)
 	setQeSelected := func(path string) {
 		if path == "" {
-			pathToQeTableFileSelect.ClearSelected()
+			pathToQeTableFileSelect.SetSelected("(none)")
 			return
 		}
 		pathToQeTableFileSelect.SetSelected(filepath.Base(path))
+	}
+	// getQeSelected returns the selected QE file name, or "" when "(none)" is chosen.
+	getQeSelected := func() string {
+		if pathToQeTableFileSelect.Selected == "(none)" {
+			return ""
+		}
+		return pathToQeTableFileSelect.Selected
 	}
 	observationWavelengthNmEntry := widget.NewEntry()
 	dXKmPerSecEntry := widget.NewEntry()
@@ -633,7 +644,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 					FundamentalPlaneWidthNumPoints: parseInt(fundamentalPlaneWidthNumPointsEntry.Text),
 					ParallaxArcsec:                 parseFloat(parallaxArcsecEntry.Text),
 					DistanceAu:                     parseFloat(distanceAuEntry.Text),
-					PathToQeTableFile:              pathToQeTableFileSelect.Selected,
+					PathToQeTableFile:              getQeSelected(),
 					ObservationWavelengthNm:        parseInt(observationWavelengthNmEntry.Text),
 					DXKmPerSec:                     parseFloat(dXKmPerSecEntry.Text),
 					DYKmPerSec:                     parseFloat(dYKmPerSecEntry.Text),
@@ -691,7 +702,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
 
 				// Persist QE file name so it autofills next time
-				if qe := pathToQeTableFileSelect.Selected; qe != "" {
+				if qe := getQeSelected(); qe != "" {
 					prefs.SetString("stickyQeTableFile", qe)
 				}
 
@@ -703,6 +714,9 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 
 				// Close the parameters dialog after a successful save
 				customDialog.Hide()
+				if afterOccParamsSaved != nil {
+					afterOccParamsSaved(savePath)
+				}
 				return
 			}
 
@@ -743,7 +757,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 					FundamentalPlaneWidthNumPoints: parseInt(fundamentalPlaneWidthNumPointsEntry.Text),
 					ParallaxArcsec:                 parseFloat(parallaxArcsecEntry.Text),
 					DistanceAu:                     parseFloat(distanceAuEntry.Text),
-					PathToQeTableFile:              pathToQeTableFileSelect.Selected,
+					PathToQeTableFile:              getQeSelected(),
 					ObservationWavelengthNm:        parseInt(observationWavelengthNmEntry.Text),
 					DXKmPerSec:                     parseFloat(dXKmPerSecEntry.Text),
 					DYKmPerSec:                     parseFloat(dYKmPerSecEntry.Text),
@@ -801,7 +815,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 				fileNameLabel.SetText("File being displayed:  " + loadedFileName)
 
 				// Persist QE file name so it autofills next time
-				if qe := pathToQeTableFileSelect.Selected; qe != "" {
+				if qe := getQeSelected(); qe != "" {
 					prefs.SetString("stickyQeTableFile", qe)
 				}
 
@@ -813,6 +827,9 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 
 				// Close the parameters dialog after a successful save
 				customDialog.Hide()
+				if afterOccParamsSaved != nil {
+					afterOccParamsSaved(savePath)
+				}
 			}, w)
 			fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))
 			if loadedFileName != "" {
@@ -1521,7 +1538,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			if infoMsg != "" {
 				infoMsg += "\n\n"
 			}
-			infoMsg += fmt.Sprintf("Fresnel scale: %.4f km (%.1f m)\n\nWavelength: %.0f nm\nDistance: %.4f AU",
+			infoMsg += fmt.Sprintf("Fresnel scale: %.4f km (%.1f meters)\n\nWavelength: %.0f nm\nDistance: %.4f AU",
 				fresnelKm, fresnelM, wavelength, params.DistanceAu)
 			if params.FundamentalPlaneWidthKm > 0 && params.FundamentalPlaneWidthNumPoints > 0 {
 				samplesPerFresnel := int(float64(params.FundamentalPlaneWidthNumPoints) * fresnelKm / params.FundamentalPlaneWidthKm)
@@ -2785,6 +2802,9 @@ func main() {
 	// (HighImportance) color. Assigned after the buttons are created below.
 	var resetFitButtons func()
 
+	// resetIOTABtn disables the Run IOTAdiffraction button. Assigned after the button is created.
+	var resetIOTABtn func()
+
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
 		showFileOpenWithRecents(w, prefs, "Select OBS folder then select the light curve csv file", nil, func(reader fyne.URIReadCloser, err error) {
@@ -2831,11 +2851,13 @@ func main() {
 			if resetFitButtons != nil {
 				resetFitButtons()
 			}
-			startupOverlay.Hide()
-			if !reuseImageCheck.Checked && !iotaRanSuccessfully {
-				dialog.ShowInformation("IOTAdiffraction reminder",
-					"Remember to run IOTAdiffraction before proceeding with Fit.", w)
+			if resetIOTABtn != nil {
+				resetIOTABtn()
 			}
+			startupOverlay.Hide()
+			dialog.ShowInformation("Next step",
+				"Use the \"Process occelmnt file\" button to create or update\n"+
+					"the occultation parameters for this observation.", w)
 
 			// Create an action log file for this CSV
 			if err := createActionLog(filePath); err != nil {
@@ -4024,6 +4046,126 @@ func main() {
 			vizierTab.OutputFolderEntry.Text, vizierTab.StatusLabel)
 	}
 
+	// Set up the Preview submission button callback
+	vizierTab.PreviewBtn.OnTapped = func() {
+		// Validate all fields - must be complete before preview/generate.
+		if _, _, _, err := vizierTab.ValidateInputs(w); err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+
+		// Check for loaded data.
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		// Determine the active frame range.
+		dataMinFrame := loadedLightCurveData.FrameNumbers[0]
+		dataMaxFrame := loadedLightCurveData.FrameNumbers[len(loadedLightCurveData.FrameNumbers)-1]
+		rangeStart := int(frameRangeStart)
+		rangeEnd := int(frameRangeEnd)
+		if rangeStart == 0 {
+			rangeStart = int(dataMinFrame)
+		}
+		if rangeEnd == 0 {
+			rangeEnd = int(dataMaxFrame)
+		}
+
+		// Find start/end indices.
+		startIdx := 0
+		endIdx := len(loadedLightCurveData.FrameNumbers) - 1
+		foundStart := false
+		for i, frameNum := range loadedLightCurveData.FrameNumbers {
+			if int(frameNum) >= rangeStart && !foundStart {
+				startIdx = i
+				foundStart = true
+			}
+			if int(frameNum) <= rangeEnd {
+				endIdx = i
+			}
+		}
+
+		// Find the signal column (same logic as generateVizieRFile).
+		var valueColumn []float64
+		for _, col := range loadedLightCurveData.Columns {
+			if strings.HasPrefix(col.Name, "signal") {
+				valueColumn = col.Values
+				break
+			}
+		}
+		if valueColumn == nil && len(loadedLightCurveData.Columns) > 0 {
+			valueColumn = loadedLightCurveData.Columns[0].Values
+		}
+		if valueColumn == nil {
+			dialog.ShowError(fmt.Errorf("no data columns available"), w)
+			return
+		}
+
+		// Compute VizieR scale factor (normalise to 0–9524).
+		maxValue := 0.0
+		for i := startIdx; i <= endIdx; i++ {
+			if !isInterpolatedIndex(i) && valueColumn[i] > maxValue {
+				maxValue = valueColumn[i]
+			}
+		}
+		scaleFactor := 9524.0 / maxValue
+		if maxValue == 0 {
+			scaleFactor = 1.0
+		}
+
+		// Build per-point slices for the submission range.
+		numPts := endIdx - startIdx + 1
+		timestamps := make([]float64, numPts)
+		scaledValues := make([]int, numPts)
+		dropped := make([]bool, numPts)
+		for j := 0; j < numPts; j++ {
+			idx := startIdx + j
+			timestamps[j] = loadedLightCurveData.TimeValues[idx]
+			if isInterpolatedIndex(idx) {
+				dropped[j] = true
+			} else {
+				scaledValues[j] = int(valueColumn[idx] * scaleFactor)
+			}
+		}
+
+		// Build plot title.
+		plotTitle := fmt.Sprintf("VizieR Preview — Asteroid %s (%s)",
+			vizierTab.AsteroidNumberEntry.Text, vizierTab.AsteroidNameEntry.Text)
+
+		// Create the scaled light-curve plot.
+		plotImg, err := createVizieRPreviewPlotImage(timestamps, scaledValues, dropped, plotTitle, 1100, 500)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to create preview plot: %w", err), w)
+			return
+		}
+
+		// Save the preview plot PNG to the results' folder.
+		if resultsFolder != "" {
+			var pngBuf bytes.Buffer
+			if encErr := png.Encode(&pngBuf, plotImg); encErr == nil {
+				savePath := filepath.Join(resultsFolder, "vizierPreviewPlot.png")
+				if werr := os.WriteFile(savePath, pngBuf.Bytes(), 0644); werr != nil {
+					fmt.Printf("Warning: could not save VizieR preview plot: %v\n", werr)
+				} else {
+					logAction("Saved VizieR preview plot: " + savePath)
+				}
+			}
+		}
+
+		// Show the plot in a new window.
+		previewWin := a.NewWindow("VizieR Submission Preview")
+		plotCanvas := canvas.NewImageFromImage(plotImg)
+		plotCanvas.FillMode = canvas.ImageFillOriginal
+		previewWin.SetContent(container.NewScroll(plotCanvas))
+		previewWin.Resize(fyne.NewSize(1150, 550))
+		previewWin.CenterOnScreen()
+		previewWin.Show()
+
+		// Enable the Generate button now that the user has previewed the submission.
+		vizierTab.GenerateBtn.Enable()
+	}
+
 	// Set up a Zip button callback
 	vizierTab.ZipBtn.OnTapped = func() {
 		zipDatFiles(w, vizierTab.OutputFolderEntry.Text, vizierTab.StatusLabel)
@@ -4554,6 +4696,7 @@ func main() {
 								for _, sr := range fsr.results {
 									lastFitCandidates = append(lastFitCandidates, sr.pc)
 								}
+								logAction(fmt.Sprintf("Fit search: %d of %d path offset steps succeeded, %d candidate curves saved for Monte Carlo", len(fsr.results), stepsVal, len(lastFitCandidates)))
 								lastFitTargetTimes = targetTimes
 								lastFitTargetValues = targetValues
 								fitBtn.Importance = widget.WarningImportance
@@ -4616,6 +4759,18 @@ func main() {
 			dialog.ShowError(fmt.Errorf("number of Monte Carlo trials must be a positive integer"), w)
 			return
 		}
+		// Capture all fit state on the main thread before launching the goroutine.
+		// This ensures MC always uses the candidates and fit result that were in
+		// place when the user clicked Run Monte Carlo, regardless of any concurrent
+		// changes (e.g., a new fit started during the MC run).
+		mcCandidates := lastFitCandidates
+		mcFitResult := lastFitResult
+		mcFitParams := lastFitParams
+		mcTargetTimes := lastFitTargetTimes
+		mcTargetValues := lastFitTargetValues
+		mcNoiseSigma := noiseSigma
+		mcTitle := lastDiffractionTitle
+		logAction(fmt.Sprintf("Run Monte Carlo: %d candidate curves from fit search, noise sigma=%.6f", len(mcCandidates), mcNoiseSigma))
 		mcProgressBar.SetValue(0)
 		mcProgressBar.Show()
 		mcBtn.Disable()
@@ -4628,7 +4783,7 @@ func main() {
 			// before the Show() calls above have been rendered, making the progress bar
 			// and Abort button appear to never show up (rare race condition).
 			time.Sleep(32 * time.Millisecond)
-			result, err := runMonteCarloTrials(lastFitCandidates, lastFitResult, noiseSigma, numTrials, &mcAbortFlag, func(progress float64) {
+			result, err := runMonteCarloTrials(mcCandidates, mcFitResult, mcNoiseSigma, numTrials, &mcAbortFlag, func(progress float64) {
 				fyne.Do(func() {
 					mcProgressBar.SetValue(progress)
 				})
@@ -4645,13 +4800,13 @@ func main() {
 				mcBtn.Importance = widget.WarningImportance
 				mcBtn.Refresh()
 				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
-				for i := 0; i < result.numEdges && i < len(lastFitResult.edgeTimes); i++ {
-					absTime := lastFitResult.edgeTimes[i] + lastFitResult.bestShift
+				for i := 0; i < result.numEdges && i < len(mcFitResult.edgeTimes); i++ {
+					absTime := mcFitResult.edgeTimes[i] + mcFitResult.bestShift
 					ts := formatSecondsAsTimestamp(absTime)
 					msg += fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)\n", i+1, ts, 3*result.edgeStds[i])
 				}
 				if result.numEdges == 2 {
-					fitDuration := math.Abs(lastFitResult.edgeTimes[1] - lastFitResult.edgeTimes[0])
+					fitDuration := math.Abs(mcFitResult.edgeTimes[1] - mcFitResult.edgeTimes[0])
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
 					msg += fmt.Sprintf("\n  Duration: %.4f +/- %.4f sec (3 sigma)\n", fitDuration, 3*durationStd)
 				}
@@ -4670,17 +4825,17 @@ func main() {
 
 				// Final report: fit edge times (as timestamps) with MC uncertainty
 				logAction("--- Final Report ---")
-				logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", lastFitResult.bestNCC, lastFitParams.PathPerpendicularOffsetKm))
-				if lastFitResult.bestScale > 0 {
-					logAction(fmt.Sprintf("  Percent drop: %.2f%%", lastFitResult.bestScale*100.0))
+				logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", mcFitResult.bestNCC, mcFitParams.PathPerpendicularOffsetKm))
+				if mcFitResult.bestScale > 0 {
+					logAction(fmt.Sprintf("  Percent drop: %.2f%%", mcFitResult.bestScale*100.0))
 				}
 				if lastCsvExposureSecs > 0 {
 					logAction(fmt.Sprintf("  Camera exposure time: %.6f seconds", lastCsvExposureSecs))
 				} else {
 					logAction("  Camera exposure time: not set")
 				}
-				for i, et := range lastFitResult.edgeTimes {
-					absTime := et + lastFitResult.bestShift
+				for i, et := range mcFitResult.edgeTimes {
+					absTime := et + mcFitResult.bestShift
 					ts := formatSecondsAsTimestamp(absTime)
 					if i < result.numEdges {
 						logAction(fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)", i+1, ts, 3*result.edgeStds[i]))
@@ -4688,8 +4843,8 @@ func main() {
 						logAction(fmt.Sprintf("  Edge %d: %s", i+1, ts))
 					}
 				}
-				if len(lastFitResult.edgeTimes) == 2 && result.numEdges == 2 {
-					fitDuration := math.Abs((lastFitResult.edgeTimes[1] + lastFitResult.bestShift) - (lastFitResult.edgeTimes[0] + lastFitResult.bestShift))
+				if len(mcFitResult.edgeTimes) == 2 && result.numEdges == 2 {
+					fitDuration := math.Abs((mcFitResult.edgeTimes[1] + mcFitResult.bestShift) - (mcFitResult.edgeTimes[0] + mcFitResult.bestShift))
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
 					logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec (3 sigma)", fitDuration, 3*durationStd))
 				}
@@ -4742,7 +4897,7 @@ func main() {
 							result.edgeAll[i],
 							fmt.Sprintf("Edge %d Times", i+1),
 							"Time (seconds)",
-							lastDiffractionTitle,
+							mcTitle,
 							900, 500,
 						)
 						if err != nil {
@@ -4769,7 +4924,7 @@ func main() {
 							durations,
 							"Event Duration",
 							"Duration (seconds)",
-							lastDiffractionTitle,
+							mcTitle,
 							900, 500,
 						)
 						if err != nil {
@@ -4792,27 +4947,27 @@ func main() {
 				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
 				// Create a fit overlay plot with ±3σ edge uncertainty lines, using the
 				// scale-adjusted theoretical curve (bestScale from the post-fit scale search).
-				if len(lastFitTargetTimes) > 0 && len(lastFitTargetValues) > 0 {
-					mcScale := lastFitResult.bestScale
+				if len(mcTargetTimes) > 0 && len(mcTargetValues) > 0 {
+					mcScale := mcFitResult.bestScale
 					if mcScale == 0 {
 						mcScale = 1.0
 					}
-					mcScaledCurve := make([]timeIntensityPoint, len(lastFitResult.curve))
-					for i, pt := range lastFitResult.curve {
+					mcScaledCurve := make([]timeIntensityPoint, len(mcFitResult.curve))
+					for i, pt := range mcFitResult.curve {
 						mcScaledCurve[i] = timeIntensityPoint{
 							time:      pt.time,
 							intensity: pt.intensity*mcScale + (1.0 - mcScale),
 						}
 					}
-					mcScaledSampledVals := make([]float64, len(lastFitResult.sampledVals))
-					for i, v := range lastFitResult.sampledVals {
+					mcScaledSampledVals := make([]float64, len(mcFitResult.sampledVals))
+					for i, v := range mcFitResult.sampledVals {
 						mcScaledSampledVals[i] = v*mcScale + (1.0 - mcScale)
 					}
 					mcOverlayImg, err := createOverlayPlotImage(
-						mcScaledCurve, lastFitResult.bestShift, lastFitResult.edgeTimes,
-						lastFitTargetTimes, lastFitTargetValues,
-						lastFitResult.sampledTimes, mcScaledSampledVals,
-						lastFitResult.bestNCC, lastDiffractionTitle,
+						mcScaledCurve, mcFitResult.bestShift, mcFitResult.edgeTimes,
+						mcTargetTimes, mcTargetValues,
+						mcFitResult.sampledTimes, mcScaledSampledVals,
+						mcFitResult.bestNCC, mcTitle,
 						1200, 500, result.edgeStds,
 					)
 					if err != nil {
@@ -4843,7 +4998,7 @@ func main() {
 					theoryPoints := make([]PlotPoint, len(mcScaledCurve))
 					for i, pt := range mcScaledCurve {
 						theoryPoints[i] = PlotPoint{
-							X:     pt.time + lastFitResult.bestShift,
+							X:     pt.time + mcFitResult.bestShift,
 							Y:     pt.intensity,
 							Index: -1,
 						}
@@ -4854,15 +5009,15 @@ func main() {
 						Name:     "Theoretical (fit)",
 						LineOnly: true,
 					}
-					edgeXVals := make([]float64, len(lastFitResult.edgeTimes))
-					for i, et := range lastFitResult.edgeTimes {
-						edgeXVals[i] = et + lastFitResult.bestShift
+					edgeXVals := make([]float64, len(mcFitResult.edgeTimes))
+					for i, et := range mcFitResult.edgeTimes {
+						edgeXVals[i] = et + mcFitResult.bestShift
 					}
 					lightCurvePlot.SetVerticalLines(edgeXVals, true)
 					var sigmaXVals []float64
-					for i, et := range lastFitResult.edgeTimes {
+					for i, et := range mcFitResult.edgeTimes {
 						if i < len(result.edgeStds) {
-							edgeX := et + lastFitResult.bestShift
+							edgeX := et + mcFitResult.bestShift
 							sigma3 := 3.0 * result.edgeStds[i]
 							sigmaXVals = append(sigmaXVals, edgeX-sigma3, edgeX+sigma3)
 						}
@@ -5374,67 +5529,52 @@ func main() {
 		}()
 	}
 
+	// useParamFile sets up a global state and runs IOTAdiffraction with the given .occparams file.
+	// Extracted here (rather than inside btnIOTA) so it can also be triggered automatically
+	// when the parameters dialog saves a new file.
+	useParamFile := func(paramFilePath string) {
+		logAction(fmt.Sprintf("Running IOTAdiffraction with parameters file: %s", paramFilePath))
+		lastDiffractionParamsPath = paramFilePath
+		prefs.SetString("lastDiffractionParamsPath", paramFilePath)
+		// Extract title and embedded occelmnt XML from the parameters file
+		lastDiffractionTitle = ""
+		if f, err := os.Open(paramFilePath); err == nil {
+			if p, err := parseOccultationParameters(f); err == nil {
+				lastDiffractionTitle = p.Title
+				if p.OccelmntXml != "" {
+					lastLoadedOccelmntXml = p.OccelmntXml
+					prefs.SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
+					vizierTab.FillStarFromOccelmntXml(lastLoadedOccelmntXml)
+				}
+			}
+			if err := f.Close(); err != nil {
+				fmt.Printf("Warning: failed to close parameters file: %v\n", err)
+			}
+		}
+		prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
+		// Fill VizieR Number and Name entries from title (e.g. "(2731) Cucula" → "2731", "Cucula")
+		if strings.HasPrefix(lastDiffractionTitle, "(") {
+			if end := strings.Index(lastDiffractionTitle, ")"); end > 0 {
+				if num := strings.TrimSpace(lastDiffractionTitle[1:end]); num != "" {
+					vizierTab.AsteroidNumberEntry.SetText(num)
+				}
+				if name := strings.TrimSpace(lastDiffractionTitle[end+1:]); name != "" {
+					vizierTab.AsteroidNameEntry.SetText(name)
+				}
+			}
+		}
+		runIOTAdiffraction(paramFilePath)
+	}
+	afterOccParamsSaved = useParamFile
+
 	btnIOTA := widget.NewButton("Run IOTAdiffraction", func() {
-		// useParamFile runs IOTAdiffraction with the given .occparams file path
-		useParamFile := func(paramFilePath string) {
-			logAction(fmt.Sprintf("Running IOTAdiffraction with parameters file: %s", paramFilePath))
-			lastDiffractionParamsPath = paramFilePath
-			prefs.SetString("lastDiffractionParamsPath", paramFilePath)
-			// Extract title and embedded occelmnt XML from the parameters file
-			lastDiffractionTitle = ""
-			if f, err := os.Open(paramFilePath); err == nil {
-				if p, err := parseOccultationParameters(f); err == nil {
-					lastDiffractionTitle = p.Title
-					if p.OccelmntXml != "" {
-						lastLoadedOccelmntXml = p.OccelmntXml
-						prefs.SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
-						vizierTab.FillStarFromOccelmntXml(lastLoadedOccelmntXml)
-					}
-				}
-				if err := f.Close(); err != nil {
-					fmt.Printf("Warning: failed to close parameters file: %v\n", err)
-				}
-			}
-			prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
-			// Fill VizieR Number and Name entries from title (e.g. "(2731) Cucula" → "2731", "Cucula")
-			if strings.HasPrefix(lastDiffractionTitle, "(") {
-				if end := strings.Index(lastDiffractionTitle, ")"); end > 0 {
-					if num := strings.TrimSpace(lastDiffractionTitle[1:end]); num != "" {
-						vizierTab.AsteroidNumberEntry.SetText(num)
-					}
-					if name := strings.TrimSpace(lastDiffractionTitle[end+1:]); name != "" {
-						vizierTab.AsteroidNameEntry.SetText(name)
-					}
-				}
-			}
-			runIOTAdiffraction(paramFilePath)
-		}
-
-		// Auto-detect a .occparams file in the current observation folder
-		if loadedLightCurveData != nil {
-			if srcPath := loadedLightCurveData.SourceFilePath; srcPath != "" {
-				obsDir := filepath.Dir(srcPath)
-				if entries, err := os.ReadDir(obsDir); err == nil {
-					for _, entry := range entries {
-						if !entry.IsDir() && strings.ToLower(filepath.Ext(entry.Name())) == ".occparams" {
-							useParamFile(filepath.Join(obsDir, entry.Name()))
-							return
-						}
-					}
-					// No .occparams found in the obs folder-prompt the user to create one
-					dialog.ShowInformation("No .occparams file found",
-						"No .occparams file was found in the current observation folder.\n\n"+
-							"Use the \"Process occelmnt file\" button to create one.", w)
-					return
-				}
-			}
-		}
-
-		// No CSV loaded - tell the user to load one first
-		dialog.ShowInformation("No light curve loaded",
-			"A light curve CSV must be opened before running IOTAdiffraction.\n\n"+
-				"Click on the Open browser to select csv file button and select a light curve file.", w)
+		dialog.ShowInformation("Use the Process OWC button",
+			"To run IOTAdiffraction, use the \"Process OWC\" button to create or edit\n"+
+				"an occultation parameters file. IOTAdiffraction will run automatically\n"+
+				"when you save the file.", w)
 	})
+	btnIOTA.Disable()
+	resetIOTABtn = func() { btnIOTA.Disable() }
 	btnOccultParams := widget.NewButton("Edit Occultation Parameters", func() {
 		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
 			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
@@ -5477,6 +5617,7 @@ func main() {
 				}
 			}
 		}
+		btnIOTA.Enable()
 		showProcessOccelemntDialog(w, vizierTab, autoXml)
 	})
 	btnShowDetails := widget.NewButton("Show details file", func() {

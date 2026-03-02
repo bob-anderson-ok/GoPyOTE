@@ -3,9 +3,12 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"encoding/xml"
 	"fmt"
+	"image"
 	"image/color"
+	"image/png"
 	"io"
 	"math"
 	"os"
@@ -22,6 +25,11 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 	"github.com/xuri/excelize/v2"
+	"gonum.org/v1/plot"
+	"gonum.org/v1/plot/plotter"
+	"gonum.org/v1/plot/vg"
+	"gonum.org/v1/plot/vg/draw"
+	"gonum.org/v1/plot/vg/vgimg"
 )
 
 // VizieRTab holds all the widgets for the VizieR export tab
@@ -61,6 +69,9 @@ type VizieRTab struct {
 
 	// Generate button (exposed so the callback can be set from main)
 	GenerateBtn *widget.Button
+
+	// Preview button (exposed so the callback can be set from main)
+	PreviewBtn *widget.Button
 
 	// Zip button for zipping .dat files
 	ZipBtn *widget.Button
@@ -161,6 +172,11 @@ func NewVizieRTab() *VizieRTab {
 
 	// Generate button (callback set later via SetGenerateCallback)
 	vt.GenerateBtn = widget.NewButton("Generate VizieR .dat file", func() {})
+	vt.GenerateBtn.Disable()
+
+	// Preview button (callback set later from main)
+	vt.PreviewBtn = widget.NewButton("Preview submission", func() {})
+	vt.PreviewBtn.Importance = widget.HighImportance
 
 	// Clear inputs button
 	clearBtn := widget.NewButton("Clear inputs", func() {
@@ -197,7 +213,7 @@ func NewVizieRTab() *VizieRTab {
 		widget.NewSeparator(),
 		container.NewHBox(widget.NewLabel("Output folder:"), outputFolderContainer),
 		widget.NewSeparator(),
-		container.NewHBox(vt.GenerateBtn, vt.ZipBtn),
+		container.NewHBox(vt.PreviewBtn, vt.GenerateBtn, vt.ZipBtn),
 		container.NewHBox(clearBtn, vt.LoadXlsxBtn, vt.LoadSodisBtn),
 		widget.NewSeparator(),
 		vt.StatusLabel,
@@ -2360,4 +2376,122 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 	dlg = dialog.NewCustomWithoutButtons("Fill SODIS Report", content, w)
 	dlg.Resize(fyne.NewSize(800, 650))
 	dlg.Show()
+}
+
+// createVizieRPreviewPlotImage creates a plot image showing the light curve
+// as it will appear when submitted to VizieR (scaled to 0–9524 range).
+// timestamps and scaledValues are parallel slices for the submission range.
+// dropped[i] == true means that the frame is interpolated/missing and should be
+// rendered as a gap in the line.
+func createVizieRPreviewPlotImage(
+	timestamps []float64, scaledValues []int, dropped []bool,
+	title string, plotWidth, plotHeight int,
+) (image.Image, error) {
+	plt := plot.New()
+	if grayPlotBackground {
+		plt.BackgroundColor = plotBackgroundGray
+	}
+
+	plt.Title.TextStyle.Font.Typeface = "Liberation"
+	plt.Title.TextStyle.Font.Variant = "Sans"
+	plt.Title.TextStyle.Font.Size = vg.Points(14)
+	plt.Title.TextStyle.Font.Weight = 2
+
+	plt.X.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.X.Label.TextStyle.Font.Variant = "Sans"
+	plt.X.Label.TextStyle.Font.Size = vg.Points(11)
+
+	plt.Y.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.Y.Label.TextStyle.Font.Variant = "Sans"
+	plt.Y.Label.TextStyle.Font.Size = vg.Points(11)
+
+	plt.X.Tick.Label.Font.Typeface = "Liberation"
+	plt.X.Tick.Label.Font.Variant = "Sans"
+	plt.X.Tick.Label.Font.Size = vg.Points(9)
+
+	plt.Y.Tick.Label.Font.Typeface = "Liberation"
+	plt.Y.Tick.Label.Font.Variant = "Sans"
+	plt.Y.Tick.Label.Font.Size = vg.Points(9)
+
+	plt.Title.Text = title
+	plt.X.Label.Text = "Time"
+	plt.Y.Label.Text = "VizieR Scaled Intensity (0\u20139524)"
+	plt.X.Tick.Marker = timestampTicker{}
+	plt.Y.Min = 0
+	plt.Y.Max = 10000
+
+	// Extend the X axis 3 frame-intervals beyond the last point for right-side breathing room.
+	if len(timestamps) >= 2 {
+		dt := (timestamps[len(timestamps)-1] - timestamps[0]) / float64(len(timestamps)-1)
+		plt.X.Max = timestamps[len(timestamps)-1] + 6*dt
+	}
+
+	// Dark gray horizontal reference line at y=0.
+	if len(timestamps) > 0 {
+		xMax := plt.X.Max
+		if xMax == 0 {
+			xMax = timestamps[len(timestamps)-1]
+		}
+		zeroLine, err := plotter.NewLine(plotter.XYs{
+			{X: timestamps[0], Y: 0},
+			{X: xMax, Y: 0},
+		})
+		if err == nil {
+			zeroLine.Color = color.RGBA{R: 80, G: 80, B: 80, A: 255}
+			zeroLine.Width = vg.Points(1)
+			plt.Add(zeroLine)
+		}
+	}
+
+	// Build connected line segments with blue dot markers, breaking at dropped frames.
+	// Lines are thin black; dots are small blue circles.
+	dotColor := color.RGBA{R: 0, G: 100, B: 200, A: 255}
+	var seg plotter.XYs
+	flushSeg := func() {
+		if len(seg) >= 2 {
+			line, pts, err := plotter.NewLinePoints(seg)
+			if err == nil {
+				line.Color = color.RGBA{R: 0, G: 0, B: 0, A: 255}
+				line.Width = vg.Points(0.5)
+				pts.GlyphStyle.Color = dotColor
+				pts.GlyphStyle.Radius = vg.Points(2)
+				pts.GlyphStyle.Shape = draw.CircleGlyph{}
+				plt.Add(line, pts)
+			}
+		} else if len(seg) == 1 {
+			sc, err := plotter.NewScatter(seg)
+			if err == nil {
+				sc.GlyphStyle.Color = dotColor
+				sc.GlyphStyle.Radius = vg.Points(2)
+				sc.GlyphStyle.Shape = draw.CircleGlyph{}
+				plt.Add(sc)
+			}
+		}
+		seg = nil
+	}
+	for i, ts := range timestamps {
+		if dropped[i] {
+			flushSeg()
+		} else {
+			seg = append(seg, plotter.XY{X: ts, Y: float64(scaledValues[i])})
+		}
+	}
+	flushSeg()
+
+	// Render to an in-memory PNG.
+	w := vg.Length(plotWidth) * vg.Inch / 96
+	h := vg.Length(plotHeight) * vg.Inch / 96
+	img := vgimg.New(w, h)
+	dc := draw.New(img)
+	plt.Draw(dc)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img.Image()); err != nil {
+		return nil, fmt.Errorf("failed to encode VizieR preview PNG: %w", err)
+	}
+	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode VizieR preview PNG: %w", err)
+	}
+	return goImg, nil
 }
