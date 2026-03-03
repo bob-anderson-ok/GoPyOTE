@@ -1341,11 +1341,23 @@ func (vt *VizieRTab) FillFromSodisForm(w fyne.Window) {
 	fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
 	fileDialog.Resize(fyne.NewSize(800, 600))
 
-	// Default to the last directory used by the SODIS form dialog
-	if lastDir := fyne.CurrentApp().Preferences().String("lastSodisFormDir"); lastDir != "" {
-		if parsed, err := storage.ParseURI(lastDir); err == nil {
-			if listable, err := storage.ListerForURI(parsed); err == nil {
+	// Default to the -RESULTS folder in the current observation directory, then
+	// fall back to the last directory used by the SODIS form dialog.
+	opened := false
+	if resultsFolder != "" {
+		if dirURI := storage.NewFileURI(resultsFolder); dirURI != nil {
+			if listable, err := storage.ListerForURI(dirURI); err == nil {
 				fileDialog.SetLocation(listable)
+				opened = true
+			}
+		}
+	}
+	if !opened {
+		if lastDir := fyne.CurrentApp().Preferences().String("lastSodisFormDir"); lastDir != "" {
+			if parsed, err := storage.ParseURI(lastDir); err == nil {
+				if listable, err := storage.ListerForURI(parsed); err == nil {
+					fileDialog.SetLocation(listable)
+				}
 			}
 		}
 	}
@@ -1391,11 +1403,9 @@ func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
 			continue
 		}
 
-		// #Star designation (e.g. "TYC 1234-5678-1") — leave blank if "unknown"
-		if strings.HasPrefix(line, "#Star") {
-			value := strings.TrimSpace(strings.TrimPrefix(line, "#Star"))
-			// Remove the leading colon if present
-			value = strings.TrimSpace(strings.TrimPrefix(value, ":"))
+		// #Star: / #STAR: designation (e.g. "TYC 1234-5678-1") — leave blank if "unknown"
+		if strings.HasPrefix(strings.ToUpper(line), "#STAR:") {
+			value := strings.TrimSpace(line[len("#STAR:"):])
 			if strings.EqualFold(value, "unknown") || value == "" {
 				continue
 			}
