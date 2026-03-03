@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.55"
+const Version = "1.1.56"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1917,9 +1917,22 @@ func main() {
 	obsHomeDirEntry.OnChanged = func(s string) {
 		prefs.SetString("obsHomeDir", s)
 	}
+	obsHomeDirBrowseBtn := widget.NewButton("Browse", func() {
+		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+			if err != nil {
+				dialog.ShowError(err, w)
+				return
+			}
+			if uri == nil {
+				return
+			}
+			obsHomeDirEntry.SetText(uri.Path())
+		}, w)
+	})
+	obsHomeDirBrowseBtn.Importance = widget.HighImportance
 	obsHomeDirBox := container.NewVBox(
 		widget.NewLabel("Observation home directory:"),
-		obsHomeDirEntry,
+		container.NewBorder(nil, nil, nil, obsHomeDirBrowseBtn, obsHomeDirEntry),
 	)
 
 	tab2Bg := makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
@@ -1951,6 +1964,7 @@ func main() {
 
 	setTrimBtn := widget.NewButton("Set\ntrim", nil)
 	setTrimBtn.Importance = widget.HighImportance
+	trimPerformed := false
 
 	trimStack := container.NewVBox(
 		container.NewHBox(container.New(layout.NewGridWrapLayout(labelWidth), widget.NewLabel("Trim start:")), trimStartContainer),
@@ -2635,6 +2649,9 @@ func main() {
 		plotStatusLabel.SetText("Click on a point to see details")
 
 		logAction(fmt.Sprintf("Set trim range: %.0f to %.0f", frame1, frame2))
+		trimPerformed = true
+		setTrimBtn.Importance = widget.WarningImportance
+		setTrimBtn.Refresh()
 	}
 
 	// Set the Apply trim button callback
@@ -2833,12 +2850,18 @@ func main() {
 	// (HighImportance) color. Assigned after the buttons are created below.
 	var resetFitButtons func()
 
+	// resetNormalizeBtn restores the Normalize baseline button to blue. Assigned after the button is created.
+	var resetNormalizeBtn func()
+
+	// enablePostFitButtons enables Monte Carlo, NIE, and Fill SODIS after a successful fit. Assigned after those buttons are created.
+	var enablePostFitButtons func()
+
 	// resetIOTABtn disables the Run IOTAdiffraction button. Assigned after the button is created.
 	var resetIOTABtn func()
 
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
-		showFileOpenWithRecents(w, prefs, "Select OBS folder then select the light curve csv file", nil, prefs.String("obsHomeDir"), func(reader fyne.URIReadCloser, err error) {
+		showFileOpenWithRecents(w, prefs, "Select OBS folder then select the light curve csv file", storage.NewExtensionFileFilter([]string{".csv"}), prefs.String("obsHomeDir"), func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
@@ -2882,6 +2905,12 @@ func main() {
 			if resetFitButtons != nil {
 				resetFitButtons()
 			}
+			if resetNormalizeBtn != nil {
+				resetNormalizeBtn()
+			}
+			trimPerformed = false
+			setTrimBtn.Importance = widget.HighImportance
+			setTrimBtn.Refresh()
 			if resetIOTABtn != nil {
 				resetIOTABtn()
 			}
@@ -4262,7 +4291,8 @@ func main() {
 	nieSinglePointCheck.Checked = false
 
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
-	calcBaselineMeanBtn := widget.NewButton("Normalize baseline and estimate noise sigma (used for Monte Carlo and NIE trials)", func() {
+	var calcBaselineMeanBtn *widget.Button
+	calcBaselineMeanBtn = widget.NewButton("Normalize baseline and estimate noise sigma (used for Monte Carlo and NIE trials)", func() {
 		if len(lightCurvePlot.SelectedPairs) == 0 {
 			dialog.ShowError(fmt.Errorf("no point pairs selected - click on points to select baseline regions"), w)
 			return
@@ -4376,8 +4406,14 @@ func main() {
 		}
 
 		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (baseline=%.4f, %d points) — noise sigma=%.6f", mean, count, noiseSigma))
+		calcBaselineMeanBtn.Importance = widget.WarningImportance
+		calcBaselineMeanBtn.Refresh()
 	})
 	calcBaselineMeanBtn.Importance = widget.HighImportance
+	resetNormalizeBtn = func() {
+		calcBaselineMeanBtn.Importance = widget.HighImportance
+		calcBaselineMeanBtn.Refresh()
+	}
 
 	// Search range for observation path offset
 	searchInitialOffsetEntry := NewFocusLossEntry()
@@ -4604,152 +4640,176 @@ func main() {
 			}
 			dialog.ShowError(fmt.Errorf("%s", msg), w)
 		} else {
-			// Clear previous fit results so edges don't accumulate across runs
-			lastFitResult = nil
-			lastFitParams = nil
-			lastFitCandidates = nil
-			lastFitTargetTimes = nil
-			lastFitTargetValues = nil
-			theorySeries = nil
-			lightCurvePlot.SetVerticalLines(nil, false)
-			lightCurvePlot.SetSigmaLines(nil, false)
+			runFitBody := func() {
+				// Clear previous fit results so edges don't accumulate across runs
+				lastFitResult = nil
+				lastFitParams = nil
+				lastFitCandidates = nil
+				lastFitTargetTimes = nil
+				lastFitTargetValues = nil
+				theorySeries = nil
+				lightCurvePlot.SetVerticalLines(nil, false)
+				lightCurvePlot.SetSigmaLines(nil, false)
 
-			// Load parameters from the file used to generate the diffraction image
-			file, err := os.Open(lastDiffractionParamsPath)
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("could not open parameters file: %v", err), w)
-				return
-			}
-			params, err := parseOccultationParameters(file)
-			if closeErr := file.Close(); closeErr != nil {
-				dialog.ShowError(fmt.Errorf("failed to close file: %w", closeErr), w)
-			}
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("could not parse parameters: %v", err), w)
-				return
-			}
+				// Load parameters from the file used to generate the diffraction image
+				file, err := os.Open(lastDiffractionParamsPath)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("could not open parameters file: %v", err), w)
+					return
+				}
+				params, err := parseOccultationParameters(file)
+				if closeErr := file.Close(); closeErr != nil {
+					dialog.ShowError(fmt.Errorf("failed to close file: %w", closeErr), w)
+				}
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("could not parse parameters: %v", err), w)
+					return
+				}
 
-			// Find the single displayed column index
-			var displayedColIdx int
-			for k := range displayedCurves {
-				displayedColIdx = k
-				break
-			}
-
-			// Verify timestamps are real (not all zeros)
-			allZero := true
-			for _, t := range loadedLightCurveData.TimeValues {
-				if t != 0 {
-					allZero = false
+				// Find the single displayed column index
+				var displayedColIdx int
+				for k := range displayedCurves {
+					displayedColIdx = k
 					break
 				}
-			}
-			if allZero {
-				dialog.ShowError(fmt.Errorf("timestamps are all zero — real timestamps are required for fitting"), w)
-				return
-			}
 
-			// Collect target times and values within the frame range
-			col := loadedLightCurveData.Columns[displayedColIdx]
-			var targetTimes, targetValues []float64
-			for i, val := range col.Values {
-				frameNum := loadedLightCurveData.FrameNumbers[i]
-				if frameRangeStart > 0 && frameNum < frameRangeStart {
-					continue
+				// Verify timestamps are real (not all zeros)
+				allZero := true
+				for _, t := range loadedLightCurveData.TimeValues {
+					if t != 0 {
+						allZero = false
+						break
+					}
 				}
-				if frameRangeEnd > 0 && frameNum > frameRangeEnd {
-					continue
-				}
-				targetTimes = append(targetTimes, loadedLightCurveData.TimeValues[i])
-				targetValues = append(targetValues, val)
-			}
-
-			if len(targetTimes) < 2 {
-				dialog.ShowError(fmt.Errorf("not enough data points in displayed range for fitting"), w)
-				return
-			}
-
-			params.ExposureTimeSecs = lastCsvExposureSecs
-			if lastCsvExposureSecs == 0 {
-				logAction("Fit: camera exposure time not set (0 seconds)")
-			} else {
-				logAction(fmt.Sprintf("Fit: camera exposure time: %.6f seconds", lastCsvExposureSecs))
-			}
-			// Check if search range fields are all filled in
-			searchInitial := strings.TrimSpace(searchInitialOffsetEntry.Text)
-			searchFinal := strings.TrimSpace(searchFinalOffsetEntry.Text)
-			searchSteps := strings.TrimSpace(searchNumStepsEntry.Text)
-
-			if searchInitial != "" && searchFinal != "" && searchSteps != "" {
-				initVal, err := strconv.ParseFloat(searchInitial, 64)
-				if err != nil {
-					dialog.ShowError(fmt.Errorf("invalid Initial offset: %v", err), w)
+				if allZero {
+					dialog.ShowError(fmt.Errorf("timestamps are all zero — real timestamps are required for fitting"), w)
 					return
 				}
-				finalVal, err := strconv.ParseFloat(searchFinal, 64)
-				if err != nil {
-					dialog.ShowError(fmt.Errorf("invalid Final offset: %v", err), w)
+
+				// Collect target times and values within the frame range
+				col := loadedLightCurveData.Columns[displayedColIdx]
+				var targetTimes, targetValues []float64
+				for i, val := range col.Values {
+					frameNum := loadedLightCurveData.FrameNumbers[i]
+					if frameRangeStart > 0 && frameNum < frameRangeStart {
+						continue
+					}
+					if frameRangeEnd > 0 && frameNum > frameRangeEnd {
+						continue
+					}
+					targetTimes = append(targetTimes, loadedLightCurveData.TimeValues[i])
+					targetValues = append(targetValues, val)
+				}
+
+				if len(targetTimes) < 2 {
+					dialog.ShowError(fmt.Errorf("not enough data points in displayed range for fitting"), w)
 					return
 				}
-				stepsVal, err := strconv.Atoi(searchSteps)
-				if err != nil || stepsVal < 1 {
-					dialog.ShowError(fmt.Errorf("number of steps must be a positive integer"), w)
-					return
+
+				params.ExposureTimeSecs = lastCsvExposureSecs
+				if lastCsvExposureSecs == 0 {
+					logAction("Fit: camera exposure time not set (0 seconds)")
+				} else {
+					logAction(fmt.Sprintf("Fit: camera exposure time: %.6f seconds", lastCsvExposureSecs))
 				}
-				fitProgressBar.SetValue(0)
-				fitProgressBar.Show()
-				fitBtn.Disable()
-				fitAbortFlag.Store(false)
-				fitAbortBtn.Show()
-				fitAbortBtn.Enable()
-				go func() {
-					fsr, err := runFitSearch(params, targetTimes, targetValues, initVal, finalVal, stepsVal, &fitAbortFlag, func(progress float64) {
-						fyne.Do(func() {
-							fitProgressBar.SetValue(progress)
+				// Check if search range fields are all filled in
+				searchInitial := strings.TrimSpace(searchInitialOffsetEntry.Text)
+				searchFinal := strings.TrimSpace(searchFinalOffsetEntry.Text)
+				searchSteps := strings.TrimSpace(searchNumStepsEntry.Text)
+
+				if searchInitial != "" && searchFinal != "" && searchSteps != "" {
+					initVal, err := strconv.ParseFloat(searchInitial, 64)
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("invalid Initial offset: %v", err), w)
+						return
+					}
+					finalVal, err := strconv.ParseFloat(searchFinal, 64)
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("invalid Final offset: %v", err), w)
+						return
+					}
+					stepsVal, err := strconv.Atoi(searchSteps)
+					if err != nil || stepsVal < 1 {
+						dialog.ShowError(fmt.Errorf("number of steps must be a positive integer"), w)
+						return
+					}
+					fitProgressBar.SetValue(0)
+					fitProgressBar.Show()
+					fitBtn.Disable()
+					fitAbortFlag.Store(false)
+					fitAbortBtn.Show()
+					fitAbortBtn.Enable()
+					go func() {
+						fsr, err := runFitSearch(params, targetTimes, targetValues, initVal, finalVal, stepsVal, &fitAbortFlag, func(progress float64) {
+							fyne.Do(func() {
+								fitProgressBar.SetValue(progress)
+							})
 						})
-					})
-					fyne.Do(func() {
-						fitProgressBar.Hide()
-						fitAbortBtn.Hide()
-						fitBtn.Enable()
-						if err != nil {
-							dialog.ShowError(err, w)
-						} else {
-							fr, err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
+						fyne.Do(func() {
+							fitProgressBar.Hide()
+							fitAbortBtn.Hide()
+							fitBtn.Enable()
 							if err != nil {
 								dialog.ShowError(err, w)
 							} else {
-								lastFitResult = fr
-								paramsCopy := *params
-								lastFitParams = &paramsCopy
-								// Save all precomputed curves from the search for Monte Carlo
-								lastFitCandidates = make([]*precomputedCurve, 0, len(fsr.results))
-								for _, sr := range fsr.results {
-									lastFitCandidates = append(lastFitCandidates, sr.pc)
+								fr, err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
+								if err != nil {
+									dialog.ShowError(err, w)
+								} else {
+									lastFitResult = fr
+									paramsCopy := *params
+									lastFitParams = &paramsCopy
+									// Save all precomputed curves from the search for Monte Carlo
+									lastFitCandidates = make([]*precomputedCurve, 0, len(fsr.results))
+									for _, sr := range fsr.results {
+										lastFitCandidates = append(lastFitCandidates, sr.pc)
+									}
+									logAction(fmt.Sprintf("Fit search: %d of %d path offset steps succeeded, %d candidate curves saved for Monte Carlo", len(fsr.results), stepsVal, len(lastFitCandidates)))
+									lastFitTargetTimes = targetTimes
+									lastFitTargetValues = targetValues
+									fitBtn.Importance = widget.WarningImportance
+									fitBtn.Refresh()
+									if enablePostFitButtons != nil {
+										enablePostFitButtons()
+									}
 								}
-								logAction(fmt.Sprintf("Fit search: %d of %d path offset steps succeeded, %d candidate curves saved for Monte Carlo", len(fsr.results), stepsVal, len(lastFitCandidates)))
-								lastFitTargetTimes = targetTimes
-								lastFitTargetValues = targetValues
-								fitBtn.Importance = widget.WarningImportance
-								fitBtn.Refresh()
 							}
-						}
-					})
-				}()
-			} else {
-				fr, pc, err := performFit(a, w, params, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
-				if err != nil {
-					dialog.ShowError(err, w)
+						})
+					}()
 				} else {
-					lastFitResult = fr
-					paramsCopy := *params
-					lastFitParams = &paramsCopy
-					lastFitCandidates = []*precomputedCurve{pc}
-					lastFitTargetTimes = targetTimes
-					lastFitTargetValues = targetValues
-					fitBtn.Importance = widget.WarningImportance
-					fitBtn.Refresh()
+					fr, pc, err := performFit(a, w, params, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
+					if err != nil {
+						dialog.ShowError(err, w)
+					} else {
+						lastFitResult = fr
+						paramsCopy := *params
+						lastFitParams = &paramsCopy
+						lastFitCandidates = []*precomputedCurve{pc}
+						lastFitTargetTimes = targetTimes
+						lastFitTargetValues = targetValues
+						fitBtn.Importance = widget.WarningImportance
+						fitBtn.Refresh()
+						if enablePostFitButtons != nil {
+							enablePostFitButtons()
+						}
+					}
 				}
+			}
+			if !trimPerformed {
+				noBtn := widget.NewButton("No", nil)
+				noBtn.Importance = widget.HighImportance
+				yesBtn := widget.NewButton("Yes, run anyway", nil)
+				trimDlg := dialog.NewCustom("Trim not set",
+					"",
+					container.NewVBox(
+						widget.NewLabel("A Set trim operation is recommended before running a fit search.\n\nDo you want to run anyway?"),
+						container.NewHBox(layout.NewSpacer(), noBtn, yesBtn),
+					), w)
+				noBtn.OnTapped = func() { trimDlg.Hide() }
+				yesBtn.OnTapped = func() { trimDlg.Hide(); runFitBody() }
+				trimDlg.Show()
+			} else {
+				runFitBody()
 			}
 		}
 	})
@@ -5063,6 +5123,7 @@ func main() {
 		}()
 	})
 	mcBtn.Importance = widget.HighImportance
+	mcBtn.Disable()
 
 	var nieAbortFlag atomic.Bool
 	var nieAbortBtn *widget.Button
@@ -5209,6 +5270,7 @@ func main() {
 		}
 	})
 	runNieBtn.Importance = widget.HighImportance
+	runNieBtn.Disable()
 
 	var fillSodisBtn *widget.Button
 	fillSodisBtn = widget.NewButton("Fill SODIS report", func() {
@@ -5273,16 +5335,23 @@ func main() {
 		})
 	})
 	fillSodisBtn.Importance = widget.HighImportance
+	fillSodisBtn.Disable()
+
+	enablePostFitButtons = func() {
+		mcBtn.Enable()
+		runNieBtn.Enable()
+		fillSodisBtn.Enable()
+	}
 
 	resetFitButtons = func() {
 		fitBtn.Importance = widget.HighImportance
 		fitBtn.Refresh()
 		mcBtn.Importance = widget.HighImportance
-		mcBtn.Refresh()
+		mcBtn.Disable()
 		runNieBtn.Importance = widget.HighImportance
-		runNieBtn.Refresh()
+		runNieBtn.Disable()
 		fillSodisBtn.Importance = widget.HighImportance
-		fillSodisBtn.Refresh()
+		fillSodisBtn.Disable()
 	}
 
 	fillNaBtn := widget.NewButton("Fill NA spreadsheet", func() {
