@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.57"
+const Version = "1.2.0"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -890,6 +890,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 		}
 		doSave()
 	})
+	saveBtn.Importance = widget.HighImportance
 
 	showOccelmntBtn := widget.NewButton("Show associated occelmnt.xml", func() {
 		if dialogOccelmntXml == "" {
@@ -2837,6 +2838,8 @@ func main() {
 
 	// resetIOTABtn disables the Run IOTAdiffraction button. Assigned after the button is created.
 	var resetIOTABtn func()
+	// enableShowIOTAPlots enables the Show IOTAdiffraction plots button. Assigned after the button is created.
+	var enableShowIOTAPlots func()
 
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
@@ -5591,6 +5594,9 @@ func main() {
 				appendOutput(fmt.Sprintf("\n[Error: %v]", err))
 			} else {
 				appendOutput("\n[Process completed successfully]")
+				if enableShowIOTAPlots != nil {
+					fyne.Do(func() { enableShowIOTAPlots() })
+				}
 			}
 		}()
 	}
@@ -5796,7 +5802,48 @@ func main() {
 		dlg.Resize(fyne.NewSize(900, 520))
 		dlg.Show()
 	})
-	buttons := container.NewHBox(btnProcessOccelemnt, btnOccultParams, btnIOTA, btnShowDetails)
+	btnShowIOTAPlots := widget.NewButton("Show IOTAdiffraction plots", func() {
+		type plotInfo struct {
+			path  string
+			title string
+		}
+		plots := []plotInfo{
+			{filepath.Join(appDir, "lightCurvePlot.png"), "Light Curve Plot"},
+			{filepath.Join(appDir, "diffractionImageWithPath.png"), "Diffraction Image"},
+			{filepath.Join(appDir, "camera_response.png"), "Camera Response"},
+		}
+		var images []fyne.CanvasObject
+		for _, p := range plots {
+			if _, err := os.Stat(p.path); err != nil {
+				continue
+			}
+			img := canvas.NewImageFromFile(p.path)
+			img.FillMode = canvas.ImageFillContain
+			img.SetMinSize(fyne.NewSize(500, 400))
+			label := widget.NewLabel(p.title)
+			label.Alignment = fyne.TextAlignCenter
+			images = append(images, container.NewBorder(nil, label, nil, nil, img))
+		}
+		if len(images) == 0 {
+			dialog.ShowInformation("No plots found",
+				"No IOTAdiffraction plot files were found in the application directory.", w)
+			return
+		}
+		plotsWin := a.NewWindow("IOTAdiffraction Plots")
+		grid := container.NewGridWithColumns(len(images))
+		for _, img := range images {
+			grid.Add(img)
+		}
+		plotsWin.SetContent(container.NewScroll(grid))
+		plotsWin.Resize(fyne.NewSize(1600, 500))
+		plotsWin.CenterOnScreen()
+		plotsWin.Show()
+	})
+
+	btnShowIOTAPlots.Disable()
+	enableShowIOTAPlots = func() { btnShowIOTAPlots.Enable() }
+
+	buttons := container.NewHBox(btnProcessOccelemnt, btnOccultParams, btnIOTA, btnShowDetails, btnShowIOTAPlots)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
