@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.54"
+const Version = "1.1.55"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2874,7 +2874,7 @@ func main() {
 			// Parse the CSV file
 			data, err := parseLightCurveCSV(filePath)
 			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to parse CSV: %w", err), w)
+				dialog.ShowError(fmt.Errorf("%s does not appear to be a light curve file. It is lacking a header line that is normally part of a valid light curve file", base), w)
 				return
 			}
 
