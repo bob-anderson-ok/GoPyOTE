@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.56"
+const Version = "1.1.57"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -950,15 +950,13 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			vt.FillStarFromOccelmntXml(xmlStr)
 			logAction(fmt.Sprintf("Loaded occelmnt file: %s", reader.URI().Path()))
 		}, w)
-		occelmntDir := filepath.Join(appDir, "OCCELMNT-FOLDER")
-		if merr := os.MkdirAll(occelmntDir, 0755); merr != nil {
-			dialog.ShowError(fmt.Errorf("failed to create OCCELMNT-FOLDER directory: %w", merr), w)
-			return
-		}
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".xml", ".txt"}))
-		folderURI := storage.NewFileURI(occelmntDir)
-		if listableURI, lerr := storage.ListerForURI(folderURI); lerr == nil {
-			fileDialog.SetLocation(listableURI)
+		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
+			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
+			folderURI := storage.NewFileURI(obsDir)
+			if listableURI, lerr := storage.ListerForURI(folderURI); lerr == nil {
+				fileDialog.SetLocation(listableURI)
+			}
 		}
 		fileDialog.Resize(fyne.NewSize(800, 600))
 		fileDialog.Show()
@@ -1655,20 +1653,17 @@ func main() {
 		lastObserverLonDeg = prefs.FloatWithFallback("lastObserverLonDeg", 0.0)
 		lastObserverAltMeters = prefs.FloatWithFallback("lastObserverAltMeters", 0.0)
 	}
-	// Only restore the diffraction image data if the user opted to reuse it across sessions
-	if prefs.BoolWithFallback("reuseCurrentDiffractionImage", false) {
-		lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
-		lastDiffractionTitle = prefs.StringWithFallback("lastDiffractionTitle", "")
-		// Backfill the title from the parameters file if a path exists but title was never saved
-		if lastDiffractionParamsPath != "" && lastDiffractionTitle == "" {
-			if f, err := os.Open(lastDiffractionParamsPath); err == nil {
-				if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
-					lastDiffractionTitle = p.Title
-					prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
-				}
-				if err := f.Close(); err != nil {
-					fmt.Printf("Warning: failed to close parameters file: %v\n", err)
-				}
+	lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
+	lastDiffractionTitle = prefs.StringWithFallback("lastDiffractionTitle", "")
+	// Backfill the title from the parameters file if a path exists but title was never saved
+	if lastDiffractionParamsPath != "" && lastDiffractionTitle == "" {
+		if f, err := os.Open(lastDiffractionParamsPath); err == nil {
+			if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
+				lastDiffractionTitle = p.Title
+				prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
+			}
+			if err := f.Close(); err != nil {
+				fmt.Printf("Warning: failed to close parameters file: %v\n", err)
 			}
 		}
 	}
@@ -1906,10 +1901,10 @@ func main() {
 	timestampTicksCheck := widget.NewCheck("Use timestamp format to display time value", nil)
 	timestampTicksCheck.Checked = true
 
-	reuseImageCheck := widget.NewCheck("Use current diffraction image for next session", func(checked bool) {
-		prefs.SetBool("reuseCurrentDiffractionImage", checked)
+	showIOTAPlotsCheck := widget.NewCheck("Show plots from IOTAdiffraction", func(checked bool) {
+		prefs.SetBool("showIOTAPlots", checked)
 	})
-	reuseImageCheck.Checked = prefs.BoolWithFallback("reuseCurrentDiffractionImage", false)
+	showIOTAPlotsCheck.Checked = prefs.BoolWithFallback("showIOTAPlots", true)
 
 	obsHomeDirEntry := widget.NewEntry()
 	obsHomeDirEntry.SetPlaceHolder("Path to your observations folder...")
@@ -1936,7 +1931,7 @@ func main() {
 	)
 
 	tab2Bg := makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
-	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, reuseImageCheck, widget.NewSeparator(), obsHomeDirBox)))
+	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, showIOTAPlotsCheck, widget.NewSeparator(), obsHomeDirBox)))
 	tab2 := container.NewTabItem("Settings", tab2Content)
 
 	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
@@ -1970,15 +1965,19 @@ func main() {
 		container.NewHBox(container.New(layout.NewGridWrapLayout(labelWidth), widget.NewLabel("Trim start:")), trimStartContainer),
 		container.NewHBox(container.New(layout.NewGridWrapLayout(labelWidth), widget.NewLabel("Trim end:")), trimEndContainer),
 	)
-	applyTrimBtn := widget.NewButton("Apply trim", nil)
+	applyTrimBtn := widget.NewButton("Show current trim", nil)
 	applyTrimBtn.Importance = widget.HighImportance
 	showAllBtn := widget.NewButton("Show all", nil)
 	showAllBtn.Importance = widget.HighImportance
+	trimBtnWidth := fyne.NewSize(150, 36)
 
 	trimStackWithBtn := container.NewHBox(
 		trimStack,
 		container.New(layout.NewGridWrapLayout(fyne.NewSize(76, 76)), setTrimBtn),
-		container.NewVBox(applyTrimBtn, showAllBtn),
+		container.NewVBox(
+			container.New(layout.NewGridWrapLayout(trimBtnWidth), applyTrimBtn),
+			container.New(layout.NewGridWrapLayout(trimBtnWidth), showAllBtn),
+		),
 	)
 
 	frameRangeRow := container.NewHBox(
@@ -1992,8 +1991,7 @@ func main() {
 	// Track the current x-axis label for click callback
 	currentXAxisLabel := "Time"
 
-	var onFitTab bool            // Track whether the Fit tab is active
-	var iotaRanSuccessfully bool // Suppresses IOTAdiffraction reminder after a successful run
+	var onFitTab bool // Track whether the Fit tab is active
 
 	// Create the plot with an empty series (will be populated when CSV is loaded)
 	var lightCurvePlot *LightCurvePlot
@@ -2192,51 +2190,7 @@ func main() {
 		plotStatusLabel, // center (takes remaining space)
 	)
 
-	// Create the startup overlay showing diffraction image and parameters file info
-	startupDiffImg := canvas.NewImageFromFile("")
-	startupDiffImg.FillMode = canvas.ImageFillContain
-	startupDiffImg.Hide()
-
-	startupInfoLabel := widget.NewLabel("")
-	startupInfoLabel.Alignment = fyne.TextAlignCenter
-	startupInfoLabel.TextStyle = fyne.TextStyle{Bold: true}
-
-	refreshStartupOverlay := func() {
-		if lastDiffractionParamsPath != "" {
-			diffImgPath := filepath.Join(appDir, "diffractionImage8bit.png")
-			if _, err := os.Stat(diffImgPath); err == nil {
-				startupDiffImg.File = diffImgPath
-				startupDiffImg.Refresh()
-				startupDiffImg.Show()
-			} else {
-				startupDiffImg.Hide()
-			}
-		} else {
-			startupDiffImg.Hide()
-		}
-
-		paramsInfo := "No diffraction image has been generated yet"
-		if lastDiffractionParamsPath != "" {
-			paramsInfo = "Current diffraction image as built from: " + filepath.Base(lastDiffractionParamsPath)
-			if f, err := os.Open(lastDiffractionParamsPath); err == nil {
-				if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
-					paramsInfo = p.Title + "\n" + paramsInfo
-				}
-				if err := f.Close(); err != nil {
-					fmt.Printf("Warning: failed to close parameters file: %v\n", err)
-				}
-			}
-		}
-		startupInfoLabel.SetText(paramsInfo)
-	}
-	refreshStartupOverlay()
-
-	startupOverlay := container.NewBorder(nil, startupInfoLabel, nil, nil, startupDiffImg)
-	if !reuseImageCheck.Checked {
-		startupOverlay.Hide()
-	}
-
-	plotCenter := container.NewStack(lightCurvePlot, startupOverlay)
+	plotCenter := container.NewStack(lightCurvePlot)
 
 	plotArea := container.NewBorder(
 		rangeControls, // top
@@ -2577,43 +2531,68 @@ func main() {
 
 	// Set the Set trim button callback now that lightCurvePlot, frameRangeStart/End, and rebuildPlot exist
 	setTrimBtn.OnTapped = func() {
-		var idx1, idx2 int
+		var frame1, frame2 float64
+		pointsSelected := false
 
 		if lightCurvePlot.MultiPairSelectMode {
 			// On the Fit page, two clicks save a PointPair rather than setting
 			// SelectedPoint1/2Valid. Use the most recently saved pair for trim.
-			if lightCurvePlot.SelectedPoint1Valid {
-				dialog.ShowError(fmt.Errorf("select a second point on the plot first"), w)
+			if !lightCurvePlot.SelectedPoint1Valid && len(lightCurvePlot.SelectedPairs) > 0 {
+				lastPair := lightCurvePlot.SelectedPairs[len(lightCurvePlot.SelectedPairs)-1]
+				idx1 := lastPair.Point1DataIdx
+				idx2 := lastPair.Point2DataIdx
+				lightCurvePlot.SelectedPairs = lightCurvePlot.SelectedPairs[:len(lightCurvePlot.SelectedPairs)-1]
+				if loadedLightCurveData != nil && idx1 < len(loadedLightCurveData.FrameNumbers) {
+					frame1 = loadedLightCurveData.FrameNumbers[idx1]
+				} else {
+					frame1 = float64(idx1)
+				}
+				if loadedLightCurveData != nil && idx2 < len(loadedLightCurveData.FrameNumbers) {
+					frame2 = loadedLightCurveData.FrameNumbers[idx2]
+				} else {
+					frame2 = float64(idx2)
+				}
+				pointsSelected = true
+			}
+		} else {
+			if lightCurvePlot.SelectedPoint1Valid && lightCurvePlot.SelectedPoint2Valid {
+				idx1 := lightCurvePlot.selectedPointDataIndex
+				idx2 := lightCurvePlot.selectedPointDataIndex2
+				if loadedLightCurveData != nil && idx1 < len(loadedLightCurveData.FrameNumbers) {
+					frame1 = loadedLightCurveData.FrameNumbers[idx1]
+				} else {
+					frame1 = float64(idx1)
+				}
+				if loadedLightCurveData != nil && idx2 < len(loadedLightCurveData.FrameNumbers) {
+					frame2 = loadedLightCurveData.FrameNumbers[idx2]
+				} else {
+					frame2 = float64(idx2)
+				}
+				pointsSelected = true
+			}
+		}
+
+		// Fall back to trim entry box values if no points were selected
+		if !pointsSelected {
+			trimStartText := strings.TrimSpace(trimStartEntry.Text)
+			trimEndText := strings.TrimSpace(trimEndEntry.Text)
+			if trimStartText == "" || trimEndText == "" {
+				dialog.ShowError(fmt.Errorf("select two points on the plot or enter values in the Trim start and Trim end boxes"), w)
 				return
 			}
-			if len(lightCurvePlot.SelectedPairs) == 0 {
-				dialog.ShowError(fmt.Errorf("select exactly two points on the plot first"), w)
+			var err error
+			frame1, err = strconv.ParseFloat(trimStartText, 64)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("invalid Trim start value: %s", trimStartText), w)
 				return
 			}
-			lastPair := lightCurvePlot.SelectedPairs[len(lightCurvePlot.SelectedPairs)-1]
-			idx1 = lastPair.Point1DataIdx
-			idx2 = lastPair.Point2DataIdx
-			lightCurvePlot.SelectedPairs = lightCurvePlot.SelectedPairs[:len(lightCurvePlot.SelectedPairs)-1]
-		} else {
-			if !lightCurvePlot.SelectedPoint1Valid || !lightCurvePlot.SelectedPoint2Valid {
-				dialog.ShowError(fmt.Errorf("select exactly two points on the plot first"), w)
+			frame2, err = strconv.ParseFloat(trimEndText, 64)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("invalid Trim end value: %s", trimEndText), w)
 				return
 			}
-			// Get frame numbers from loaded data using the data indices
-			idx1 = lightCurvePlot.selectedPointDataIndex
-			idx2 = lightCurvePlot.selectedPointDataIndex2
 		}
-		var frame1, frame2 float64
-		if loadedLightCurveData != nil && idx1 < len(loadedLightCurveData.FrameNumbers) {
-			frame1 = loadedLightCurveData.FrameNumbers[idx1]
-		} else {
-			frame1 = float64(idx1)
-		}
-		if loadedLightCurveData != nil && idx2 < len(loadedLightCurveData.FrameNumbers) {
-			frame2 = loadedLightCurveData.FrameNumbers[idx2]
-		} else {
-			frame2 = float64(idx2)
-		}
+
 		// Put the smaller frame in Trim start, larger in the Trim end
 		if frame1 > frame2 {
 			frame1, frame2 = frame2, frame1
@@ -2874,8 +2853,15 @@ func main() {
 				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
 			}
 
-			// Create a -RESULTS folder in the observation folder
+			// Parse the CSV file
 			base := filepath.Base(filePath)
+			data, err := parseLightCurveCSV(filePath)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("%s does not appear to be a light curve file. It is lacking a header line that is normally part of a valid light curve file", base), w)
+				return
+			}
+
+			// Create a -RESULTS folder in the observation folder
 			ext := filepath.Ext(base)
 			nameWithoutExt := base[:len(base)-len(ext)]
 			resultsFolder = filepath.Join(filepath.Dir(filePath), nameWithoutExt+"-RESULTS")
@@ -2894,13 +2880,6 @@ func main() {
 				}
 			}
 
-			// Parse the CSV file
-			data, err := parseLightCurveCSV(filePath)
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("%s does not appear to be a light curve file. It is lacking a header line that is normally part of a valid light curve file", base), w)
-				return
-			}
-
 			loadedLightCurveData = data
 			if resetFitButtons != nil {
 				resetFitButtons()
@@ -2914,7 +2893,6 @@ func main() {
 			if resetIOTABtn != nil {
 				resetIOTABtn()
 			}
-			startupOverlay.Hide()
 			dialog.ShowInformation("Next step",
 				"Use the \"Process occelmnt file\" button to create or update\n"+
 					"the occultation parameters for this observation.", w)
@@ -3274,7 +3252,6 @@ func main() {
 		}
 
 		loadedLightCurveData = data
-		startupOverlay.Hide()
 		normalizationApplied = false
 		smoothedSeries = nil
 		theorySeries = nil
@@ -3930,7 +3907,6 @@ func main() {
 		}
 
 		loadedLightCurveData = data
-		startupOverlay.Hide()
 		normalizationApplied = false
 		smoothedSeries = nil
 		theorySeries = nil
@@ -5295,7 +5271,7 @@ func main() {
 			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
 			if dirEntries, derr := os.ReadDir(obsDir); derr == nil {
 				for _, entry := range dirEntries {
-					if !entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "detail") {
+					if !entry.IsDir() && strings.Contains(strings.ToLower(entry.Name()), "detail") {
 						if fileData, rerr := os.ReadFile(filepath.Join(obsDir, entry.Name())); rerr == nil {
 							reader := csv.NewReader(bytes.NewReader(fileData))
 							reader.FieldsPerRecord = -1
@@ -5428,12 +5404,6 @@ func main() {
 				return
 			}
 
-			// Fit tab: remind the user to run IOTAdiffraction if they haven't opted in to reuse
-			if !reuseImageCheck.Checked && !iotaRanSuccessfully {
-				dialog.ShowInformation("IOTAdiffraction reminder",
-					"Remember to run IOTAdiffraction before proceeding with Fit.", w)
-			}
-
 			// Fit tab: multi-pair mode for baseline selection, unless the NIE manual
 			// selection checkbox is checked, in which case keep two-point mode.
 			lightCurvePlot.SingleSelectMode = false
@@ -5553,7 +5523,8 @@ func main() {
 		outputDialog := dialog.NewCustom("IOTAdiffraction Output", "Close", scrollContainer, w)
 
 		// Set up the command with pipes using the selected file as a parameter
-		cmd := exec.Command(exePath, actualParamFile)
+		showPlots := fmt.Sprintf("%v", prefs.BoolWithFallback("showIOTAPlots", true))
+		cmd := exec.Command(exePath, actualParamFile, showPlots)
 		cmd.Dir = appDir
 
 		stdout, err := cmd.StdoutPipe()
@@ -5620,11 +5591,6 @@ func main() {
 				appendOutput(fmt.Sprintf("\n[Error: %v]", err))
 			} else {
 				appendOutput("\n[Process completed successfully]")
-				iotaRanSuccessfully = true
-				fyne.Do(func() {
-					refreshStartupOverlay()
-					startupOverlay.Hide()
-				})
 			}
 		}()
 	}
@@ -5702,7 +5668,7 @@ func main() {
 				obsDir := filepath.Dir(srcPath)
 				if entries, err := os.ReadDir(obsDir); err == nil {
 					for _, entry := range entries {
-						if !entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "occ") {
+						if !entry.IsDir() && strings.Contains(strings.ToLower(entry.Name()), "occel") {
 							fullPath := filepath.Join(obsDir, entry.Name())
 							if data, rerr := os.ReadFile(fullPath); rerr == nil {
 								autoXml = strings.TrimPrefix(string(data), "\xef\xbb\xbf")
@@ -5726,18 +5692,18 @@ func main() {
 			return
 		}
 		obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
-		// Find the first file whose name starts with "detail"
+		// Find the first file whose name contains "detail"
 		detailPath := ""
 		if entries, err := os.ReadDir(obsDir); err == nil {
 			for _, entry := range entries {
-				if !entry.IsDir() && strings.HasPrefix(strings.ToLower(entry.Name()), "detail") {
+				if !entry.IsDir() && strings.Contains(strings.ToLower(entry.Name()), "detail") {
 					detailPath = filepath.Join(obsDir, entry.Name())
 					break
 				}
 			}
 		}
 		if detailPath == "" {
-			dialog.ShowInformation("No details file", "No file starting with \"detail\" was found in the current observation folder.", w)
+			dialog.ShowInformation("No details file", "No file containing \"detail\" in its name was found in the current observation folder.", w)
 			return
 		}
 		// Read and parse as CSV
