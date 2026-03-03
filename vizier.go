@@ -2443,6 +2443,22 @@ func createVizieRPreviewPlotImage(
 		}
 	}
 
+	// Draw red vertical marker lines at each dropped frame location.
+	gapColor := color.RGBA{R: 220, G: 0, B: 0, A: 255}
+	for i, ts := range timestamps {
+		if dropped[i] {
+			gapLine, err := plotter.NewLine(plotter.XYs{
+				{X: ts, Y: plt.Y.Min},
+				{X: ts, Y: plt.Y.Max},
+			})
+			if err == nil {
+				gapLine.Color = gapColor
+				gapLine.Width = vg.Points(1.5)
+				plt.Add(gapLine)
+			}
+		}
+	}
+
 	// Build connected line segments with blue dot markers, breaking at dropped frames.
 	// Lines are thin black; dots are small blue circles.
 	dotColor := color.RGBA{R: 0, G: 100, B: 200, A: 255}

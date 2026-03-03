@@ -47,7 +47,7 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 				headerLine = line
 				foundHeader = true
 			} else {
-				skippedLines = append(skippedLines, line)
+				skippedLines = append(skippedLines, strings.TrimRight(line, ","))
 			}
 		} else {
 			dataLines = append(dataLines, line)
