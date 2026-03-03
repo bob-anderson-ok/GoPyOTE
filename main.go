@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.1.53"
+const Version = "1.1.54"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -188,12 +188,13 @@ func addRecentFolder(prefs fyne.Preferences, folderPath string) {
 	saveRecentFolders(prefs, newFolders)
 }
 
-// showFileOpenWithRecents shows a dialog with recent folders, then opens the file dialog
-func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string, filter storage.FileFilter, callback func(fyne.URIReadCloser, error)) {
+// showFileOpenWithRecents shows a dialog with recent folders, then opens the file dialog.
+// homeDir is the observation home directory (from settings); if non-empty a blue Home button is shown.
+func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string, filter storage.FileFilter, homeDir string, callback func(fyne.URIReadCloser, error)) {
 	folders := getRecentFolders(prefs)
 
-	// If no recent folders, show the file dialog directly
-	if len(folders) == 0 {
+	// If no recent folders and no home dir, show the file dialog directly
+	if len(folders) == 0 && homeDir == "" {
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if reader != nil && err == nil {
 				// Add the parent folder to recents
@@ -240,6 +241,25 @@ func showFileOpenWithRecents(w fyne.Window, prefs fyne.Preferences, title string
 		}
 		fileDialog.Show()
 	}
+
+	// Add a Home button with a directory label
+	homeBtn := widget.NewButton("Home", func() {
+		if info, err := os.Stat(homeDir); err != nil || !info.IsDir() {
+			dialog.ShowError(fmt.Errorf("Home directory not found:\n%s", homeDir), w)
+			return
+		}
+		openAtLocation(homeDir)
+	})
+	homeBtn.Importance = widget.HighImportance
+	var homeDirLabel *widget.Label
+	if homeDir != "" {
+		homeDirLabel = widget.NewLabel(homeDir)
+	} else {
+		homeDirLabel = widget.NewLabel("use the Settings tab to set the Home directory")
+		homeDirLabel.TextStyle = fyne.TextStyle{Italic: true}
+		homeBtn.Disable()
+	}
+	buttons = append(buttons, container.NewHBox(homeBtn, homeDirLabel))
 
 	// Add separator
 	buttons = append(buttons, widget.NewSeparator())
@@ -432,8 +452,8 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 		fileNameLabel.SetText("New parameters — use Write to save")
 	}
 
-	// If the QE file dropdown is still unset, fill from the saved preference (skipped when clearAll or preload is set)
-	if !clearAll && preload == nil && pathToQeTableFileSelect.Selected == "" {
+	// If the QE file dropdown has no real file selected, fill from the saved preference
+	if pathToQeTableFileSelect.Selected == "" || pathToQeTableFileSelect.Selected == "(none)" {
 		if savedQe := prefs.StringWithFallback("stickyQeTableFile", ""); savedQe != "" {
 			setQeSelected(savedQe)
 		}
@@ -1891,8 +1911,19 @@ func main() {
 	})
 	reuseImageCheck.Checked = prefs.BoolWithFallback("reuseCurrentDiffractionImage", false)
 
+	obsHomeDirEntry := widget.NewEntry()
+	obsHomeDirEntry.SetPlaceHolder("Path to your observations folder...")
+	obsHomeDirEntry.SetText(prefs.StringWithFallback("obsHomeDir", ""))
+	obsHomeDirEntry.OnChanged = func(s string) {
+		prefs.SetString("obsHomeDir", s)
+	}
+	obsHomeDirBox := container.NewVBox(
+		widget.NewLabel("Observation home directory:"),
+		obsHomeDirEntry,
+	)
+
 	tab2Bg := makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
-	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, reuseImageCheck)))
+	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, reuseImageCheck, widget.NewSeparator(), obsHomeDirBox)))
 	tab2 := container.NewTabItem("Settings", tab2Content)
 
 	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
@@ -2807,7 +2838,7 @@ func main() {
 
 	// Function to open the CSV file dialog
 	openCSVDialog := func() {
-		showFileOpenWithRecents(w, prefs, "Select OBS folder then select the light curve csv file", nil, func(reader fyne.URIReadCloser, err error) {
+		showFileOpenWithRecents(w, prefs, "Select OBS folder then select the light curve csv file", nil, prefs.String("obsHomeDir"), func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
 				return
