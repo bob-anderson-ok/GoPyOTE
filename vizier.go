@@ -592,6 +592,7 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 	statusLabel.SetText(fmt.Sprintf("VizieR file written to:\n%s%s", vizierFilePath, resultsCopyMsg))
 	dialog.ShowInformation("VizieR Export Complete",
 		fmt.Sprintf("Your VizieR lightcurve file was written to:\n\n%s%s", vizierFilePath, resultsCopyMsg), w)
+	vizierDatWrittenThisSession = true
 
 	// Log VizieR page entries
 	logAction(fmt.Sprintf("Generated VizieR file: %s", vizierFilePath))

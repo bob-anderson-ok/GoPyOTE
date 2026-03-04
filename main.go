@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.2.3"
+const Version = "1.2.4"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -102,6 +102,7 @@ var resultsFolder string
 // during the current session, so that the VizieR "Copy from SODIS-REPORT.txt"
 // button only accepts a report generated in this session.
 var sodisReportSavedThisSession bool
+var vizierDatWrittenThisSession bool
 
 // afterOccParamsSaved, when non-nil, is called with the saved file path immediately after
 // showOccultationParametersDialog successfully writes a new .occparams file.
@@ -2857,6 +2858,9 @@ func main() {
 	// enablePostFitButtons enables Monte Carlo, NIE, and Fill SODIS after a successful fit. Assigned after those buttons are created.
 	var enablePostFitButtons func()
 
+	// resetProcessOccelmntBtn restores the Process occelmnt file button to blue. Assigned after the button is created.
+	var resetProcessOccelmntBtn func()
+
 	// resetIOTABtn disables the Run IOTAdiffraction button. Assigned after the button is created.
 	var resetIOTABtn func()
 	// enableShowIOTAPlots enables the Show IOTAdiffraction plots button. Assigned after the button is created.
@@ -2906,6 +2910,7 @@ func main() {
 
 			loadedLightCurveData = data
 			sodisReportSavedThisSession = false
+			vizierDatWrittenThisSession = false
 			if resetFitButtons != nil {
 				resetFitButtons()
 			}
@@ -2915,6 +2920,9 @@ func main() {
 			trimPerformed = false
 			setTrimBtn.Importance = widget.HighImportance
 			setTrimBtn.Refresh()
+			if resetProcessOccelmntBtn != nil {
+				resetProcessOccelmntBtn()
+			}
 			if resetIOTABtn != nil {
 				resetIOTABtn()
 			}
@@ -5718,6 +5726,19 @@ func main() {
 		btnIOTA.Enable()
 		showProcessOccelemntDialog(w, vizierTab, autoXml)
 	})
+	btnProcessOccelemnt.Importance = widget.HighImportance
+	resetProcessOccelmntBtn = func() {
+		btnProcessOccelemnt.Importance = widget.HighImportance
+		btnProcessOccelemnt.Refresh()
+	}
+	// Wrap afterOccParamsSaved to also change the Process occelmnt button to yellow
+	origAfterSaved := afterOccParamsSaved
+	afterOccParamsSaved = func(path string) {
+		origAfterSaved(path)
+		btnProcessOccelemnt.Importance = widget.WarningImportance
+		btnProcessOccelemnt.Refresh()
+	}
+
 	btnShowDetails := widget.NewButton("Show details file", func() {
 		if loadedLightCurveData == nil || loadedLightCurveData.SourceFilePath == "" {
 			dialog.ShowInformation("No observation folder", "Please load a CSV file first.", w)
@@ -5887,17 +5908,31 @@ func main() {
 
 	// Save window geometry and split position on close
 	w.SetCloseIntercept(func() {
-		prefs.SetFloat("splitOffset", split.Offset)
-		if hwnd := getForegroundWindow(); hwnd != 0 {
-			if x, y, width, height, ok := getWindowRect(hwnd); ok {
-				prefs.SetInt("windowX", int(x))
-				prefs.SetInt("windowY", int(y))
-				prefs.SetInt("windowW", int(width))
-				prefs.SetInt("windowH", int(height))
+		doClose := func() {
+			prefs.SetFloat("splitOffset", split.Offset)
+			if hwnd := getForegroundWindow(); hwnd != 0 {
+				if x, y, width, height, ok := getWindowRect(hwnd); ok {
+					prefs.SetInt("windowX", int(x))
+					prefs.SetInt("windowY", int(y))
+					prefs.SetInt("windowW", int(width))
+					prefs.SetInt("windowH", int(height))
+				}
 			}
+			closeActionLog() // Close the action log file
+			w.Close()
 		}
-		closeActionLog() // Close the action log file
-		w.Close()
+
+		if sodisReportSavedThisSession && !vizierDatWrittenThisSession {
+			dialog.ShowConfirm("VizieR file not written",
+				"A SODIS report was saved but a VizieR .dat file has not been written.\n\nDo you really want to exit?",
+				func(confirmed bool) {
+					if confirmed {
+						doClose()
+					}
+				}, w)
+			return
+		}
+		doClose()
 	})
 
 	w.Show()
