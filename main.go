@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.2.5"
+const Version = "1.2.6"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -4307,36 +4307,6 @@ func main() {
 	mcNarrowSearchCheck := widget.NewCheck("Narrow MC offset search (±10 steps)", nil)
 	mcNarrowSearchCheck.Checked = true
 
-	nieSinglePointCheck := widget.NewCheck("Enable manual selection of points for NIE analysis", func(checked bool) {
-		if checked {
-			// Switch to regular two-point mode so clicks set Point1/Point2 directly
-			// instead of creating baseline pairs.
-			lightCurvePlot.SingleSelectMode = false
-			lightCurvePlot.MultiPairSelectMode = false
-			// Clear any pending point selections so the user starts fresh.
-			lightCurvePlot.selectedSeries = -1
-			lightCurvePlot.selectedIndex = -1
-			lightCurvePlot.selectedPointDataIndex = -1
-			lightCurvePlot.selectedSeriesName = ""
-			lightCurvePlot.SelectedPoint1Valid = false
-			lightCurvePlot.SelectedPoint1Frame = 0
-			lightCurvePlot.SelectedPoint1Value = 0
-			lightCurvePlot.selectedSeries2 = -1
-			lightCurvePlot.selectedIndex2 = -1
-			lightCurvePlot.selectedPointDataIndex2 = -1
-			lightCurvePlot.selectedSeriesName2 = ""
-			lightCurvePlot.SelectedPoint2Valid = false
-			lightCurvePlot.SelectedPoint2Frame = 0
-			lightCurvePlot.SelectedPoint2Value = 0
-			lightCurvePlot.Refresh()
-		} else {
-			// Restore multi-pair mode for baseline region selection.
-			lightCurvePlot.MultiPairSelectMode = true
-			lightCurvePlot.Refresh()
-		}
-	})
-	nieSinglePointCheck.Checked = false
-
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
 	var calcBaselineMeanBtn *widget.Button
 	calcBaselineMeanBtn = widget.NewButton("Normalize baseline and estimate noise sigma (used for Monte Carlo and NIE trials)", func() {
@@ -5267,68 +5237,28 @@ func main() {
 			}()
 		}
 
-		if nieSinglePointCheck.Checked {
-			// Manual selection mode: 1 point → window=1; 2 points → window=span count.
-			p1 := lightCurvePlot.SelectedPoint1Valid
-			p2 := lightCurvePlot.SelectedPoint2Valid
-			if p1 && p2 {
-				// Two-point mode: the window = number of target samples in the span (inclusive),
-				// the event drop = mean of those target values.
-				x1 := lightCurvePlot.SelectedPoint1Frame
-				x2 := lightCurvePlot.SelectedPoint2Frame
-				if x1 > x2 {
-					x1, x2 = x2, x1
-				}
-				var dropSum float64
-				windowWidth := 0
-				for i, t := range lastFitTargetTimes {
-					if t >= x1 && t <= x2 {
-						dropSum += lastFitTargetValues[i]
-						windowWidth++
-					}
-				}
-				if windowWidth < 1 {
-					dialog.ShowError(fmt.Errorf("no target samples found between the two selected points"), w)
-					return
-				}
-				eventDrop := dropSum / float64(windowWidth)
-				logAction(fmt.Sprintf("NIE two-point: x1=%.6f x2=%.6f window=%d eventDrop=%.6f", x1, x2, windowWidth, eventDrop))
-				launchNIE(windowWidth, eventDrop, true)
-			} else if p1 {
-				// Single-point mode: window=1, the drop=selected point value.
-				y := lightCurvePlot.SelectedPoint1Value
-				logAction(fmt.Sprintf("NIE single-point: using selected point value=%.6f", y))
-				launchNIE(1, y, true)
-			} else {
-				dialog.ShowInformation("Manual NIE Selection",
-					"No point is currently selected.\n\nSelect one or two points on the light curve, then click Run NIE analysis again.\n\n"+
-						"• One point selected: window size = 1, event drop = that point's value.\n"+
-						"• Two points selected: window = number of samples in the span (inclusive), event drop = mean of those samples.", w)
-			}
-		} else {
-			// Normal mode: compute window width from event edges and event drop from the fit.
-			windowWidth := 0
-			edge1Abs := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
-			edge2Abs := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
-			if edge1Abs > edge2Abs {
-				edge1Abs, edge2Abs = edge2Abs, edge1Abs
-			}
-			for _, t := range lastFitTargetTimes {
-				if t >= edge1Abs && t <= edge2Abs {
-					windowWidth++
-				}
-			}
-			if windowWidth < 1 {
-				dialog.ShowError(fmt.Errorf("no target samples found between event edges â check fit result"), w)
-				return
-			}
-			// Event drop = 1 - bestScale, where bestScale is the amplitude scale factor
-			// found by the post-fit scale search (scaledTLC = bestTLC*scale + (1-scale)).
-			// bestScale==0 (zero value, search not run) maps naturally to eventDrop=1.0 (full drop).
-			eventDrop := 1.0 - lastFitResult.bestScale
-			logAction(fmt.Sprintf("NIE fit-derived: bestScale=%.4f, eventDrop=%.4f", lastFitResult.bestScale, eventDrop))
-			launchNIE(windowWidth, eventDrop, false)
+		// Compute window width from event edges and event drop from the fit.
+		windowWidth := 0
+		edge1Abs := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
+		edge2Abs := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
+		if edge1Abs > edge2Abs {
+			edge1Abs, edge2Abs = edge2Abs, edge1Abs
 		}
+		for _, t := range lastFitTargetTimes {
+			if t >= edge1Abs && t <= edge2Abs {
+				windowWidth++
+			}
+		}
+		if windowWidth < 1 {
+			dialog.ShowError(fmt.Errorf("no target samples found between event edges â check fit result"), w)
+			return
+		}
+		// Event drop = 1 - bestScale, where bestScale is the amplitude scale factor
+		// found by the post-fit scale search (scaledTLC = bestTLC*scale + (1-scale)).
+		// bestScale==0 (zero value, search not run) maps naturally to eventDrop=1.0 (full drop).
+		eventDrop := 1.0 - lastFitResult.bestScale
+		logAction(fmt.Sprintf("NIE fit-derived: bestScale=%.4f, eventDrop=%.4f", lastFitResult.bestScale, eventDrop))
+		launchNIE(windowWidth, eventDrop, false)
 	})
 	runNieBtn.Importance = widget.HighImportance
 	runNieBtn.Disable()
@@ -5434,7 +5364,7 @@ func main() {
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
-		container.NewHBox(mcShowDiagnosticsCheck, mcNarrowSearchCheck, nieSinglePointCheck),
+		container.NewHBox(mcShowDiagnosticsCheck, mcNarrowSearchCheck),
 		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, fillNaBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
@@ -5489,10 +5419,9 @@ func main() {
 				return
 			}
 
-			// Fit tab: multi-pair mode for baseline selection, unless the NIE manual
-			// selection checkbox is checked, in which case keep two-point mode.
+			// Fit tab: multi-pair mode for baseline selection.
 			lightCurvePlot.SingleSelectMode = false
-			lightCurvePlot.MultiPairSelectMode = !nieSinglePointCheck.Checked
+			lightCurvePlot.MultiPairSelectMode = true
 			lightCurvePlot.Refresh()
 
 			// Autofill search range defaults from the parameters file only when
