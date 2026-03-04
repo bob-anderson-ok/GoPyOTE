@@ -190,7 +190,7 @@ func NewVizieRTab() *VizieRTab {
 	vt.LoadXlsxBtn = widget.NewButton("Load from NA spreadsheet", func() {})
 
 	// Load from the SODIS form button (callback set below, needs access to window)
-	vt.LoadSodisBtn = widget.NewButton("Load from SODIS form", func() {})
+	vt.LoadSodisBtn = widget.NewButton("Copy from SODIS-REPORT.txt", func() {})
 
 	// Build the tab content
 	tabContent := container.NewStack(tabBg, container.NewPadded(container.NewVBox(
@@ -1310,59 +1310,23 @@ func (vt *VizieRTab) FillFromNASpreadsheet(w fyne.Window) {
 // FillFromSodisForm opens a file dialog to select a SODIS form
 // and populates the VizieR tab fields from the spreadsheet
 func (vt *VizieRTab) FillFromSodisForm(w fyne.Window) {
-	fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-		if err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-		if reader == nil {
-			return // User cancelled
-		}
-		selectedURI := reader.URI()
-		filePath := selectedURI.Path()
-		if cerr := reader.Close(); cerr != nil {
-			dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
-		}
-
-		// Save the parent directory URI for next time
-		if parentURI, perr := storage.Parent(selectedURI); perr == nil {
-			fyne.CurrentApp().Preferences().SetString("lastSodisFormDir", parentURI.String())
-		}
-
-		// Read and parse the SODIS form text file
-		if perr := vt.parseSodisFile(filePath, w); perr != nil {
-			dialog.ShowError(fmt.Errorf("error reading SODIS form: %w", perr), w)
-			return
-		}
-
-		logAction(fmt.Sprintf("SODIS form loaded: %s", filePath))
-	}, w)
-
-	fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
-	fileDialog.Resize(fyne.NewSize(800, 600))
-
-	// Default to the -RESULTS folder in the current observation directory, then
-	// fall back to the last directory used by the SODIS form dialog.
-	opened := false
-	if resultsFolder != "" {
-		if dirURI := storage.NewFileURI(resultsFolder); dirURI != nil {
-			if listable, err := storage.ListerForURI(dirURI); err == nil {
-				fileDialog.SetLocation(listable)
-				opened = true
+	// Only accept a SODIS-REPORT.txt that was saved during this session.
+	if sodisReportSavedThisSession && resultsFolder != "" {
+		sodisPath := filepath.Join(resultsFolder, "SODIS-REPORT.txt")
+		if _, err := os.Stat(sodisPath); err == nil {
+			if perr := vt.parseSodisFile(sodisPath, w); perr != nil {
+				dialog.ShowError(fmt.Errorf("error reading SODIS form: %w", perr), w)
+				return
 			}
-		}
-	}
-	if !opened {
-		if lastDir := fyne.CurrentApp().Preferences().String("lastSodisFormDir"); lastDir != "" {
-			if parsed, err := storage.ParseURI(lastDir); err == nil {
-				if listable, err := storage.ListerForURI(parsed); err == nil {
-					fileDialog.SetLocation(listable)
-				}
-			}
+			logAction(fmt.Sprintf("SODIS form loaded: %s", sodisPath))
+			return
 		}
 	}
 
-	fileDialog.Show()
+	// No SODIS report saved this session — inform the user.
+	dialog.ShowInformation("SODIS Report Not Found",
+		"A SODIS-REPORT.txt has not yet been generated.\n\n"+
+			"Please use the Fill SODIS Report button on the Fit tab to create one first.", w)
 }
 
 // parseSodisFile reads a SODIS form text file and fills VizieR tab fields
@@ -2245,6 +2209,7 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 				dialog.ShowError(fmt.Errorf("error writing SODIS report: %w", werr), w)
 				return
 			}
+			sodisReportSavedThisSession = true
 			logAction(fmt.Sprintf("SODIS report saved: %s", savePath))
 			onSave()
 			dlg.Hide()
@@ -2271,6 +2236,7 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 				dialog.ShowError(fmt.Errorf("error writing SODIS report: %w", werr), w)
 				return
 			}
+			sodisReportSavedThisSession = true
 			logAction(fmt.Sprintf("SODIS report saved: %s", wr.URI().Path()))
 			onSave()
 			dlg.Hide()

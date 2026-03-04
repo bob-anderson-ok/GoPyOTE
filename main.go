@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.2.2"
+const Version = "1.2.3"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -97,6 +97,11 @@ var lastDiffractionTitle string
 // resultsFolder is the path to the -RESULTS folder created alongside the opened CSV file.
 // Various outputs (fit plots, histograms, etc.) are written here.
 var resultsFolder string
+
+// sodisReportSavedThisSession is set to true when a SODIS report is saved
+// during the current session, so that the VizieR "Copy from SODIS-REPORT.txt"
+// button only accepts a report generated in this session.
+var sodisReportSavedThisSession bool
 
 // afterOccParamsSaved, when non-nil, is called with the saved file path immediately after
 // showOccultationParametersDialog successfully writes a new .occparams file.
@@ -1246,12 +1251,28 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 				if strings.HasPrefix(line, "latitude_decimal:") {
 					value := strings.TrimSpace(strings.TrimPrefix(line, "latitude_decimal:"))
 					latDecimalEntry.SetText(value)
+					if value != "" {
+						if lat, err := strconv.ParseFloat(value, 64); err == nil {
+							deg, minutes, sec := decimalToDMS(lat)
+							vt.SiteLatDegEntry.SetText(deg)
+							vt.SiteLatMinEntry.SetText(minutes)
+							vt.SiteLatSecsEntry.SetText(sec)
+						}
+					}
 					continue
 				}
 
 				if strings.HasPrefix(line, "longitude_decimal:") {
 					value := strings.TrimSpace(strings.TrimPrefix(line, "longitude_decimal:"))
 					longDecimalEntry.SetText(value)
+					if value != "" {
+						if lon, err := strconv.ParseFloat(value, 64); err == nil {
+							deg, minutes, sec := decimalToDMS(lon)
+							vt.SiteLongDegEntry.SetText(deg)
+							vt.SiteLongMinEntry.SetText(minutes)
+							vt.SiteLongSecsEntry.SetText(sec)
+						}
+					}
 					continue
 				}
 
@@ -2884,6 +2905,7 @@ func main() {
 			}
 
 			loadedLightCurveData = data
+			sodisReportSavedThisSession = false
 			if resetFitButtons != nil {
 				resetFitButtons()
 			}
@@ -5413,8 +5435,12 @@ func main() {
 			lightCurvePlot.MultiPairSelectMode = !nieSinglePointCheck.Checked
 			lightCurvePlot.Refresh()
 
-			// Autofill search range defaults from the parameters file
-			if lastDiffractionParamsPath != "" {
+			// Autofill search range defaults from the parameters file only when
+			// the entries are still empty (first visit). This prevents overwriting
+			// user-modified values and triggering button colour resets on re-entry.
+			if lastDiffractionParamsPath != "" &&
+				strings.TrimSpace(searchInitialOffsetEntry.Text) == "" &&
+				strings.TrimSpace(searchFinalOffsetEntry.Text) == "" {
 				go func() {
 					file, err := os.Open(lastDiffractionParamsPath)
 					if err != nil {
