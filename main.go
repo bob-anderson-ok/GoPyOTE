@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.2.4"
+const Version = "1.2.5"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -924,14 +924,14 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 
 func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string) {
 	pasteEntry := widget.NewMultiLineEntry()
-	pasteEntry.SetPlaceHolder("Use Load button above or paste from the clipboard (Ctrl V) to fill this panel")
+	pasteEntry.SetPlaceHolder("Use the load button above or, in OWC, click copy to clipboard, then paste (Ctrl V) to fill this panel.")
 	pasteEntry.Wrapping = fyne.TextWrapOff
 	if initialXml != "" {
 		pasteEntry.SetText(initialXml)
 	}
 
 	// --- Load occelmnt file button ---
-	loadOccelmntBtn := widget.NewButton("Load occelmnt.xml", func() {
+	loadOccelmntBtn := widget.NewButton("Load Occelmnt file", func() {
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -1200,6 +1200,10 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 		container.NewHBox(widget.NewLabel("Altitude (m):"), altitudeContainer),
 	)
 
+	// Flag to suppress enabling writeSiteBtn during programmatic SetText calls
+	suppressWriteSiteEnable := false
+	var writeSiteBtn *widget.Button
+
 	// --- Load site file button ---
 	loadSiteBtn := widget.NewButton("Load site file", func() {
 		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
@@ -1215,7 +1219,8 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 				dialog.ShowError(fmt.Errorf("failed to close file: %w", cerr), w)
 			}
 
-			// Clear all entry fields before loading
+			// Clear all entry fields before loading (suppress Write button enable)
+			suppressWriteSiteEnable = true
 			latDecimalEntry.SetText("")
 			longDecimalEntry.SetText("")
 			altitudeEntry.SetText("")
@@ -1236,6 +1241,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			// Parse the site file and fill the entry fields
 			file, ferr := os.Open(filePath)
 			if ferr != nil {
+				suppressWriteSiteEnable = false
 				dialog.ShowError(fmt.Errorf("error opening site file: %w", ferr), w)
 				return
 			}
@@ -1351,10 +1357,13 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			}
 
 			if serr := scanner.Err(); serr != nil {
+				suppressWriteSiteEnable = false
 				dialog.ShowError(fmt.Errorf("error reading site file: %w", serr), w)
 				return
 			}
 
+			suppressWriteSiteEnable = false
+			writeSiteBtn.Disable()
 			lastLoadedSitePath = filePath
 			logAction(fmt.Sprintf("Site file loaded: %s", filePath))
 		}, w)
@@ -1377,7 +1386,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 	loadSiteBtn.Importance = widget.HighImportance
 
 	// --- Write site file button ---
-	writeSiteBtn := widget.NewButton("Write site file", func() {
+	writeSiteBtn = widget.NewButton("Write site file", func() {
 		saveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -1449,6 +1458,31 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 		saveDialog.Show()
 	})
 	writeSiteBtn.Importance = widget.HighImportance
+	writeSiteBtn.Disable()
+
+	// Enable writeSiteBtn only on user-driven edits (not programmatic SetText).
+	enableWriteSite := func(_ string) {
+		if !suppressWriteSiteEnable && writeSiteBtn.Disabled() {
+			writeSiteBtn.Enable()
+		}
+	}
+	for _, e := range []*widget.Entry{
+		latDecimalEntry, longDecimalEntry, altitudeEntry,
+		observer1Entry, observer2Entry, observatoryEntry,
+		emailEntry, addressEntry, nearestCityEntry, countryCodeEntry,
+		apertureEntry, focalLengthEntry, cameraEntry,
+	} {
+		prev := e.OnChanged
+		if prev != nil {
+			origPrev := prev
+			e.OnChanged = func(s string) {
+				origPrev(s)
+				enableWriteSite(s)
+			}
+		} else {
+			e.OnChanged = enableWriteSite
+		}
+	}
 
 	// --- Calculate observer dX dY button ---
 	var occelmntDialog dialog.Dialog
@@ -1602,7 +1636,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 		widget.NewSeparator(),
 		siteLocationSection,
 		widget.NewSeparator(),
-		container.NewHBox(loadSiteBtn, writeSiteBtn, calcDxDyBtn),
+		container.NewHBox(writeSiteBtn),
 		widget.NewSeparator(),
 		widget.NewButton("Cancel", func() {
 			if occelmntDialog != nil {
@@ -1612,10 +1646,10 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 	)
 
 	loadOccelmntBtn.Importance = widget.HighImportance
-	pasteSection := container.NewBorder(container.NewHBox(loadOccelmntBtn), nil, nil, nil, scrollable)
+	pasteSection := container.NewBorder(container.NewHBox(loadOccelmntBtn), container.NewHBox(loadSiteBtn, calcDxDyBtn, layout.NewSpacer()), nil, nil, scrollable)
 	content := container.NewBorder(nil, bottomSection, nil, nil, pasteSection)
 
-	occelmntDialog = dialog.NewCustomWithoutButtons("Process OWC occelmnt.xml", content, w)
+	occelmntDialog = dialog.NewCustomWithoutButtons("Process OWC Occelmnt", content, w)
 	occelmntDialog.Resize(fyne.NewSize(840, 1000))
 	occelmntDialog.Show()
 
@@ -4263,11 +4297,15 @@ func main() {
 	var lastFitResult *fitResult
 	var lastFitParams *OccultationParameters
 	var lastFitCandidates []*precomputedCurve
+	var lastFitBestIdx int // index into lastFitCandidates of the best path offset
 	var lastFitTargetTimes, lastFitTargetValues []float64
 	var lastMCResult *mcTrialsResult // most recent successful Monte Carlo run
 
 	mcShowDiagnosticsCheck := widget.NewCheck("Show diagnostics plots", nil)
 	mcShowDiagnosticsCheck.Checked = false
+
+	mcNarrowSearchCheck := widget.NewCheck("Narrow MC offset search (±10 steps)", nil)
+	mcNarrowSearchCheck.Checked = true
 
 	nieSinglePointCheck := widget.NewCheck("Enable manual selection of points for NIE analysis", func(checked bool) {
 		if checked {
@@ -4773,6 +4811,7 @@ func main() {
 									for _, sr := range fsr.results {
 										lastFitCandidates = append(lastFitCandidates, sr.pc)
 									}
+									lastFitBestIdx = fsr.bestIdx
 									logAction(fmt.Sprintf("Fit search: %d of %d path offset steps succeeded, %d candidate curves saved for Monte Carlo", len(fsr.results), stepsVal, len(lastFitCandidates)))
 									lastFitTargetTimes = targetTimes
 									lastFitTargetValues = targetValues
@@ -4864,6 +4903,19 @@ func main() {
 		// place when the user clicked Run Monte Carlo, regardless of any concurrent
 		// changes (e.g., a new fit started during the MC run).
 		mcCandidates := lastFitCandidates
+		if mcNarrowSearchCheck.Checked && len(mcCandidates) > 21 {
+			center := lastFitBestIdx
+			lo := center - 10
+			if lo < 0 {
+				lo = 0
+			}
+			hi := center + 10 + 1 // exclusive upper bound
+			if hi > len(mcCandidates) {
+				hi = len(mcCandidates)
+			}
+			mcCandidates = mcCandidates[lo:hi]
+			logAction(fmt.Sprintf("MC narrow search: using %d candidates (indices %d–%d) around best offset at index %d", len(mcCandidates), lo, hi-1, center))
+		}
 		mcFitResult := lastFitResult
 		mcFitParams := lastFitParams
 		mcTargetTimes := lastFitTargetTimes
@@ -5382,7 +5434,7 @@ func main() {
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
-		container.NewHBox(mcShowDiagnosticsCheck, nieSinglePointCheck),
+		container.NewHBox(mcShowDiagnosticsCheck, mcNarrowSearchCheck, nieSinglePointCheck),
 		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, fillNaBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
@@ -5445,7 +5497,7 @@ func main() {
 
 			// Autofill search range defaults from the parameters file only when
 			// the entries are still empty (first visit). This prevents overwriting
-			// user-modified values and triggering button colour resets on re-entry.
+			// user-modified values and triggering button color resets on re-entry.
 			if lastDiffractionParamsPath != "" &&
 				strings.TrimSpace(searchInitialOffsetEntry.Text) == "" &&
 				strings.TrimSpace(searchFinalOffsetEntry.Text) == "" {
