@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.2.6"
+const Version = "1.2.7"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -968,6 +968,23 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 		fileDialog.Resize(fyne.NewSize(800, 600))
 		fileDialog.Show()
 	})
+
+	pasteEntry.OnChanged = func(text string) {
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			return
+		}
+		if loadedLightCurveData == nil || loadedLightCurveData.SourceFilePath == "" {
+			return
+		}
+		obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
+		savePath := filepath.Join(obsDir, "occelmnt-pasted.xml")
+		if err := os.WriteFile(savePath, []byte(trimmed), 0644); err != nil {
+			fmt.Printf("Warning: could not write %s: %v\n", savePath, err)
+		} else {
+			logAction(fmt.Sprintf("Pasted occelmnt saved to %s", savePath))
+		}
+	}
 
 	scrollable := container.NewVScroll(pasteEntry)
 	scrollable.SetMinSize(fyne.NewSize(800, 300))
