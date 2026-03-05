@@ -66,8 +66,11 @@ var runIOTAdiffractionExplanation embed.FS
 //go:embed help_markdown/fresnelScaleResolution.md
 var fresnelScaleResolutionMarkdown embed.FS
 
+//go:embed help_markdown/edgeTimeSigmaExplanation.md
+var monteCarloExplanation embed.FS
+
 // Version information
-const Version = "1.2.9"
+const Version = "1.2.10"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1821,6 +1824,14 @@ func main() {
 				return
 			}
 			ShowMarkdownDialogWithImages("Fresnel scale resolution", string(content), &fresnelScaleResolutionMarkdown, w)
+		}),
+		fyne.NewMenuItem("Monte Carlo sigma estimation", func() {
+			content, err := monteCarloExplanation.ReadFile("help_markdown/edgeTimeSigmaExplanation.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load edgeTimeSigmaExplanation.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Monte Carlo sigma estimation", string(content), &monteCarloExplanation, w)
 		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About GoPyOTE", func() {
