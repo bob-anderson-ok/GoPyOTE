@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.2.7"
+const Version = "1.2.8"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2977,10 +2977,6 @@ func main() {
 			if resetIOTABtn != nil {
 				resetIOTABtn()
 			}
-			dialog.ShowInformation("Next step",
-				"Use the \"Process occelmnt file\" button to create or update\n"+
-					"the occultation parameters for this observation.", w)
-
 			// Create an action log file for this CSV
 			if err := createActionLog(filePath); err != nil {
 				fmt.Printf("Warning: could not create log file: %v\n", err)
@@ -4321,7 +4317,7 @@ func main() {
 	mcShowDiagnosticsCheck := widget.NewCheck("Show diagnostics plots", nil)
 	mcShowDiagnosticsCheck.Checked = false
 
-	mcNarrowSearchCheck := widget.NewCheck("Narrow MC offset search (±10 steps)", nil)
+	mcNarrowSearchCheck := widget.NewCheck("Narrow MC offset search (±20 steps)", nil)
 	mcNarrowSearchCheck.Checked = true
 
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
@@ -4493,16 +4489,24 @@ func main() {
 		}()
 	}
 
+	var showSearchRangeBtn *widget.Button
+	suppressSearchRangeEnable := false
 	searchInitialOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
 	searchFinalOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
 	searchInitialOffsetEntry.OnChanged = func(_ string) {
 		if resetFitButtons != nil {
 			resetFitButtons()
 		}
+		if !suppressSearchRangeEnable && showSearchRangeBtn != nil {
+			showSearchRangeBtn.Enable()
+		}
 	}
 	searchFinalOffsetEntry.OnChanged = func(_ string) {
 		if resetFitButtons != nil {
 			resetFitButtons()
+		}
+		if !suppressSearchRangeEnable && showSearchRangeBtn != nil {
+			showSearchRangeBtn.Enable()
 		}
 	}
 
@@ -4619,10 +4623,11 @@ func main() {
 		&widget.FormItem{Text: "Number of steps", Widget: searchNumStepsEntry},
 	)
 
-	showSearchRangeBtn := widget.NewButton("Show search range", func() {
+	showSearchRangeBtn = widget.NewButton("Show search range", func() {
 		showSearchRangePreview()
 	})
 	showSearchRangeBtn.Importance = widget.HighImportance
+	showSearchRangeBtn.Disable()
 
 	searchRangeTitle := widget.NewLabel("Search range for observation path offset")
 	searchRangeTitle.TextStyle = fyne.TextStyle{Bold: true}
@@ -4890,13 +4895,13 @@ func main() {
 		// place when the user clicked Run Monte Carlo, regardless of any concurrent
 		// changes (e.g., a new fit started during the MC run).
 		mcCandidates := lastFitCandidates
-		if mcNarrowSearchCheck.Checked && len(mcCandidates) > 21 {
+		if mcNarrowSearchCheck.Checked && len(mcCandidates) > 41 {
 			center := lastFitBestIdx
-			lo := center - 10
+			lo := center - 20
 			if lo < 0 {
 				lo = 0
 			}
-			hi := center + 10 + 1 // exclusive upper bound
+			hi := center + 20 + 1 // exclusive upper bound
 			if hi > len(mcCandidates) {
 				hi = len(mcCandidates)
 			}
@@ -5366,6 +5371,7 @@ func main() {
 		dialog.ShowInformation("Not Implemented", "This function is not yet implemented.", w)
 	})
 	fillNaBtn.Importance = widget.HighImportance
+	fillNaBtn.Disable()
 
 	tab10Content := container.NewStack(tab10Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Fit"),
@@ -5381,7 +5387,7 @@ func main() {
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
-		container.NewHBox(mcShowDiagnosticsCheck, mcNarrowSearchCheck),
+		container.NewHBox(mcNarrowSearchCheck),
 		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, fillNaBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
@@ -5473,12 +5479,13 @@ func main() {
 					ns := numSteps
 					fv := finalVal
 					fyne.Do(func() {
+						suppressSearchRangeEnable = true
 						searchInitialOffsetEntry.SetText("0.0")
 						searchFinalOffsetEntry.SetText(strconv.FormatFloat(fv, 'f', -1, 64))
-
 						if ns > 0 {
 							searchNumStepsEntry.SetText(fmt.Sprintf("%d", ns))
 						}
+						suppressSearchRangeEnable = false
 					})
 				}()
 			}
@@ -5698,6 +5705,7 @@ func main() {
 		}
 		showOccultationParametersDialog(w, true, nil, "")
 	})
+	var stopProcessBlink func()
 	btnProcessOccelemnt := widget.NewButton("Process occelmnt file", func() {
 		// Autoload the first file whose name starts with "occ" from the CSV directory
 		autoXml := ""
@@ -5725,14 +5733,48 @@ func main() {
 		showProcessOccelemntDialog(w, vizierTab, autoXml)
 	})
 	btnProcessOccelemnt.Importance = widget.HighImportance
+	btnProcessOccelemnt.Disable()
+	// startProcessBlink starts blinking the button; safe to call multiple times.
+	startProcessBlink := func() {
+		if stopProcessBlink != nil {
+			return // already blinking
+		}
+		blinkStop := make(chan struct{})
+		stopProcessBlink = func() { close(blinkStop) }
+		go func() {
+			on := true
+			for {
+				select {
+				case <-blinkStop:
+					return
+				case <-time.After(600 * time.Millisecond):
+					on = !on
+					fyne.Do(func() {
+						if on {
+							btnProcessOccelemnt.Importance = widget.HighImportance
+						} else {
+							btnProcessOccelemnt.Importance = widget.MediumImportance
+						}
+						btnProcessOccelemnt.Refresh()
+					})
+				}
+			}
+		}()
+	}
 	resetProcessOccelmntBtn = func() {
+		btnProcessOccelemnt.Enable()
 		btnProcessOccelemnt.Importance = widget.HighImportance
 		btnProcessOccelemnt.Refresh()
+		startProcessBlink()
 	}
-	// Wrap afterOccParamsSaved to also change the Process occelmnt button to yellow
+	// Wrap afterOccParamsSaved to stop blinking and change the Process occelmnt button to yellow
 	origAfterSaved := afterOccParamsSaved
 	afterOccParamsSaved = func(path string) {
 		origAfterSaved(path)
+		if stopProcessBlink != nil {
+			stopProcessBlink()
+			stopProcessBlink = nil
+		}
 		btnProcessOccelemnt.Importance = widget.WarningImportance
 		btnProcessOccelemnt.Refresh()
 	}

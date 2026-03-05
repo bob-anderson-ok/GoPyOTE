@@ -2214,7 +2214,6 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 			logAction(fmt.Sprintf("SODIS report saved: %s", savePath))
 			onSave()
 			dlg.Hide()
-			dialog.ShowInformation("Saved", "SODIS report saved successfully.", w)
 			return
 		}
 		// No results folder yet — fall back to a file dialog in SODIS-FOLDER
@@ -2241,7 +2240,6 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 			logAction(fmt.Sprintf("SODIS report saved: %s", wr.URI().Path()))
 			onSave()
 			dlg.Hide()
-			dialog.ShowInformation("Saved", "SODIS report saved successfully.", w)
 		}, w)
 		fileSave.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
 		if listable, lerr := storage.ListerForURI(storage.NewFileURI(saveDir)); lerr == nil {
