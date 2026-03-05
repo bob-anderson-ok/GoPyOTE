@@ -307,11 +307,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 		logAction(fmt.Sprintf("Scale search: best scale=%.4f, percent drop=%.2f, MSE=%.6f", bestScale, bestScale*100, scaleMSE))
 
 		// Show scaled overlay plot; nil edgeStds saves it as fitPlot.png
-		scaleOverlayImg, scaleErr := createOverlayPlotImage(
-			scaledCurve, fr.bestShift, fr.edgeTimes,
-			targetTimes, targetValues, fr.sampledTimes, scaledSampledVals,
-			fr.bestNCC, params.Title, 1200, 500, nil,
-		)
+		scaleOverlayImg, scaleErr := createOverlayPlotImage(scaledCurve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, scaledSampledVals, params.Title, 1200, 500, nil)
 		if scaleErr == nil {
 			scaleWindowTitle := fmt.Sprintf("Scaled Fit Result (percent drop = %.2f) — Theoretical vs Observed", bestScale*100)
 			scaleOverlayWindow := app.NewWindow(scaleWindowTitle)
@@ -474,7 +470,7 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 	// Gaussian noise with the measured baseline noise sigma.
 	noisyValues := make([]float64, len(fr.sampledVals))
 	for i, v := range fr.sampledVals {
-		noisyValues[i] = v + rand.NormFloat64()*noiseSigma
+		noisyValues[i] = v + rand.NormFloat64()*noiseSigma*v
 	}
 
 	// Search across precomputed path offset candidates
@@ -604,6 +600,17 @@ func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noiseSig
 			}
 			edgeStds[i] = math.Sqrt(sumSq / float64(n-1))
 		}
+	}
+
+	// When there are exactly 2 edges, set both sigmas to the maximum
+	// so that the duration sigma is computed conservatively.
+	if numEdges == 2 {
+		maxStd := edgeStds[0]
+		if edgeStds[1] > maxStd {
+			maxStd = edgeStds[1]
+		}
+		edgeStds[0] = maxStd
+		edgeStds[1] = maxStd
 	}
 
 	completedTrials := len(pathOffsets)
@@ -1229,7 +1236,7 @@ func createNCCPlotImage(results []nccResult, occultationTitle string, plotWidth,
 // createOverlayPlotImage renders the target light curve and the theoretical curve
 // (shifted by bestOffset) together in a single plot, with geometric shadow edges
 // shown as vertical dashed lines.
-func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes []float64, targetTimes, targetValues, sampledTimes, sampledVals []float64, bestNCC float64, occultationTitle string, plotWidth, plotHeight int, edgeStds []float64) (image.Image, error) {
+func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edgeTimes, targetTimes, targetValues, sampledTimes, sampledVals []float64, occultationTitle string, plotWidth, plotHeight int, edgeStds []float64) (image.Image, error) {
 	plt := plot.New()
 	if grayPlotBackground {
 		plt.BackgroundColor = plotBackgroundGray
@@ -1259,7 +1266,7 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	plt.Y.Tick.Label.Font.Variant = "Sans"
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
-	plt.Title.Text = fmt.Sprintf("Fit Result (NCC=%.4f, offset=%s)", bestNCC, formatSecondsAsTimestamp(bestOffset))
+	plt.Title.Text = "Fit Result"
 	if occultationTitle != "" {
 		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
 	}
@@ -1307,10 +1314,18 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 	}
 
 	// Theoretical curve shifted by the bestOffset (line, red)
-	theoryPts := make(plotter.XYs, len(curve))
-	for i, pt := range curve {
-		theoryPts[i].X = pt.time + bestOffset
-		theoryPts[i].Y = pt.intensity
+	// Filter to only include points within the target time range.
+	targetXMin := targetTimes[0]
+	targetXMax := targetTimes[len(targetTimes)-1]
+	if targetXMin > targetXMax {
+		targetXMin, targetXMax = targetXMax, targetXMin
+	}
+	var theoryPts plotter.XYs
+	for _, pt := range curve {
+		x := pt.time + bestOffset
+		if x >= targetXMin && x <= targetXMax {
+			theoryPts = append(theoryPts, plotter.XY{X: x, Y: pt.intensity})
+		}
 	}
 
 	theoryLine, err := plotter.NewLine(theoryPts)
@@ -1348,12 +1363,12 @@ func createOverlayPlotImage(curve []timeIntensityPoint, bestOffset float64, edge
 			maxY = v
 		}
 	}
-	for _, pt := range curve {
-		if pt.intensity < minY {
-			minY = pt.intensity
+	for _, pt := range theoryPts {
+		if pt.Y < minY {
+			minY = pt.Y
 		}
-		if pt.intensity > maxY {
-			maxY = pt.intensity
+		if pt.Y > maxY {
+			maxY = pt.Y
 		}
 	}
 	for _, et := range edgeTimes {

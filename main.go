@@ -67,7 +67,7 @@ var runIOTAdiffractionExplanation embed.FS
 var fresnelScaleResolutionMarkdown embed.FS
 
 // Version information
-const Version = "1.2.8"
+const Version = "1.2.9"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2077,7 +2077,7 @@ func main() {
 
 		// Get frame number from loaded data
 		frameNum := point.Index // fallback to index
-		if loadedLightCurveData != nil && point.Index < len(loadedLightCurveData.FrameNumbers) {
+		if loadedLightCurveData != nil && point.Index >= 0 && point.Index < len(loadedLightCurveData.FrameNumbers) {
 			frameNum = int(loadedLightCurveData.FrameNumbers[point.Index])
 		}
 
@@ -2413,8 +2413,35 @@ func main() {
 		}
 
 		// Add theoretical lightcurve series if available (from the last Monte Carlo run)
-		if theorySeries != nil {
-			allSeries = append(allSeries, *theorySeries)
+		// Filter to only include points within the X range of the displayed light curve data.
+		if theorySeries != nil && len(allSeries) > 0 {
+			// Determine the min and max X of all currently displayed light curve points
+			xMin := math.Inf(1)
+			xMax := math.Inf(-1)
+			for _, s := range allSeries {
+				for _, pt := range s.Points {
+					if pt.X < xMin {
+						xMin = pt.X
+					}
+					if pt.X > xMax {
+						xMax = pt.X
+					}
+				}
+			}
+			var filteredPts []PlotPoint
+			for _, pt := range theorySeries.Points {
+				if pt.X >= xMin && pt.X <= xMax {
+					filteredPts = append(filteredPts, pt)
+				}
+			}
+			if len(filteredPts) > 0 {
+				allSeries = append(allSeries, PlotSeries{
+					Points:   filteredPts,
+					Color:    theorySeries.Color,
+					Name:     theorySeries.Name,
+					LineOnly: theorySeries.LineOnly,
+				})
+			}
 		}
 
 		if len(allSeries) == 0 {
@@ -5107,13 +5134,7 @@ func main() {
 					for i, v := range mcFitResult.sampledVals {
 						mcScaledSampledVals[i] = v*mcScale + (1.0 - mcScale)
 					}
-					mcOverlayImg, err := createOverlayPlotImage(
-						mcScaledCurve, mcFitResult.bestShift, mcFitResult.edgeTimes,
-						mcTargetTimes, mcTargetValues,
-						mcFitResult.sampledTimes, mcScaledSampledVals,
-						mcFitResult.bestNCC, mcTitle,
-						1200, 500, result.edgeStds,
-					)
+					mcOverlayImg, err := createOverlayPlotImage(mcScaledCurve, mcFitResult.bestShift, mcFitResult.edgeTimes, mcTargetTimes, mcTargetValues, mcFitResult.sampledTimes, mcScaledSampledVals, mcTitle, 1200, 500, result.edgeStds)
 					if err != nil {
 						fmt.Printf("Failed to create MC overlay plot: %v\n", err)
 					} else {
@@ -5777,6 +5798,7 @@ func main() {
 		}
 		btnProcessOccelemnt.Importance = widget.WarningImportance
 		btnProcessOccelemnt.Refresh()
+		tabs.Select(tab10)
 	}
 
 	btnShowDetails := widget.NewButton("Show details file", func() {
