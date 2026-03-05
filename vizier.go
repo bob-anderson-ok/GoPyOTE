@@ -1493,18 +1493,19 @@ func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
 // sodisPreFill carries the current fit/MC/lightcurve/site data used to
 // pre-populate the SODIS report dialog. All fields are optional (zero = not available).
 type sodisPreFill struct {
-	fitResult          *fitResult
-	mcResult           *mcTrialsResult
-	fitParams          *OccultationParameters
-	lcData             *LightCurveData
-	occTitle           string     // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
-	sitePath           string     // path to the last-loaded .site file
-	occelmntXml        string     // raw occelmnt XML text — first <Star> CSV field used for #STAR
-	noiseSigma         float64    // baseline noise sigma — used for Signal/Noise (1/sigma)
-	csvExposureSecs    float64    // CSV-measured median exposure time — used for Exp_Time
-	observerT0         time.Time  // observer-corrected event time (zero = not available; use geocentric)
-	detailsEventTimeUT string     // "Event Time (UT)" from the details file, e.g. "26 Feb 2026 20:27:55"; overrides calculated time when non-empty
-	vt                 *VizieRTab // VizieR tab — used to propagate the observer name when a site file loads
+	fitResult           *fitResult
+	mcResult            *mcTrialsResult
+	fitParams           *OccultationParameters
+	lcData              *LightCurveData
+	occTitle            string     // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
+	sitePath            string     // path to the last-loaded .site file
+	occelmntXml         string     // raw occelmnt XML text — first <Star> CSV field used for #STAR
+	noiseSigma          float64    // baseline noise sigma — used for Signal/Noise (1/sigma)
+	csvExposureSecs     float64    // CSV-measured median exposure time — used for Exp_Time
+	observerT0          time.Time  // observer-corrected event time (zero = not available; use geocentric)
+	detailsEventTimeUT  string     // "Event Time (UT)" from the details file, e.g. "26 Feb 2026 20:27:55"; overrides calculated time when non-empty
+	vt                  *VizieRTab // VizieR tab — used to propagate the observer name when a site file loads
+	occultationOverride string     // if non-empty, pre-select this value for the Occultation dropdown instead of "POSITIVE"
 }
 
 // formatSecondsForSODIS formats total seconds as HH:MM:SS.sss (3 decimal places),
@@ -1959,9 +1960,13 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 			}
 		}
 
-		// Occultation: default to POSITIVE
+		// Occultation: default to POSITIVE unless overridden
 		if occultationSelect != nil {
-			occultationSelect.SetSelected("POSITIVE")
+			occDefault := "POSITIVE"
+			if fill.occultationOverride != "" {
+				occDefault = fill.occultationOverride
+			}
+			occultationSelect.SetSelected(occDefault)
 		}
 
 		// Fields from occelmnt XML: STAR, DATE, PREDICTTIME

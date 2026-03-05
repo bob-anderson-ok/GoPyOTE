@@ -5317,8 +5317,8 @@ func main() {
 	runNieBtn.Importance = widget.HighImportance
 	runNieBtn.Disable()
 
-	var fillSodisBtn *widget.Button
-	fillSodisBtn = widget.NewButton("Fill SODIS report", func() {
+	// buildSodisFill creates a sodisPreFill with an optional occultation override.
+	buildSodisFill := func(occultationOverride string, onSave func()) {
 		occTitle := lastDiffractionTitle
 		if lastFitParams != nil && lastFitParams.Title != "" {
 			occTitle = lastFitParams.Title
@@ -5362,25 +5362,40 @@ func main() {
 			}
 		}
 		showSodisReportDialog(w, &sodisPreFill{
-			fitResult:          lastFitResult,
-			mcResult:           lastMCResult,
-			fitParams:          lastFitParams,
-			lcData:             loadedLightCurveData,
-			occTitle:           occTitle,
-			sitePath:           lastLoadedSitePath,
-			occelmntXml:        lastLoadedOccelmntXml,
-			noiseSigma:         noiseSigma,
-			csvExposureSecs:    lastCsvExposureSecs,
-			observerT0:         computedObserverT0,
-			detailsEventTimeUT: detailsEventTimeUT,
-			vt:                 vizierTab,
-		}, func() {
+			fitResult:           lastFitResult,
+			mcResult:            lastMCResult,
+			fitParams:           lastFitParams,
+			lcData:              loadedLightCurveData,
+			occTitle:            occTitle,
+			sitePath:            lastLoadedSitePath,
+			occelmntXml:         lastLoadedOccelmntXml,
+			noiseSigma:          noiseSigma,
+			csvExposureSecs:     lastCsvExposureSecs,
+			observerT0:          computedObserverT0,
+			detailsEventTimeUT:  detailsEventTimeUT,
+			vt:                  vizierTab,
+			occultationOverride: occultationOverride,
+		}, onSave)
+	}
+
+	var fillSodisBtn *widget.Button
+	fillSodisBtn = widget.NewButton("Fill SODIS report", func() {
+		buildSodisFill("", func() {
 			fillSodisBtn.Importance = widget.WarningImportance
 			fillSodisBtn.Refresh()
 		})
 	})
 	fillSodisBtn.Importance = widget.HighImportance
 	fillSodisBtn.Disable()
+
+	var fillSodisNegBtn *widget.Button
+	fillSodisNegBtn = widget.NewButton("Fill SODIS Negative", func() {
+		buildSodisFill("NEGATIVE", func() {
+			fillSodisNegBtn.Importance = widget.WarningImportance
+			fillSodisNegBtn.Refresh()
+		})
+	})
+	fillSodisNegBtn.Importance = widget.HighImportance
 
 	enablePostFitButtons = func() {
 		mcBtn.Enable()
@@ -5399,12 +5414,6 @@ func main() {
 		fillSodisBtn.Disable()
 	}
 
-	fillNaBtn := widget.NewButton("Fill NA spreadsheet", func() {
-		dialog.ShowInformation("Not Implemented", "This function is not yet implemented.", w)
-	})
-	fillNaBtn.Importance = widget.HighImportance
-	fillNaBtn.Disable()
-
 	tab10Content := container.NewStack(tab10Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Fit"),
 		widget.NewSeparator(),
@@ -5420,7 +5429,7 @@ func main() {
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
 		container.NewHBox(mcNarrowSearchCheck),
-		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, fillNaBtn),
+		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, fillSodisNegBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
 		fitStatusLabel,
