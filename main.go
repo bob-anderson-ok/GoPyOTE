@@ -70,7 +70,7 @@ var fresnelScaleResolutionMarkdown embed.FS
 var monteCarloExplanation embed.FS
 
 // Version information
-const Version = "1.2.10"
+const Version = "1.2.12"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -106,6 +106,10 @@ var resultsFolder string
 // button only accepts a report generated in this session.
 var sodisReportSavedThisSession bool
 var vizierDatWrittenThisSession bool
+
+// sodisNegativeReportSaved is set to true when a NEGATIVE SODIS report is saved.
+// A negative report does not require a VizieR .dat file, so the close warning is skipped.
+var sodisNegativeReportSaved bool
 
 // afterOccParamsSaved, when non-nil, is called with the saved file path immediately after
 // showOccultationParametersDialog successfully writes a new .occparams file.
@@ -3000,6 +3004,7 @@ func main() {
 			loadedLightCurveData = data
 			sodisReportSavedThisSession = false
 			vizierDatWrittenThisSession = false
+			sodisNegativeReportSaved = false
 			if resetFitButtons != nil {
 				resetFitButtons()
 			}
@@ -5391,6 +5396,7 @@ func main() {
 	var fillSodisNegBtn *widget.Button
 	fillSodisNegBtn = widget.NewButton("Fill SODIS Negative", func() {
 		buildSodisFill("NEGATIVE", func() {
+			sodisNegativeReportSaved = true
 			fillSodisNegBtn.Importance = widget.WarningImportance
 			fillSodisNegBtn.Refresh()
 		})
@@ -5437,7 +5443,7 @@ func main() {
 	)))
 	tab10 := container.NewTabItem("Fit", tab10Content)
 
-	tabs := container.NewAppTabs(tab2, tab3, tab10, tab5, tab6, tab7, vizierTab.TabItem)
+	tabs := container.NewAppTabs(tab2, tab3, tab10, vizierTab.TabItem, tab5, tab6, tab7)
 
 	// Apply dark tab backgrounds if dark mode was persisted
 	if prefs.BoolWithFallback("darkMode", false) {
@@ -6004,7 +6010,7 @@ func main() {
 			w.Close()
 		}
 
-		if sodisReportSavedThisSession && !vizierDatWrittenThisSession {
+		if sodisReportSavedThisSession && !vizierDatWrittenThisSession && !sodisNegativeReportSaved {
 			dialog.ShowConfirm("VizieR file not written",
 				"A SODIS report was saved but a VizieR .dat file has not been written.\n\nDo you really want to exit?",
 				func(confirmed bool) {
