@@ -1,9 +1,10 @@
 package main
 
 import (
+	"image/color"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
-	"image/color"
 )
 
 // tabBgEntry tracks a tab background rectangle with its light/dark mode colors.
@@ -13,7 +14,7 @@ type tabBgEntry struct {
 	darkColor  color.RGBA
 }
 
-// appContext holds shared state that is referenced across multiple tabs.
+// appContext holds a shared state referenced across multiple tabs.
 // Created once in main() and passed to tab builder functions.
 type appContext struct {
 	window fyne.Window

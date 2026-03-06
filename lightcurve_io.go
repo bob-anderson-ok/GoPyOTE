@@ -20,7 +20,7 @@ var normalizationApplied bool
 // Reset on a new CSV load; NOT cleared by cosmetic plot state changes.
 var baselineScaledToUnity bool
 
-// Flag to track if a trim has been performed (for the fit tab warning).
+// Flag to track if trim has been performed (for the fit tab warning).
 var trimPerformed bool
 
 // parseLightCurveCSV reads a CSV file, skipping comments and blank lines,
