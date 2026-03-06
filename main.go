@@ -70,7 +70,7 @@ var fresnelScaleResolutionMarkdown embed.FS
 var monteCarloExplanation embed.FS
 
 // Version information
-const Version = "1.2.13"
+const Version = "1.2.14"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -3085,8 +3085,9 @@ func main() {
 				delete(displayedCurves, k)
 			}
 			lightCurvePlot.SetSeries(nil)
-			smoothedSeries = nil         // Clear any previous smooth curve
-			normalizationApplied = false // Reset normalization flag
+			lightCurvePlot.occultationTitle = filepath.Base(filePath) // Use CSV filename as a plot title
+			smoothedSeries = nil                                      // Clear any previous smooth curve
+			normalizationApplied = false                              // Reset normalization flag
 			baselineScaledToUnity = false
 			theorySeries = nil
 			lightCurvePlot.SetVerticalLines(nil, false)
@@ -5710,6 +5711,7 @@ func main() {
 			}
 		}
 		prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
+		lightCurvePlot.occultationTitle = lastDiffractionTitle
 		// Fill VizieR Number and Name entries from title (e.g. "(2731) Cucula" → "2731", "Cucula")
 		if strings.HasPrefix(lastDiffractionTitle, "(") {
 			if end := strings.Index(lastDiffractionTitle, ")"); end > 0 {
