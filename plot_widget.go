@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"image/color"
-	"image/png"
 	"math"
 
 	"fyne.io/fyne/v2"
@@ -18,6 +16,64 @@ import (
 	"gonum.org/v1/plot/vg/draw"
 	"gonum.org/v1/plot/vg/vgimg"
 )
+
+// downsampleMinMax reduces a sorted XY slice to at most targetPoints using min-max
+// bucketing. For each bucket of consecutive points it keeps the min-Y and max-Y
+// points (emitted in index order), so the visual envelope is preserved. O(n).
+func downsampleMinMax(pts plotter.XYs, targetPoints int) plotter.XYs {
+	n := len(pts)
+	if n <= targetPoints || targetPoints < 4 {
+		return pts
+	}
+
+	nBuckets := targetPoints / 2
+	if nBuckets < 2 {
+		nBuckets = 2
+	}
+
+	result := make(plotter.XYs, 0, nBuckets*2+2)
+	// Always include the first point
+	result = append(result, pts[0])
+
+	bucketSize := float64(n) / float64(nBuckets)
+
+	for b := 0; b < nBuckets; b++ {
+		startIdx := int(float64(b) * bucketSize)
+		endIdx := int(float64(b+1) * bucketSize)
+		if endIdx > n {
+			endIdx = n
+		}
+		if startIdx >= endIdx {
+			continue
+		}
+
+		minIdx, maxIdx := startIdx, startIdx
+		for i := startIdx + 1; i < endIdx; i++ {
+			if pts[i].Y < pts[minIdx].Y {
+				minIdx = i
+			}
+			if pts[i].Y > pts[maxIdx].Y {
+				maxIdx = i
+			}
+		}
+
+		// Emit in index order to preserve line continuity
+		if minIdx <= maxIdx {
+			result = append(result, pts[minIdx])
+			if minIdx != maxIdx {
+				result = append(result, pts[maxIdx])
+			}
+		} else {
+			result = append(result, pts[maxIdx])
+			result = append(result, pts[minIdx])
+		}
+	}
+
+	// Always include the last point
+	result = append(result, pts[n-1])
+
+	return result
+}
 
 // LightCurvePlot is a custom widget for displaying interactive light curve plots using gonum/plot
 type LightCurvePlot struct {
@@ -691,23 +747,12 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		dc := draw.New(img)
 		plt.Draw(dc)
 
-		var buf bytes.Buffer
-		if err := png.Encode(&buf, img.Image()); err != nil {
-			fmt.Printf("Error encoding plot image: %v\n", err)
-			return
-		}
-		goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
-		if err != nil {
-			fmt.Printf("Error decoding plot image: %v\n", err)
-			return
-		}
-
 		if r.image == nil {
-			r.image = canvas.NewImageFromImage(goImg)
+			r.image = canvas.NewImageFromImage(img.Image())
 			r.image.FillMode = canvas.ImageFillStretch
 			r.objects = []fyne.CanvasObject{r.image}
 		} else {
-			r.image.Image = goImg
+			r.image.Image = img.Image()
 			r.image.Refresh()
 		}
 		r.image.Resize(size)
@@ -725,6 +770,14 @@ func (r *lightCurvePlotRenderer) Refresh() {
 
 	// Add grid
 	plt.Add(plotter.NewGrid())
+
+	// Pixel width of the plot drawing area (used for downsampling)
+	plotPixelWidth := int(size.Width - p.marginLeft - p.marginRight)
+	if plotPixelWidth < 100 {
+		plotPixelWidth = 100
+	}
+	// Target points for downsampled lines: 2 points per pixel preserve envelope
+	lineTarget := plotPixelWidth * 2
 
 	// Add each series
 	for s, series := range p.series {
@@ -748,11 +801,14 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			pts[i].Y = pt.Y
 		}
 
+		// Downsample line points when there are many more than pixels
+		linePts := downsampleMinMax(pts, lineTarget)
+
 		// Create a line (unless scatter-only)
 		var line *plotter.Line
 		if !series.ScatterOnly {
 			var err error
-			line, err = plotter.NewLine(pts)
+			line, err = plotter.NewLine(linePts)
 			if err != nil {
 				fmt.Printf("Error creating line plot: %v\n", err)
 				continue
@@ -762,8 +818,9 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			plt.Add(line)
 		}
 
-		// Create scatter points for regular (non-interpolated) points (unless line-only)
-		if !series.LineOnly && len(regularPts) > 0 {
+		// Skip regular scatter dots when points are denser than pixels (they overlap anyway)
+		dense := len(series.Points) > plotPixelWidth
+		if !series.LineOnly && !dense && len(regularPts) > 0 {
 			scatter, err := plotter.NewScatter(regularPts)
 			if err != nil {
 				fmt.Printf("Error creating scatter plot: %v\n", err)
@@ -993,25 +1050,13 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	dc := draw.New(img)
 	plt.Draw(dc)
 
-	// Convert to Go image
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img.Image()); err != nil {
-		fmt.Printf("Error encoding plot image: %v\n", err)
-		return
-	}
-	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		fmt.Printf("Error decoding plot image: %v\n", err)
-		return
-	}
-
-	// Create or update Fyne image
+	// Use rendered image directly (no PNG encode/decode round-trip)
 	if r.image == nil {
-		r.image = canvas.NewImageFromImage(goImg)
+		r.image = canvas.NewImageFromImage(img.Image())
 		r.image.FillMode = canvas.ImageFillStretch
 		r.objects = []fyne.CanvasObject{r.image}
 	} else {
-		r.image.Image = goImg
+		r.image.Image = img.Image()
 		r.image.Refresh()
 	}
 	r.image.Resize(size)
