@@ -1,0 +1,1175 @@
+package main
+
+import (
+	"GoPyOTE/lightcurve"
+	"bytes"
+	"encoding/csv"
+	"fmt"
+	"image/color"
+	"image/png"
+	"math"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/widget"
+)
+
+// buildFitTab constructs the Fit tab.
+func buildFitTab(ac *appContext) *container.TabItem {
+	w := ac.window
+	a := ac.app
+	tab10Bg := ac.makeTabBg(color.RGBA{R: 200, G: 220, B: 240, A: 255}, color.RGBA{R: 50, G: 70, B: 90, A: 255})
+
+	// Status label for Fit tab
+	fitStatusLabel := widget.NewLabel("Select pairs of points to define baseline regions")
+
+	// Stored baseline noise sigma for Monte Carlo and NIE
+	var noiseSigma float64
+
+	// Stored last fit result, params, candidate curves, and target data for Monte Carlo
+	var lastFitResult *fitResult
+	var lastFitParams *OccultationParameters
+	var lastFitCandidates []*precomputedCurve
+	var lastFitBestIdx int // index into lastFitCandidates of the best path offset
+	var lastFitTargetTimes, lastFitTargetValues []float64
+	var lastMCResult *mcTrialsResult // most recent successful Monte Carlo run
+
+	mcShowDiagnosticsCheck := widget.NewCheck("Show diagnostics plots", nil)
+	mcShowDiagnosticsCheck.Checked = false
+
+	mcNarrowSearchCheck := widget.NewCheck("Narrow MC offset search (±20 steps)", nil)
+	mcNarrowSearchCheck.Checked = true
+
+	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
+	var calcBaselineMeanBtn *widget.Button
+	calcBaselineMeanBtn = widget.NewButton("Normalize baseline and estimate noise sigma (used for Monte Carlo and NIE trials)", func() {
+		if len(ac.lightCurvePlot.SelectedPairs) == 0 {
+			dialog.ShowError(fmt.Errorf("no point pairs selected - click on points to select baseline regions"), w)
+			return
+		}
+		if loadedLightCurveData == nil {
+			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+			return
+		}
+
+		// Collect all points from all pairs and calculate the average
+		var sum float64
+		var count int
+
+		for _, pair := range ac.lightCurvePlot.SelectedPairs {
+			idx1 := pair.Point1DataIdx
+			idx2 := pair.Point2DataIdx
+			if idx1 > idx2 {
+				idx1, idx2 = idx2, idx1
+			}
+
+			var col *LightCurveColumn
+			for i := range loadedLightCurveData.Columns {
+				if loadedLightCurveData.Columns[i].Name == pair.Point1Series {
+					col = &loadedLightCurveData.Columns[i]
+					break
+				}
+			}
+			if col == nil {
+				continue
+			}
+
+			for i := idx1; i <= idx2 && i < len(col.Values); i++ {
+				sum += col.Values[i]
+				count++
+			}
+		}
+
+		if count == 0 {
+			dialog.ShowError(fmt.Errorf("no valid points found in selected pairs"), w)
+			return
+		}
+
+		mean := sum / float64(count)
+		logAction(fmt.Sprintf("Fit: Calculated baseline mean = %.4f from %d points in %d pairs", mean, count, len(ac.lightCurvePlot.SelectedPairs)))
+
+		if mean == 0 {
+			dialog.ShowError(fmt.Errorf("baseline mean is zero - cannot scale"), w)
+			return
+		}
+
+		// Extract noise before scaling: noise = value/mean - 1.0 (equivalent to (value - mean)/mean)
+		var noise []float64
+		for _, pair := range ac.lightCurvePlot.SelectedPairs {
+			idx1 := pair.Point1DataIdx
+			idx2 := pair.Point2DataIdx
+			if idx1 > idx2 {
+				idx1, idx2 = idx2, idx1
+			}
+
+			var col *LightCurveColumn
+			for i := range loadedLightCurveData.Columns {
+				if loadedLightCurveData.Columns[i].Name == pair.Point1Series {
+					col = &loadedLightCurveData.Columns[i]
+					break
+				}
+			}
+			if col == nil {
+				continue
+			}
+
+			for i := idx1; i <= idx2 && i < len(col.Values); i++ {
+				noise = append(noise, col.Values[i]/mean-1.0)
+			}
+		}
+		// Scale all column values to unity
+		scaleFactor := mean
+		logAction(fmt.Sprintf("Fit: Scaling all light curves by 1/%.4f to set baseline mean to unity", scaleFactor))
+		for colIdx := range loadedLightCurveData.Columns {
+			for i := range loadedLightCurveData.Columns[colIdx].Values {
+				loadedLightCurveData.Columns[colIdx].Values[i] /= scaleFactor
+			}
+		}
+
+		ac.lightCurvePlot.BaselineValue = 1.0
+		ac.lightCurvePlot.ShowBaselineLine = true
+		ac.lightCurvePlot.SelectedPairs = nil
+		baselineScaledToUnity = true
+
+		savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
+		ac.rebuildPlot()
+		ac.lightCurvePlot.SetYBounds(savedMinY/scaleFactor, savedMaxY/scaleFactor)
+
+		// Show noise histogram if we have enough points and diagnostics are enabled
+		if len(noise) >= 2 {
+			histImg, noiseMean, sigma, err := createNoiseHistogramImage(noise, lastDiffractionTitle, 800, 500)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to create noise histogram: %v", err), w)
+			} else {
+				noiseSigma = sigma
+				if mcShowDiagnosticsCheck.Checked {
+					histWindow := a.NewWindow("Baseline Noise Histogram")
+					histCanvas := canvas.NewImageFromImage(histImg)
+					histCanvas.FillMode = canvas.ImageFillOriginal
+					histWindow.SetContent(container.NewScroll(histCanvas))
+					histWindow.Resize(fyne.NewSize(850, 550))
+					histWindow.CenterOnScreen()
+					histWindow.Show()
+				}
+				logAction(fmt.Sprintf("Fit: Extracted baseline noise: %d points, mean=%.6f, sigma=%.6f", len(noise), noiseMean, noiseSigma))
+			}
+		}
+
+		fitStatusLabel.SetText(fmt.Sprintf("Scaled to unity (baseline=%.4f, %d points) — noise sigma=%.6f", mean, count, noiseSigma))
+		calcBaselineMeanBtn.Importance = widget.WarningImportance
+		calcBaselineMeanBtn.Refresh()
+	})
+	calcBaselineMeanBtn.Importance = widget.HighImportance
+	ac.resetNormalizeBtn = func() {
+		calcBaselineMeanBtn.Importance = widget.HighImportance
+		calcBaselineMeanBtn.Refresh()
+	}
+
+	// Search range for observation path offset
+	searchInitialOffsetEntry := NewFocusLossEntry()
+	searchInitialOffsetEntry.SetPlaceHolder("")
+	searchFinalOffsetEntry := NewFocusLossEntry()
+	searchFinalOffsetEntry.SetPlaceHolder("")
+	searchNumStepsEntry := widget.NewEntry()
+	searchNumStepsEntry.SetPlaceHolder("")
+
+	showSearchRangeHelp := func() {
+		dialog.ShowInformation("Search range for observation path offsets",
+			"You may wish to narrow the search range after the initial full range search has completed because the Monte Carlo process will then take less time.\n\nRemember to click Run Fit Search after making changes to the search range because the Monte Carlo trials use the path range from the last click on Run Fit Search.", w)
+	}
+
+	// updateSearchNumSteps recalculates the number of steps from the current offset
+	// range and the pixel resolution of the diffraction image parameters file.
+	updateSearchNumSteps := func() {
+		initVal, err1 := strconv.ParseFloat(strings.TrimSpace(searchInitialOffsetEntry.Text), 64)
+		finalVal, err2 := strconv.ParseFloat(strings.TrimSpace(searchFinalOffsetEntry.Text), 64)
+		if err1 != nil || err2 != nil || lastDiffractionParamsPath == "" {
+			return
+		}
+		go func() {
+			file, err := os.Open(lastDiffractionParamsPath)
+			if err != nil {
+				return
+			}
+			params, err := parseOccultationParameters(file)
+			if closeErr := file.Close(); closeErr != nil {
+				fmt.Printf("Failed to close parameters file: %v\n", closeErr)
+			}
+			if err != nil || params.FundamentalPlaneWidthNumPoints == 0 {
+				return
+			}
+			stepSize := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+			if stepSize <= 0 {
+				return
+			}
+			numSteps := int(math.Abs(finalVal-initVal)/stepSize) + 1
+			fyne.Do(func() {
+				searchNumStepsEntry.SetText(fmt.Sprintf("%d", numSteps))
+			})
+		}()
+	}
+
+	var showSearchRangeBtn *widget.Button
+	suppressSearchRangeEnable := false
+	searchInitialOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
+	searchFinalOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
+	searchInitialOffsetEntry.OnChanged = func(_ string) {
+		if ac.resetFitButtons != nil {
+			ac.resetFitButtons()
+		}
+		if !suppressSearchRangeEnable && showSearchRangeBtn != nil {
+			showSearchRangeBtn.Enable()
+		}
+	}
+	searchFinalOffsetEntry.OnChanged = func(_ string) {
+		if ac.resetFitButtons != nil {
+			ac.resetFitButtons()
+		}
+		if !suppressSearchRangeEnable && showSearchRangeBtn != nil {
+			showSearchRangeBtn.Enable()
+		}
+	}
+
+	// Register callback so main.go's tabs.OnSelected can autofill search range
+	ac.autoFillSearchRange = func() {
+		if lastDiffractionParamsPath == "" ||
+			strings.TrimSpace(searchInitialOffsetEntry.Text) != "" ||
+			strings.TrimSpace(searchFinalOffsetEntry.Text) != "" {
+			return
+		}
+		go func() {
+			file, err := os.Open(lastDiffractionParamsPath)
+			if err != nil {
+				return
+			}
+			params, err := parseOccultationParameters(file)
+			if closeErr := file.Close(); closeErr != nil {
+				fmt.Printf("Failed to close parameters file: %v\n", closeErr)
+			}
+			if err != nil {
+				return
+			}
+			finalVal := params.MainBody.MajorAxisKm / 2
+			if params.PathToExternalImage != "" && finalVal == 0 {
+				finalVal = params.FundamentalPlaneWidthKm / 2
+			}
+			numSteps := 0
+			if params.FundamentalPlaneWidthNumPoints > 0 {
+				stepSize := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+				if stepSize > 0 {
+					numSteps = int(math.Abs(finalVal)/stepSize) + 1
+				}
+			}
+			ns := numSteps
+			fv := finalVal
+			fyne.Do(func() {
+				suppressSearchRangeEnable = true
+				searchInitialOffsetEntry.SetText("0.0")
+				searchFinalOffsetEntry.SetText(strconv.FormatFloat(fv, 'f', -1, 64))
+				if ns > 0 {
+					searchNumStepsEntry.SetText(fmt.Sprintf("%d", ns))
+				}
+				suppressSearchRangeEnable = false
+			})
+		}()
+	}
+
+	// Preview window for search range paths — kept so we can update in place
+	var searchPreviewWindow fyne.Window
+
+	showSearchRangePreview := func() {
+		initText := strings.TrimSpace(searchInitialOffsetEntry.Text)
+		finalText := strings.TrimSpace(searchFinalOffsetEntry.Text)
+		if initText == "" || finalText == "" {
+			return
+		}
+		initVal, err1 := strconv.ParseFloat(initText, 64)
+		finalVal, err2 := strconv.ParseFloat(finalText, 64)
+		if err1 != nil || err2 != nil {
+			return
+		}
+		if lastDiffractionParamsPath == "" {
+			return
+		}
+		go func() {
+			file, err := os.Open(lastDiffractionParamsPath)
+			if err != nil {
+				return
+			}
+			params, err := parseOccultationParameters(file)
+			if closeErr := file.Close(); closeErr != nil {
+				fmt.Printf("Failed to close parameters file: %v\n", closeErr)
+			}
+			if err != nil {
+				return
+			}
+
+			// Auto-calculate the number of steps from image resolution
+			if params.FundamentalPlaneWidthNumPoints > 0 {
+				stepSize := params.FundamentalPlaneWidthKm / float64(params.FundamentalPlaneWidthNumPoints)
+				if stepSize > 0 {
+					numSteps := int(math.Abs(finalVal-initVal)/stepSize) + 1
+					fyne.Do(func() {
+						searchNumStepsEntry.SetText(fmt.Sprintf("%d", numSteps))
+					})
+				}
+			}
+			baseImg, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "diffractionImage8bit.png"))
+			if err != nil {
+				return
+			}
+			fundPlaneWidthPts := params.FundamentalPlaneWidthNumPoints
+			if params.PathToExternalImage != "" {
+				fundPlaneWidthPts = baseImg.Bounds().Dx()
+			}
+			// Draw the initial offset path
+			path1 := &lightcurve.ObservationPath{
+				DxKmPerSec:               params.DXKmPerSec,
+				DyKmPerSec:               params.DYKmPerSec,
+				PathOffsetFromCenterKm:   initVal,
+				FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
+				FundamentalPlaneWidthPts: fundPlaneWidthPts,
+			}
+			if err := path1.ComputePathFromVelocity(); err != nil {
+				return
+			}
+			annotatedImg, err := lightcurve.DrawObservationLineOnImage(baseImg, path1)
+			if err != nil {
+				return
+			}
+			// Draw the final offset path on the same image
+			path2 := &lightcurve.ObservationPath{
+				DxKmPerSec:               params.DXKmPerSec,
+				DyKmPerSec:               params.DYKmPerSec,
+				PathOffsetFromCenterKm:   finalVal,
+				FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
+				FundamentalPlaneWidthPts: fundPlaneWidthPts,
+			}
+			if err := path2.ComputePathFromVelocity(); err != nil {
+				return
+			}
+			annotatedImg, err = lightcurve.DrawObservationLineOnImage(annotatedImg, path2)
+			if err != nil {
+				return
+			}
+			// Save the search range image to the results folder
+			if resultsFolder != "" {
+				var buf bytes.Buffer
+				if err := png.Encode(&buf, annotatedImg); err == nil {
+					savePath := filepath.Join(resultsFolder, "searchRange.png")
+					if err := os.WriteFile(savePath, buf.Bytes(), 0644); err != nil {
+						fmt.Printf("Warning: could not save searchRange.png: %v\n", err)
+					}
+				}
+			}
+			fyne.Do(func() {
+				if searchPreviewWindow != nil {
+					searchPreviewWindow.Close()
+				}
+				previewTitle := fmt.Sprintf("Search Range: %.3f to %.3f km", initVal, finalVal)
+				if lastDiffractionTitle != "" {
+					previewTitle = lastDiffractionTitle + " — " + previewTitle
+				}
+				searchPreviewWindow = a.NewWindow(previewTitle)
+				previewCanvas := canvas.NewImageFromImage(annotatedImg)
+				previewCanvas.FillMode = canvas.ImageFillContain
+				searchPreviewWindow.SetContent(previewCanvas)
+				searchPreviewWindow.Resize(fyne.NewSize(600, 600))
+				searchPreviewWindow.CenterOnScreen()
+				searchPreviewWindow.Show()
+			})
+		}()
+	}
+
+	searchRangeForm := widget.NewForm(
+		&widget.FormItem{Text: "Initial offset", Widget: searchInitialOffsetEntry},
+		&widget.FormItem{Text: "Final offset", Widget: searchFinalOffsetEntry},
+		&widget.FormItem{Text: "Number of steps", Widget: searchNumStepsEntry},
+	)
+
+	showSearchRangeBtn = widget.NewButton("Show search range", func() {
+		showSearchRangePreview()
+	})
+	showSearchRangeBtn.Importance = widget.HighImportance
+	showSearchRangeBtn.Disable()
+
+	searchRangeTitle := widget.NewLabel("Search range for observation path offset")
+	searchRangeTitle.TextStyle = fyne.TextStyle{Bold: true}
+	searchRangeTitleRow := container.NewBorder(nil, nil, nil, showSearchRangeBtn, searchRangeTitle)
+	searchRangeCard := widget.NewCard("", "", container.NewVBox(searchRangeTitleRow, searchRangeForm))
+
+	fitProgressBar := widget.NewProgressBar()
+	fitProgressBar.Hide()
+
+	// Fit abort button
+	var fitAbortFlag atomic.Bool
+	var fitAbortBtn *widget.Button
+	fitAbortBtn = widget.NewButton("Abort", func() {
+		fitAbortFlag.Store(true)
+		fitAbortBtn.Disable()
+	})
+	fitAbortBtn.Importance = widget.DangerImportance
+	fitAbortBtn.Hide()
+
+	// Fit button - checks preconditions and reports readiness
+	var fitBtn *widget.Button
+	fitBtn = widget.NewButton("Run fit search", func() {
+		var issues []string
+
+		// Check 1: Single curve selected
+		if len(ac.displayedCurves) != 1 {
+			issues = append(issues, fmt.Sprintf("A single light curve must be selected (currently %d displayed)", len(ac.displayedCurves)))
+		}
+
+		// Check 2: Scaled to unity
+		if !baselineScaledToUnity {
+			issues = append(issues, "Light curve has not been scaled to unity")
+		}
+
+		// Check 3: Parameters file from IOTAdiffraction run
+		if lastDiffractionParamsPath == "" {
+			issues = append(issues, "No diffraction has been generated (run IOTAdiffraction first)")
+		}
+
+		// Check 4: Diffraction image available
+		if _, err := os.Stat(filepath.Join(appDir, "targetImage16bit.png")); os.IsNotExist(err) {
+			issues = append(issues, "No diffraction image available (targetImage16bit.png not found)")
+		}
+
+		if len(issues) > 0 {
+			msg := "Cannot perform fit. The following conditions are not met:\n\n"
+			for i, issue := range issues {
+				msg += fmt.Sprintf("%d. %s\n", i+1, issue)
+			}
+			dialog.ShowError(fmt.Errorf("%s", msg), w)
+		} else {
+			runFitBody := func() {
+				// Clear previous fit results so edges don't accumulate across runs
+				lastFitResult = nil
+				lastFitParams = nil
+				lastFitCandidates = nil
+				lastFitTargetTimes = nil
+				lastFitTargetValues = nil
+				ac.theorySeries = nil
+				ac.lightCurvePlot.SetVerticalLines(nil, false)
+				ac.lightCurvePlot.SetSigmaLines(nil, false)
+
+				// Load parameters from the file used to generate the diffraction image
+				file, err := os.Open(lastDiffractionParamsPath)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("could not open parameters file: %v", err), w)
+					return
+				}
+				params, err := parseOccultationParameters(file)
+				if closeErr := file.Close(); closeErr != nil {
+					dialog.ShowError(fmt.Errorf("failed to close file: %w", closeErr), w)
+				}
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("could not parse parameters: %v", err), w)
+					return
+				}
+
+				// Find the single displayed column index
+				var displayedColIdx int
+				for k := range ac.displayedCurves {
+					displayedColIdx = k
+					break
+				}
+
+				// Verify timestamps are real (not all zeros)
+				allZero := true
+				for _, t := range loadedLightCurveData.TimeValues {
+					if t != 0 {
+						allZero = false
+						break
+					}
+				}
+				if allZero {
+					dialog.ShowError(fmt.Errorf("timestamps are all zero — real timestamps are required for fitting"), w)
+					return
+				}
+
+				// Collect target times and values within the frame range
+				col := loadedLightCurveData.Columns[displayedColIdx]
+				var targetTimes, targetValues []float64
+				for i, val := range col.Values {
+					frameNum := loadedLightCurveData.FrameNumbers[i]
+					if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
+						continue
+					}
+					if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
+						continue
+					}
+					targetTimes = append(targetTimes, loadedLightCurveData.TimeValues[i])
+					targetValues = append(targetValues, val)
+				}
+
+				if len(targetTimes) < 2 {
+					dialog.ShowError(fmt.Errorf("not enough data points in displayed range for fitting"), w)
+					return
+				}
+
+				params.ExposureTimeSecs = lastCsvExposureSecs
+				if lastCsvExposureSecs == 0 {
+					logAction("Fit: camera exposure time not set (0 seconds)")
+				} else {
+					logAction(fmt.Sprintf("Fit: camera exposure time: %.6f seconds", lastCsvExposureSecs))
+				}
+				// Check if search range fields are all filled in
+				searchInitial := strings.TrimSpace(searchInitialOffsetEntry.Text)
+				searchFinal := strings.TrimSpace(searchFinalOffsetEntry.Text)
+				searchSteps := strings.TrimSpace(searchNumStepsEntry.Text)
+
+				if searchInitial != "" && searchFinal != "" && searchSteps != "" {
+					initVal, err := strconv.ParseFloat(searchInitial, 64)
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("invalid Initial offset: %v", err), w)
+						return
+					}
+					finalVal, err := strconv.ParseFloat(searchFinal, 64)
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("invalid Final offset: %v", err), w)
+						return
+					}
+					stepsVal, err := strconv.Atoi(searchSteps)
+					if err != nil || stepsVal < 1 {
+						dialog.ShowError(fmt.Errorf("number of steps must be a positive integer"), w)
+						return
+					}
+					fitProgressBar.SetValue(0)
+					fitProgressBar.Show()
+					fitBtn.Disable()
+					fitAbortFlag.Store(false)
+					fitAbortBtn.Show()
+					fitAbortBtn.Enable()
+					go func() {
+						fsr, err := runFitSearch(params, targetTimes, targetValues, initVal, finalVal, stepsVal, &fitAbortFlag, func(progress float64) {
+							fyne.Do(func() {
+								fitProgressBar.SetValue(progress)
+							})
+						})
+						fyne.Do(func() {
+							fitProgressBar.Hide()
+							fitAbortBtn.Hide()
+							fitBtn.Enable()
+							if err != nil {
+								dialog.ShowError(err, w)
+							} else {
+								fr, err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
+								if err != nil {
+									dialog.ShowError(err, w)
+								} else {
+									lastFitResult = fr
+									paramsCopy := *params
+									lastFitParams = &paramsCopy
+									// Save all precomputed curves from the search for Monte Carlo
+									lastFitCandidates = make([]*precomputedCurve, 0, len(fsr.results))
+									for _, sr := range fsr.results {
+										lastFitCandidates = append(lastFitCandidates, sr.pc)
+									}
+									lastFitBestIdx = fsr.bestIdx
+									logAction(fmt.Sprintf("Fit search: %d of %d path offset steps succeeded, %d candidate curves saved for Monte Carlo", len(fsr.results), stepsVal, len(lastFitCandidates)))
+									lastFitTargetTimes = targetTimes
+									lastFitTargetValues = targetValues
+									fitBtn.Importance = widget.WarningImportance
+									fitBtn.Refresh()
+									if ac.enablePostFitButtons != nil {
+										ac.enablePostFitButtons()
+									}
+								}
+							}
+						})
+					}()
+				} else {
+					fr, pc, err := performFit(a, w, params, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
+					if err != nil {
+						dialog.ShowError(err, w)
+					} else {
+						lastFitResult = fr
+						paramsCopy := *params
+						lastFitParams = &paramsCopy
+						lastFitCandidates = []*precomputedCurve{pc}
+						lastFitTargetTimes = targetTimes
+						lastFitTargetValues = targetValues
+						fitBtn.Importance = widget.WarningImportance
+						fitBtn.Refresh()
+						if ac.enablePostFitButtons != nil {
+							ac.enablePostFitButtons()
+						}
+					}
+				}
+			}
+			if !trimPerformed {
+				noBtn := widget.NewButton("No", nil)
+				noBtn.Importance = widget.HighImportance
+				yesBtn := widget.NewButton("Yes, run anyway", nil)
+				trimDlg := dialog.NewCustom("Trim not set",
+					"",
+					container.NewVBox(
+						widget.NewLabel("A Set trim operation is recommended before running a fit search.\n\nDo you want to run anyway?"),
+						container.NewHBox(layout.NewSpacer(), noBtn, yesBtn),
+					), w)
+				noBtn.OnTapped = func() { trimDlg.Hide() }
+				yesBtn.OnTapped = func() { trimDlg.Hide(); runFitBody() }
+				trimDlg.Show()
+			} else {
+				runFitBody()
+			}
+		}
+	})
+	fitBtn.Importance = widget.HighImportance
+
+	// Monte Carlo UI elements
+	mcNumTrialsEntry := widget.NewEntry()
+	mcNumTrialsEntry.SetText("1000")
+	mcNumTrialsEntry.SetPlaceHolder("number of trials")
+	mcProgressBar := widget.NewProgressBar()
+	mcProgressBar.Hide()
+
+	var mcAbortFlag atomic.Bool
+	var mcAbortBtn *widget.Button
+	mcAbortBtn = widget.NewButton("Abort", func() {
+		mcAbortFlag.Store(true)
+		mcAbortBtn.Disable()
+	})
+	mcAbortBtn.Importance = widget.DangerImportance
+	mcAbortBtn.Hide()
+
+	var mcBtn *widget.Button
+	mcBtn = widget.NewButton("Run Monte Carlo", func() {
+		if lastFitResult == nil || lastFitParams == nil {
+			dialog.ShowError(fmt.Errorf("no fit result available — run a fit first"), w)
+			return
+		}
+		if len(lastFitCandidates) == 0 {
+			dialog.ShowError(fmt.Errorf("no candidate curves available — run a fit first"), w)
+			return
+		}
+		if noiseSigma == 0 {
+			dialog.ShowError(fmt.Errorf("no noise sigma available — run Normalize Baseline first"), w)
+			return
+		}
+		numTrials, err := strconv.Atoi(mcNumTrialsEntry.Text)
+		if err != nil || numTrials < 1 {
+			dialog.ShowError(fmt.Errorf("number of Monte Carlo trials must be a positive integer"), w)
+			return
+		}
+		// Capture all fit state on the main thread before launching the goroutine.
+		// This ensures MC always uses the candidates and fit result that were in
+		// place when the user clicked Run Monte Carlo, regardless of any concurrent
+		// changes (e.g., a new fit started during the MC run).
+		mcCandidates := lastFitCandidates
+		if mcNarrowSearchCheck.Checked && len(mcCandidates) > 41 {
+			center := lastFitBestIdx
+			lo := center - 20
+			if lo < 0 {
+				lo = 0
+			}
+			hi := center + 20 + 1 // exclusive upper bound
+			if hi > len(mcCandidates) {
+				hi = len(mcCandidates)
+			}
+			mcCandidates = mcCandidates[lo:hi]
+			logAction(fmt.Sprintf("MC narrow search: using %d candidates (indices %d–%d) around best offset at index %d", len(mcCandidates), lo, hi-1, center))
+		}
+		mcFitResult := lastFitResult
+		mcFitParams := lastFitParams
+		mcTargetTimes := lastFitTargetTimes
+		mcTargetValues := lastFitTargetValues
+		mcNoiseSigma := noiseSigma
+		mcTitle := lastDiffractionTitle
+		logAction(fmt.Sprintf("Run Monte Carlo: %d candidate curves from fit search, noise sigma=%.6f", len(mcCandidates), mcNoiseSigma))
+		mcProgressBar.SetValue(0)
+		mcProgressBar.Show()
+		mcBtn.Disable()
+		mcAbortFlag.Store(false)
+		mcAbortBtn.Show()
+		mcAbortBtn.Enable()
+		go func() {
+			// Yield for two Fyne render frames (~32 ms at 60 fps) before starting trials.
+			// Without this, a fast MC run can post fyne.Do(Hide) to the event queue
+			// before the Show() calls above have been rendered, making the progress bar
+			// and Abort button appear to never show up (rare race condition).
+			time.Sleep(32 * time.Millisecond)
+			result, err := runMonteCarloTrials(mcCandidates, mcFitResult, mcNoiseSigma, numTrials, &mcAbortFlag, func(progress float64) {
+				fyne.Do(func() {
+					mcProgressBar.SetValue(progress)
+				})
+			})
+			fyne.Do(func() {
+				mcProgressBar.Hide()
+				mcAbortBtn.Hide()
+				mcBtn.Enable()
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				lastMCResult = result
+				mcBtn.Importance = widget.WarningImportance
+				mcBtn.Refresh()
+				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
+				for i := 0; i < result.numEdges && i < len(mcFitResult.edgeTimes); i++ {
+					absTime := mcFitResult.edgeTimes[i] + mcFitResult.bestShift
+					ts := formatSecondsAsTimestamp(absTime)
+					msg += fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)\n", i+1, ts, 3*result.edgeStds[i])
+				}
+				if result.numEdges == 2 {
+					fitDuration := math.Abs(mcFitResult.edgeTimes[1] - mcFitResult.edgeTimes[0])
+					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+					msg += fmt.Sprintf("\n  Duration: %.4f +/- %.4f sec (3 sigma)\n", fitDuration, 3*durationStd)
+				}
+				fmt.Print(msg)
+
+				// Log Monte Carlo results
+				logAction(fmt.Sprintf("Monte Carlo results (%d trials):", result.numTrials))
+				for i := 0; i < result.numEdges; i++ {
+					logAction(fmt.Sprintf("  Edge %d: mean=%.4f sec, 3 sigma=%.4f sec", i+1, result.edgeMeans[i], 3*result.edgeStds[i]))
+				}
+				if result.numEdges == 2 {
+					durationMean := math.Abs(result.edgeMeans[1] - result.edgeMeans[0])
+					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+					logAction(fmt.Sprintf("  Duration: mean=%.4f sec, 3 sigma=%.4f sec", durationMean, 3*durationStd))
+				}
+
+				// Final report: fit edge times (as timestamps) with MC uncertainty
+				logAction("--- Final Report ---")
+				logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", mcFitResult.bestNCC, mcFitParams.PathPerpendicularOffsetKm))
+				if mcFitResult.bestScale > 0 {
+					logAction(fmt.Sprintf("  Percent drop: %.2f%%", mcFitResult.bestScale*100.0))
+				}
+				if lastCsvExposureSecs > 0 {
+					logAction(fmt.Sprintf("  Camera exposure time: %.6f seconds", lastCsvExposureSecs))
+				} else {
+					logAction("  Camera exposure time: not set")
+				}
+				for i, et := range mcFitResult.edgeTimes {
+					absTime := et + mcFitResult.bestShift
+					ts := formatSecondsAsTimestamp(absTime)
+					if i < result.numEdges {
+						logAction(fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)", i+1, ts, 3*result.edgeStds[i]))
+					} else {
+						logAction(fmt.Sprintf("  Edge %d: %s", i+1, ts))
+					}
+				}
+				if len(mcFitResult.edgeTimes) == 2 && result.numEdges == 2 {
+					fitDuration := math.Abs((mcFitResult.edgeTimes[1] + mcFitResult.bestShift) - (mcFitResult.edgeTimes[0] + mcFitResult.bestShift))
+					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+					logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec (3 sigma)", fitDuration, 3*durationStd))
+				}
+				logAction("--- End Report ---")
+
+				summaryLabel := widget.NewLabel(msg)
+				summaryLabel.Wrapping = fyne.TextWrapWord
+
+				var mcContainer *fyne.Container
+				if mcShowDiagnosticsCheck.Checked {
+					// Show individual trial edge times (max 100)
+					trialsMsg := "Individual trial edge times:\n"
+					numCompleted := 0
+					if result.numEdges > 0 {
+						numCompleted = len(result.edgeAll[0])
+					}
+					maxDisplay := numCompleted
+					if maxDisplay > 100 {
+						maxDisplay = 100
+					}
+					for t := 0; t < maxDisplay; t++ {
+						trialsMsg += fmt.Sprintf("  Trial %3d:", t+1)
+						for i := 0; i < result.numEdges; i++ {
+							trialsMsg += fmt.Sprintf("  Edge %d=%.4f", i+1, result.edgeAll[i][t])
+						}
+						if result.numEdges == 2 {
+							trialsMsg += fmt.Sprintf("  Dur=%.4f", math.Abs(result.edgeAll[1][t]-result.edgeAll[0][t]))
+						}
+						if t < len(result.pathOffsets) {
+							trialsMsg += fmt.Sprintf("  Path=%.3f km", result.pathOffsets[t])
+						}
+						trialsMsg += "\n"
+					}
+					if numCompleted > 100 {
+						trialsMsg += fmt.Sprintf("  ... (%d more trials not shown)\n", numCompleted-100)
+					}
+					fmt.Print(trialsMsg)
+					trialsLabel := widget.NewLabel(trialsMsg)
+					trialsLabel.TextStyle.Monospace = true
+					trialsScroll := container.NewScroll(trialsLabel)
+					trialsScroll.SetMinSize(fyne.NewSize(750, 300))
+					mcContainer = container.NewVBox(summaryLabel, trialsScroll)
+
+					// Show edge and duration histograms
+					for i := 0; i < result.numEdges; i++ {
+						if len(result.edgeAll[i]) < 2 {
+							continue
+						}
+						histImg, err := createHistogramImage(
+							result.edgeAll[i],
+							fmt.Sprintf("Edge %d Times", i+1),
+							"Time (seconds)",
+							mcTitle,
+							900, 500,
+						)
+						if err != nil {
+							fmt.Printf("Failed to create Edge %d histogram: %v", i+1, err)
+							continue
+						}
+						histWin := a.NewWindow(fmt.Sprintf("Monte Carlo — Edge %d Histogram", i+1))
+						histCanvas := canvas.NewImageFromImage(histImg)
+						histCanvas.FillMode = canvas.ImageFillContain
+						histWin.SetContent(histCanvas)
+						histWin.Resize(fyne.NewSize(950, 550))
+						histWin.CenterOnScreen()
+						histWin.Show()
+					}
+
+					// Show duration histogram if 2 edges
+					if result.numEdges == 2 && len(result.edgeAll[0]) >= 2 {
+						n := len(result.edgeAll[0])
+						durations := make([]float64, n)
+						for t := 0; t < n; t++ {
+							durations[t] = math.Abs(result.edgeAll[1][t] - result.edgeAll[0][t])
+						}
+						histImg, err := createHistogramImage(
+							durations,
+							"Event Duration",
+							"Duration (seconds)",
+							mcTitle,
+							900, 500,
+						)
+						if err != nil {
+							fmt.Printf("Failed to create duration histogram: %v", err)
+						} else {
+							histWin := a.NewWindow("Monte Carlo — Duration Histogram")
+							histCanvas := canvas.NewImageFromImage(histImg)
+							histCanvas.FillMode = canvas.ImageFillContain
+							histWin.SetContent(histCanvas)
+							histWin.Resize(fyne.NewSize(950, 550))
+							histWin.CenterOnScreen()
+							histWin.Show()
+						}
+					}
+				} else {
+					mcSpacer := canvas.NewRectangle(color.Transparent)
+					mcSpacer.SetMinSize(fyne.NewSize(750, 0))
+					mcContainer = container.NewVBox(mcSpacer, summaryLabel)
+				}
+				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
+				// Create a fit overlay plot with ±3σ edge uncertainty lines, using the
+				// scale-adjusted theoretical curve (bestScale from the post-fit scale search).
+				if len(mcTargetTimes) > 0 && len(mcTargetValues) > 0 {
+					mcScale := mcFitResult.bestScale
+					if mcScale == 0 {
+						mcScale = 1.0
+					}
+					mcScaledCurve := make([]timeIntensityPoint, len(mcFitResult.curve))
+					for i, pt := range mcFitResult.curve {
+						mcScaledCurve[i] = timeIntensityPoint{
+							time:      pt.time,
+							intensity: pt.intensity*mcScale + (1.0 - mcScale),
+						}
+					}
+					mcScaledSampledVals := make([]float64, len(mcFitResult.sampledVals))
+					for i, v := range mcFitResult.sampledVals {
+						mcScaledSampledVals[i] = v*mcScale + (1.0 - mcScale)
+					}
+					mcOverlayImg, err := createOverlayPlotImage(mcScaledCurve, mcFitResult.bestShift, mcFitResult.edgeTimes, mcTargetTimes, mcTargetValues, mcFitResult.sampledTimes, mcScaledSampledVals, mcTitle, 1200, 500, result.edgeStds)
+					if err != nil {
+						fmt.Printf("Failed to create MC overlay plot: %v\n", err)
+					} else {
+						// Save to the results folder
+						savePath := filepath.Join(appDir, "fitPlotMC.png")
+						if resultsFolder != "" {
+							savePath = filepath.Join(resultsFolder, "fitPlotMC.png")
+						}
+						var buf bytes.Buffer
+						if err := png.Encode(&buf, mcOverlayImg); err != nil {
+							fmt.Printf("Warning: could not encode fitPlotMC.png: %v\n", err)
+						} else if err := os.WriteFile(savePath, buf.Bytes(), 0644); err != nil {
+							fmt.Printf("Warning: could not save fitPlotMC.png: %v\n", err)
+						}
+
+						mcOverlayWin := a.NewWindow("Fit Result with Monte Carlo Edge Uncertainty (±3σ)")
+						mcOverlayCanvas := canvas.NewImageFromImage(mcOverlayImg)
+						mcOverlayCanvas.FillMode = canvas.ImageFillContain
+						mcOverlayWin.SetContent(mcOverlayCanvas)
+						mcOverlayWin.Resize(fyne.NewSize(1250, 550))
+						mcOverlayWin.CenterOnScreen()
+						mcOverlayWin.Show()
+					}
+
+					// Update main plot: overlay theoretical curve, edge lines, and ±3σ lines
+					theoryPoints := make([]PlotPoint, len(mcScaledCurve))
+					for i, pt := range mcScaledCurve {
+						theoryPoints[i] = PlotPoint{
+							X:     pt.time + mcFitResult.bestShift,
+							Y:     pt.intensity,
+							Index: -1,
+						}
+					}
+					ac.theorySeries = &PlotSeries{
+						Points:   theoryPoints,
+						Color:    color.RGBA{R: 255, G: 170, B: 170, A: 255},
+						Name:     "Theoretical (fit)",
+						LineOnly: true,
+					}
+					edgeXVals := make([]float64, len(mcFitResult.edgeTimes))
+					for i, et := range mcFitResult.edgeTimes {
+						edgeXVals[i] = et + mcFitResult.bestShift
+					}
+					ac.lightCurvePlot.SetVerticalLines(edgeXVals, true)
+					var sigmaXVals []float64
+					for i, et := range mcFitResult.edgeTimes {
+						if i < len(result.edgeStds) {
+							edgeX := et + mcFitResult.bestShift
+							sigma3 := 3.0 * result.edgeStds[i]
+							sigmaXVals = append(sigmaXVals, edgeX-sigma3, edgeX+sigma3)
+						}
+					}
+					ac.lightCurvePlot.SetSigmaLines(sigmaXVals, len(sigmaXVals) > 0)
+					ac.lightCurvePlot.ShowBaselineLine = false
+					savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
+					ac.rebuildPlot()
+					ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+				}
+			})
+		}()
+	})
+	mcBtn.Importance = widget.HighImportance
+	mcBtn.Disable()
+
+	var nieAbortFlag atomic.Bool
+	var nieAbortBtn *widget.Button
+	nieAbortBtn = widget.NewButton("Abort NIE", func() {
+		nieAbortFlag.Store(true)
+		nieAbortBtn.Disable()
+	})
+	nieAbortBtn.Importance = widget.DangerImportance
+	nieAbortBtn.Hide()
+
+	var runNieBtn *widget.Button
+	runNieBtn = widget.NewButton("Run NIE analysis", func() {
+		if lastFitResult == nil {
+			dialog.ShowError(fmt.Errorf("no fit result available â run a fit first"), w)
+			return
+		}
+		if len(lastFitResult.edgeTimes) < 2 {
+			dialog.ShowError(fmt.Errorf("NIE requires a two-edge fit result"), w)
+			return
+		}
+		if noiseSigma == 0 {
+			dialog.ShowError(fmt.Errorf("no noise sigma available â run Normalize Baseline first"), w)
+			return
+		}
+		if len(lastFitTargetTimes) == 0 {
+			dialog.ShowError(fmt.Errorf("no target light curve available â run a fit first"), w)
+			return
+		}
+		mcTrials, err := strconv.Atoi(mcNumTrialsEntry.Text)
+		if err != nil || mcTrials < 1 {
+			dialog.ShowError(fmt.Errorf("number of trials must be a positive integer"), w)
+			return
+		}
+		numTrials := mcTrials * 10
+		nPoints := len(lastFitTargetTimes)
+
+		// launchNIE starts the goroutine given a known windowWidth, eventDrop, and selection source.
+		launchNIE := func(windowWidth int, eventDrop float64, manualSelection bool) {
+			logAction(fmt.Sprintf("NIE: starting %d trials, nPoints=%d, windowWidth=%d, noiseSigma=%.6f", numTrials, nPoints, windowWidth, noiseSigma))
+			mcProgressBar.SetValue(0)
+			mcProgressBar.Show()
+			runNieBtn.Disable()
+			nieAbortFlag.Store(false)
+			nieAbortBtn.Show()
+			nieAbortBtn.Enable()
+			go func() {
+				minMeans, err := runNIETrials(numTrials, nPoints, windowWidth, noiseSigma, &nieAbortFlag, func(progress float64) {
+					fyne.Do(func() {
+						mcProgressBar.SetValue(progress)
+					})
+				})
+				fyne.Do(func() {
+					mcProgressBar.Hide()
+					nieAbortBtn.Hide()
+					runNieBtn.Enable()
+					if err != nil {
+						dialog.ShowError(err, w)
+						return
+					}
+					histImg, nieMean, nieSigma, err := createNIEHistogramImage(minMeans, windowWidth, eventDrop, lastDiffractionTitle, 800, 500)
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("failed to create NIE histogram: %v", err), w)
+						return
+					}
+					logAction(fmt.Sprintf("NIE: %d trials completed, min-window-mean distribution: mean=%.6f, sigma=%.6f", len(minMeans), nieMean, nieSigma))
+					nieWindowTitle := "Noise Induced Drop study — fit-derived"
+					if manualSelection {
+						nieWindowTitle = "Noise Induced Drop study — manual selection"
+					}
+					histWindow := a.NewWindow(nieWindowTitle)
+					histCanvas := canvas.NewImageFromImage(histImg)
+					histCanvas.FillMode = canvas.ImageFillOriginal
+					histWindow.SetContent(container.NewScroll(histCanvas))
+					histWindow.Resize(fyne.NewSize(850, 550))
+					histWindow.CenterOnScreen()
+					histWindow.Show()
+					runNieBtn.Importance = widget.WarningImportance
+					runNieBtn.Refresh()
+				})
+			}()
+		}
+
+		// Compute window width from event edges and event drop from the fit.
+		windowWidth := 0
+		edge1Abs := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
+		edge2Abs := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
+		if edge1Abs > edge2Abs {
+			edge1Abs, edge2Abs = edge2Abs, edge1Abs
+		}
+		for _, t := range lastFitTargetTimes {
+			if t >= edge1Abs && t <= edge2Abs {
+				windowWidth++
+			}
+		}
+		if windowWidth < 1 {
+			dialog.ShowError(fmt.Errorf("no target samples found between event edges â check fit result"), w)
+			return
+		}
+		// Event drop = 1 - bestScale, where bestScale is the amplitude scale factor
+		// found by the post-fit scale search (scaledTLC = bestTLC*scale + (1-scale)).
+		// bestScale==0 (zero value, search not run) maps naturally to eventDrop=1.0 (full drop).
+		eventDrop := 1.0 - lastFitResult.bestScale
+		logAction(fmt.Sprintf("NIE fit-derived: bestScale=%.4f, eventDrop=%.4f", lastFitResult.bestScale, eventDrop))
+		launchNIE(windowWidth, eventDrop, false)
+	})
+	runNieBtn.Importance = widget.HighImportance
+	runNieBtn.Disable()
+
+	// buildSodisFill creates a sodisPreFill with an optional occultation override.
+	buildSodisFill := func(occultationOverride string, onSave func()) {
+		occTitle := lastDiffractionTitle
+		if lastFitParams != nil && lastFitParams.Title != "" {
+			occTitle = lastFitParams.Title
+		}
+		// Compute observer-corrected t0 using the persisted observer GPS location.
+		var computedObserverT0 time.Time
+		if lastLoadedOccelmntXml != "" && lastObserverLocationSet {
+			_, obsT0, _, t0Err := ObserverT0CorrectionFromOWC(
+				lastLoadedOccelmntXml,
+				lastObserverLatDeg, lastObserverLonDeg, lastObserverAltMeters,
+				0, 0, 0)
+			if t0Err == nil {
+				computedObserverT0 = obsT0
+			}
+		}
+		// Read "Event Time (UT)" from the details file if present.
+		var detailsEventTimeUT string
+		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
+			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
+			if dirEntries, derr := os.ReadDir(obsDir); derr == nil {
+				for _, entry := range dirEntries {
+					if !entry.IsDir() && strings.Contains(strings.ToLower(entry.Name()), "detail") {
+						if fileData, rerr := os.ReadFile(filepath.Join(obsDir, entry.Name())); rerr == nil {
+							reader := csv.NewReader(bytes.NewReader(fileData))
+							reader.FieldsPerRecord = -1
+							reader.TrimLeadingSpace = true
+							for {
+								record, rerr2 := reader.Read()
+								if rerr2 != nil {
+									break
+								}
+								if len(record) >= 2 && strings.TrimSpace(record[0]) == "Event Time (UT)" && strings.TrimSpace(record[1]) != "" {
+									detailsEventTimeUT = strings.TrimSpace(record[1])
+									break
+								}
+							}
+						}
+						break
+					}
+				}
+			}
+		}
+		showSodisReportDialog(w, &sodisPreFill{
+			fitResult:           lastFitResult,
+			mcResult:            lastMCResult,
+			fitParams:           lastFitParams,
+			lcData:              loadedLightCurveData,
+			occTitle:            occTitle,
+			sitePath:            lastLoadedSitePath,
+			occelmntXml:         lastLoadedOccelmntXml,
+			noiseSigma:          noiseSigma,
+			csvExposureSecs:     lastCsvExposureSecs,
+			observerT0:          computedObserverT0,
+			detailsEventTimeUT:  detailsEventTimeUT,
+			vt:                  ac.vizierTab,
+			occultationOverride: occultationOverride,
+		}, onSave)
+	}
+
+	var fillSodisBtn *widget.Button
+	fillSodisBtn = widget.NewButton("Fill SODIS report", func() {
+		buildSodisFill("", func() {
+			fillSodisBtn.Importance = widget.WarningImportance
+			fillSodisBtn.Refresh()
+		})
+	})
+	fillSodisBtn.Importance = widget.HighImportance
+	fillSodisBtn.Disable()
+
+	var fillSodisNegBtn *widget.Button
+	fillSodisNegBtn = widget.NewButton("Fill SODIS Negative", func() {
+		buildSodisFill("NEGATIVE", func() {
+			sodisNegativeReportSaved = true
+			fillSodisNegBtn.Importance = widget.WarningImportance
+			fillSodisNegBtn.Refresh()
+		})
+	})
+	fillSodisNegBtn.Importance = widget.HighImportance
+
+	ac.enablePostFitButtons = func() {
+		mcBtn.Enable()
+		runNieBtn.Enable()
+		fillSodisBtn.Enable()
+	}
+
+	ac.resetFitButtons = func() {
+		fitBtn.Importance = widget.HighImportance
+		fitBtn.Refresh()
+		mcBtn.Importance = widget.HighImportance
+		mcBtn.Disable()
+		runNieBtn.Importance = widget.HighImportance
+		runNieBtn.Disable()
+		fillSodisBtn.Importance = widget.HighImportance
+		fillSodisBtn.Disable()
+	}
+
+	tab10Content := container.NewStack(tab10Bg, container.NewPadded(container.NewVBox(
+		widget.NewLabel("Fit"),
+		widget.NewSeparator(),
+		widget.NewLabel("1. Click two points to mark a baseline region (pair)"),
+		widget.NewLabel("2. Repeat to add more baseline regions"),
+		widget.NewLabel("3. Click on a marked point to remove that pair"),
+		widget.NewSeparator(),
+		container.NewHBox(calcBaselineMeanBtn),
+		widget.NewSeparator(),
+		searchRangeCard,
+		container.NewHBox(fitBtn, fitAbortBtn, widget.NewButton("Help", showSearchRangeHelp)),
+		widget.NewSeparator(),
+		widget.NewLabel("Monte Carlo trials"),
+		mcNumTrialsEntry,
+		container.NewHBox(mcNarrowSearchCheck),
+		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, fillSodisNegBtn),
+		mcProgressBar,
+		widget.NewSeparator(),
+		fitStatusLabel,
+		fitProgressBar,
+	)))
+	return container.NewTabItem("Fit", tab10Content)
+}
