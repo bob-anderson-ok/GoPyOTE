@@ -507,14 +507,15 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 
 	// Determine the output directory
 	destDir := outputFolder
+	resultsOnly := false
 	if destDir == "" {
-		// Default to Documents/VizieR if no folder specified
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("could not determine home directory: %v", err), w)
+		// If no output folder specified, write-only to the -RESULTS folder
+		if resultsFolder == "" {
+			dialog.ShowError(fmt.Errorf("no output folder specified and no -RESULTS folder available"), w)
 			return
 		}
-		destDir = filepath.Join(homeDir, "Documents", "VizieR")
+		destDir = resultsFolder
+		resultsOnly = true
 	}
 
 	// Create a directory if it doesn't exist
@@ -576,9 +577,9 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 		return
 	}
 
-	// Copy to the results folder if available
+	// Copy to the results folder if available (skip if already writing there)
 	resultsCopyMsg := ""
-	if resultsFolder != "" {
+	if resultsFolder != "" && !resultsOnly {
 		copyPath := filepath.Join(resultsFolder, filename)
 		if copyData, err := os.ReadFile(vizierFilePath); err == nil {
 			if err := os.WriteFile(copyPath, copyData, 0644); err != nil {

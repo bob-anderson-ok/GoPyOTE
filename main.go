@@ -67,7 +67,7 @@ var fresnelScaleResolutionMarkdown embed.FS
 var monteCarloExplanation embed.FS
 
 // Version information
-const Version = "1.2.16"
+const Version = "1.2.17"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2292,7 +2292,7 @@ func main() {
 			title string
 		}
 		plots := []plotInfo{
-			{filepath.Join(appDir, "ac.lightCurvePlot.png"), "Light Curve Plot"},
+			{filepath.Join(appDir, "lightCurvePlot.png"), "Light Curve Plot"},
 			{filepath.Join(appDir, "diffractionImageWithPath.png"), "Diffraction Image"},
 			{filepath.Join(appDir, "camera_response.png"), "Camera Response"},
 		}
