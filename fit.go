@@ -270,8 +270,9 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 // displayFitResult shows the NCC plot, overlay plot, diffraction image, and edge times for a fit result.
 // showDiagnostics gates in the NCC Fit Result window.
 func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64, showDiagnostics bool) error {
+	displayTitle := normalizeAsteroidTitle(params.Title)
 	if showDiagnostics {
-		plotImg, err := createNCCPlotImage(fr.nccCurve, params.Title, 1000, 500)
+		plotImg, err := createNCCPlotImage(fr.nccCurve, displayTitle, 1000, 500)
 		if err != nil {
 			return fmt.Errorf("failed to create NCC plot: %w", err)
 		}
@@ -307,7 +308,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 		logAction(fmt.Sprintf("Scale search: best scale=%.4f, percent drop=%.2f, MSE=%.6f", bestScale, bestScale*100, scaleMSE))
 
 		// Show scaled overlay plot; nil edgeStds saves it as fitPlot.png
-		scaleOverlayImg, scaleErr := createOverlayPlotImage(scaledCurve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, scaledSampledVals, params.Title, 1200, 500, nil)
+		scaleOverlayImg, scaleErr := createOverlayPlotImage(scaledCurve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, scaledSampledVals, displayTitle, 1200, 500, nil)
 		if scaleErr == nil {
 			scaleWindowTitle := fmt.Sprintf("Scaled Fit Result (percent drop = %.2f) — Theoretical vs Observed", bestScale*100)
 			scaleOverlayWindow := app.NewWindow(scaleWindowTitle)
@@ -343,8 +344,8 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 				fmt.Printf("Could not draw observation path: %v\n", err)
 			} else {
 				pathTitle := fmt.Sprintf("Observation Path on Diffraction Image (offset=%.3f km)", params.PathPerpendicularOffsetKm)
-				if params.Title != "" {
-					pathTitle = params.Title + " — " + pathTitle
+				if displayTitle != "" {
+					pathTitle = displayTitle + " — " + pathTitle
 				}
 				// Save the observation path image to the results folder
 				if resultsFolder != "" {
@@ -925,8 +926,9 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 // displayFitSearchResult shows the path offset plot and the full fit for the best offset.
 // Must be called on the main thread.
 func displayFitSearchResult(app fyne.App, w fyne.Window, params *OccultationParameters, fsr *fitSearchResult, targetTimes, targetValues []float64, showDiagnostics bool) (*fitResult, error) {
+	displayTitle := normalizeAsteroidTitle(params.Title)
 	if showDiagnostics {
-		searchPlotImg, err := createPathOffsetPlotImage(fsr.results, params.Title, 1000, 500)
+		searchPlotImg, err := createPathOffsetPlotImage(fsr.results, displayTitle, 1000, 500)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create path offset plot: %w", err)
 		}

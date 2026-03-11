@@ -67,7 +67,7 @@ var fresnelScaleResolutionMarkdown embed.FS
 var monteCarloExplanation embed.FS
 
 // Version information
-const Version = "1.2.17"
+const Version = "1.2.18"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -93,6 +93,14 @@ var lastDiffractionParamsPath string
 
 // Title from the parameters file used for the last IOTAdiffraction run (for plot titles)
 var lastDiffractionTitle string
+
+// normalizeAsteroidTitle replaces "(0)" with "(-)" in titles where the asteroid number is 0.
+func normalizeAsteroidTitle(title string) string {
+	if strings.HasPrefix(title, "(0)") {
+		return "(-)" + title[3:]
+	}
+	return title
+}
 
 // resultsFolder is the path to the -RESULTS folder created alongside the opened CSV file.
 // Various outputs (fit plots, histograms, etc.) are written here.
@@ -185,12 +193,12 @@ func main() {
 		lastObserverAltMeters = prefs.FloatWithFallback("lastObserverAltMeters", 0.0)
 	}
 	lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
-	lastDiffractionTitle = prefs.StringWithFallback("lastDiffractionTitle", "")
+	lastDiffractionTitle = normalizeAsteroidTitle(prefs.StringWithFallback("lastDiffractionTitle", ""))
 	// Backfill the title from the parameters file if a path exists but title was never saved
 	if lastDiffractionParamsPath != "" && lastDiffractionTitle == "" {
 		if f, err := os.Open(lastDiffractionParamsPath); err == nil {
 			if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
-				lastDiffractionTitle = p.Title
+				lastDiffractionTitle = normalizeAsteroidTitle(p.Title)
 				prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
 			}
 			if err := f.Close(); err != nil {
@@ -1083,6 +1091,10 @@ func main() {
 				lastPair := ac.lightCurvePlot.SelectedPairs[len(ac.lightCurvePlot.SelectedPairs)-1]
 				idx1 := lastPair.Point1DataIdx
 				idx2 := lastPair.Point2DataIdx
+				if idx1 < 0 || idx2 < 0 {
+					dialog.ShowError(fmt.Errorf("both selected points must be data points (not theory curve points)"), w)
+					return
+				}
 				ac.lightCurvePlot.SelectedPairs = ac.lightCurvePlot.SelectedPairs[:len(ac.lightCurvePlot.SelectedPairs)-1]
 				if loadedLightCurveData != nil && idx1 < len(loadedLightCurveData.FrameNumbers) {
 					frame1 = loadedLightCurveData.FrameNumbers[idx1]
@@ -1100,6 +1112,10 @@ func main() {
 			if ac.lightCurvePlot.SelectedPoint1Valid && ac.lightCurvePlot.SelectedPoint2Valid {
 				idx1 := ac.lightCurvePlot.selectedPointDataIndex
 				idx2 := ac.lightCurvePlot.selectedPointDataIndex2
+				if idx1 < 0 || idx2 < 0 {
+					dialog.ShowError(fmt.Errorf("both selected points must be data points (not theory curve points)"), w)
+					return
+				}
 				if loadedLightCurveData != nil && idx1 < len(loadedLightCurveData.FrameNumbers) {
 					frame1 = loadedLightCurveData.FrameNumbers[idx1]
 				} else {
@@ -1354,7 +1370,7 @@ func main() {
 	if strings.HasPrefix(lastDiffractionTitle, "(") {
 		if end := strings.Index(lastDiffractionTitle, ")"); end > 0 {
 			if num := strings.TrimSpace(lastDiffractionTitle[1:end]); num != "" {
-				vizierTab.AsteroidNumberEntry.SetText(num)
+				vizierTab.SetAsteroidNumber(num)
 			}
 			if name := strings.TrimSpace(lastDiffractionTitle[end+1:]); name != "" {
 				vizierTab.AsteroidNameEntry.SetText(name)
@@ -2046,7 +2062,7 @@ func main() {
 		lastDiffractionTitle = ""
 		if f, err := os.Open(paramFilePath); err == nil {
 			if p, err := parseOccultationParameters(f); err == nil {
-				lastDiffractionTitle = p.Title
+				lastDiffractionTitle = normalizeAsteroidTitle(p.Title)
 				if p.OccelmntXml != "" {
 					lastLoadedOccelmntXml = p.OccelmntXml
 					prefs.SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
@@ -2063,7 +2079,7 @@ func main() {
 		if strings.HasPrefix(lastDiffractionTitle, "(") {
 			if end := strings.Index(lastDiffractionTitle, ")"); end > 0 {
 				if num := strings.TrimSpace(lastDiffractionTitle[1:end]); num != "" {
-					vizierTab.AsteroidNumberEntry.SetText(num)
+					vizierTab.SetAsteroidNumber(num)
 				}
 				if name := strings.TrimSpace(lastDiffractionTitle[end+1:]); name != "" {
 					vizierTab.AsteroidNameEntry.SetText(name)
@@ -2202,6 +2218,9 @@ func main() {
 			dialog.ShowError(fmt.Errorf("failed to read details file: %w", rerr), w)
 			return
 		}
+		// Normalize mixed line endings (CR LF and bare CR) to LF before CSV parsing.
+		fileData = bytes.ReplaceAll(fileData, []byte("\r\n"), []byte("\n"))
+		fileData = bytes.ReplaceAll(fileData, []byte("\r"), []byte("\n"))
 		reader := csv.NewReader(bytes.NewReader(fileData))
 		reader.FieldsPerRecord = -1
 		reader.TrimLeadingSpace = true

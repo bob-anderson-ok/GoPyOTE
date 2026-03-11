@@ -40,7 +40,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	var lastFitParams *OccultationParameters
 	var lastFitCandidates []*precomputedCurve
 	var lastFitBestIdx int // index into lastFitCandidates of the best path offset
-	var lastFitTargetTimes, lastFitTargetValues []float64
+	var lastFitTargetTimes []float64
 	var lastMCResult *mcTrialsResult // most recent successful Monte Carlo run
 
 	mcShowDiagnosticsCheck := widget.NewCheck("Show diagnostics plots", nil)
@@ -458,7 +458,6 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				lastFitParams = nil
 				lastFitCandidates = nil
 				lastFitTargetTimes = nil
-				lastFitTargetValues = nil
 				ac.theorySeries = nil
 				ac.lightCurvePlot.SetVerticalLines(nil, false)
 				ac.lightCurvePlot.SetSigmaLines(nil, false)
@@ -579,12 +578,12 @@ func buildFitTab(ac *appContext) *container.TabItem {
 									lastFitBestIdx = fsr.bestIdx
 									logAction(fmt.Sprintf("Fit search: %d of %d path offset steps succeeded, %d candidate curves saved for Monte Carlo", len(fsr.results), stepsVal, len(lastFitCandidates)))
 									lastFitTargetTimes = targetTimes
-									lastFitTargetValues = targetValues
 									fitBtn.Importance = widget.WarningImportance
 									fitBtn.Refresh()
 									if ac.enablePostFitButtons != nil {
 										ac.enablePostFitButtons()
 									}
+									ac.overlayTheoryCurve(fr, nil)
 								}
 							}
 						})
@@ -599,12 +598,12 @@ func buildFitTab(ac *appContext) *container.TabItem {
 						lastFitParams = &paramsCopy
 						lastFitCandidates = []*precomputedCurve{pc}
 						lastFitTargetTimes = targetTimes
-						lastFitTargetValues = targetValues
 						fitBtn.Importance = widget.WarningImportance
 						fitBtn.Refresh()
 						if ac.enablePostFitButtons != nil {
 							ac.enablePostFitButtons()
 						}
+						ac.overlayTheoryCurve(fr, nil)
 					}
 				}
 			}
@@ -681,13 +680,56 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			mcCandidates = mcCandidates[lo:hi]
 			logAction(fmt.Sprintf("MC narrow search: using %d candidates (indices %d–%d) around best offset at index %d", len(mcCandidates), lo, hi-1, center))
 		}
-		mcFitResult := lastFitResult
 		mcFitParams := lastFitParams
-		mcTargetTimes := lastFitTargetTimes
-		mcTargetValues := lastFitTargetValues
+		// Re-extract target data from the current trim range so that the user can
+		// adjust the trim after the fit search and have MC honour it.
+		var displayedColIdx int
+		for k := range ac.displayedCurves {
+			displayedColIdx = k
+			break
+		}
+		col := loadedLightCurveData.Columns[displayedColIdx]
+		var mcTargetTimes, mcTargetValues []float64
+		for i, val := range col.Values {
+			frameNum := loadedLightCurveData.FrameNumbers[i]
+			if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
+				continue
+			}
+			if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
+				continue
+			}
+			mcTargetTimes = append(mcTargetTimes, loadedLightCurveData.TimeValues[i])
+			mcTargetValues = append(mcTargetValues, val)
+		}
+		if len(mcTargetTimes) < 2 {
+			dialog.ShowError(fmt.Errorf("not enough data points in current trim range for Monte Carlo"), w)
+			return
+		}
+		// Resample the best-fit theoretical curve at the current trim target times
+		// so that MC noise injection and refitting use only the trimmed range.
+		bestPC := lastFitCandidates[lastFitBestIdx]
+		trimmedSampledVals := make([]float64, len(mcTargetTimes))
+		for i, t := range mcTargetTimes {
+			localT := t - lastFitResult.bestShift
+			if localT < 0 || localT > bestPC.duration {
+				trimmedSampledVals[i] = 1.0
+			} else {
+				trimmedSampledVals[i] = interpolateAt(bestPC.curve, bestPC.curveTimes, localT)
+			}
+		}
+		mcFitResult := &fitResult{
+			curve:        lastFitResult.curve,
+			edgeTimes:    lastFitResult.edgeTimes,
+			nccCurve:     lastFitResult.nccCurve,
+			bestNCC:      lastFitResult.bestNCC,
+			bestShift:    lastFitResult.bestShift,
+			sampledTimes: mcTargetTimes,
+			sampledVals:  trimmedSampledVals,
+			bestScale:    lastFitResult.bestScale,
+		}
 		mcNoiseSigma := noiseSigma
 		mcTitle := lastDiffractionTitle
-		logAction(fmt.Sprintf("Run Monte Carlo: %d candidate curves from fit search, noise sigma=%.6f", len(mcCandidates), mcNoiseSigma))
+		logAction(fmt.Sprintf("Run Monte Carlo: %d candidate curves from fit search, noise sigma=%.6f, trim range %.0f–%.0f", len(mcCandidates), mcNoiseSigma, ac.frameRangeStart, ac.frameRangeEnd))
 		mcProgressBar.SetValue(0)
 		mcProgressBar.Show()
 		mcBtn.Disable()
@@ -906,38 +948,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					}
 
 					// Update main plot: overlay theoretical curve, edge lines, and ±3σ lines
-					theoryPoints := make([]PlotPoint, len(mcScaledCurve))
-					for i, pt := range mcScaledCurve {
-						theoryPoints[i] = PlotPoint{
-							X:     pt.time + mcFitResult.bestShift,
-							Y:     pt.intensity,
-							Index: -1,
-						}
-					}
-					ac.theorySeries = &PlotSeries{
-						Points:   theoryPoints,
-						Color:    color.RGBA{R: 255, G: 170, B: 170, A: 255},
-						Name:     "Theoretical (fit)",
-						LineOnly: true,
-					}
-					edgeXVals := make([]float64, len(mcFitResult.edgeTimes))
-					for i, et := range mcFitResult.edgeTimes {
-						edgeXVals[i] = et + mcFitResult.bestShift
-					}
-					ac.lightCurvePlot.SetVerticalLines(edgeXVals, true)
-					var sigmaXVals []float64
-					for i, et := range mcFitResult.edgeTimes {
-						if i < len(result.edgeStds) {
-							edgeX := et + mcFitResult.bestShift
-							sigma3 := 3.0 * result.edgeStds[i]
-							sigmaXVals = append(sigmaXVals, edgeX-sigma3, edgeX+sigma3)
-						}
-					}
-					ac.lightCurvePlot.SetSigmaLines(sigmaXVals, len(sigmaXVals) > 0)
-					ac.lightCurvePlot.ShowBaselineLine = false
-					savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
-					ac.rebuildPlot()
-					ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+					ac.overlayTheoryCurve(mcFitResult, result.edgeStds)
 				}
 			})
 		}()
@@ -1056,7 +1067,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	buildSodisFill := func(occultationOverride string, onSave func()) {
 		occTitle := lastDiffractionTitle
 		if lastFitParams != nil && lastFitParams.Title != "" {
-			occTitle = lastFitParams.Title
+			occTitle = normalizeAsteroidTitle(lastFitParams.Title)
 		}
 		// Compute observer-corrected t0 using the persisted observer GPS location.
 		var computedObserverT0 time.Time
@@ -1077,6 +1088,9 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				for _, entry := range dirEntries {
 					if !entry.IsDir() && strings.Contains(strings.ToLower(entry.Name()), "detail") {
 						if fileData, rerr := os.ReadFile(filepath.Join(obsDir, entry.Name())); rerr == nil {
+							// Normalize mixed line endings (CR LF and bare CR) to LF before CSV parsing.
+							fileData = bytes.ReplaceAll(fileData, []byte("\r\n"), []byte("\n"))
+							fileData = bytes.ReplaceAll(fileData, []byte("\r"), []byte("\n"))
 							reader := csv.NewReader(bytes.NewReader(fileData))
 							reader.FieldsPerRecord = -1
 							reader.TrimLeadingSpace = true

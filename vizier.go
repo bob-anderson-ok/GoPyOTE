@@ -243,6 +243,15 @@ func (vt *VizieRTab) ClearInputs() {
 	vt.AsteroidNameEntry.SetText("")
 }
 
+// SetAsteroidNumber sets the asteroid number entry field, substituting "-" when the number is "0".
+func (vt *VizieRTab) SetAsteroidNumber(num string) {
+	if num == "0" {
+		vt.AsteroidNumberEntry.SetText("-")
+	} else {
+		vt.AsteroidNumberEntry.SetText(num)
+	}
+}
+
 // FillStarFromOccelmntXml parses the first <Event>'s <Star> element from the
 // supplied occelmnt XML. If the first comma-separated field starts with "UCAC4"
 // (case-insensitive), the UCAC4 identifier that follows is written to StarUCAC4Entry.
@@ -891,7 +900,7 @@ func (vt *VizieRTab) FillFromRavfHeaders(headers []string) {
 		if strings.HasPrefix(header, "#OCCULTATION-OBJECT-NUMBER:") {
 			parts := strings.SplitN(header, ":", 2)
 			if len(parts) >= 2 {
-				vt.AsteroidNumberEntry.SetText(strings.TrimSpace(parts[1]))
+				vt.SetAsteroidNumber(strings.TrimSpace(parts[1]))
 			}
 			continue
 		}
@@ -1057,7 +1066,7 @@ func (vt *VizieRTab) FillFromAdvHeaders(headers []string) {
 						// Extract number between "(" and ")"
 						if startIdx := strings.Index(asteroidPart, "("); startIdx >= 0 && startIdx < idx {
 							asteroidNum := strings.TrimSpace(asteroidPart[startIdx+1 : idx])
-							vt.AsteroidNumberEntry.SetText(asteroidNum)
+							vt.SetAsteroidNumber(asteroidNum)
 						}
 						// Extract name after ")"
 						asteroidName := strings.TrimSpace(asteroidPart[idx+1:])
@@ -1247,7 +1256,7 @@ func (vt *VizieRTab) FillFromNASpreadsheet(w fyne.Window) {
 
 		// Read Asteroid Number (E7) and Name (K7)
 		if asteroidNumber, err := f.GetCellValue("DATA", "E7"); err == nil && asteroidNumber != "" {
-			vt.AsteroidNumberEntry.SetText(asteroidNumber)
+			vt.SetAsteroidNumber(asteroidNumber)
 		}
 		if asteroidName, err := f.GetCellValue("DATA", "K7"); err == nil && asteroidName != "" {
 			vt.AsteroidNameEntry.SetText(asteroidName)
@@ -1444,7 +1453,7 @@ func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
 			value = strings.TrimLeft(value, ".: \t")
 			value = strings.TrimSpace(value)
 			if value != "" {
-				vt.AsteroidNumberEntry.SetText(value)
+				vt.SetAsteroidNumber(value)
 			}
 			continue
 		}

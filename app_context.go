@@ -63,6 +63,50 @@ func (ac *appContext) makeTabBg(light, dark color.RGBA) *canvas.Rectangle {
 	return rect
 }
 
+// overlayTheoryCurve sets the theoretical light curve and edge lines on the main plot
+// from a fitResult. If edgeStds is non-nil, ±3σ sigma lines are also drawn.
+func (ac *appContext) overlayTheoryCurve(fr *fitResult, edgeStds []float64) {
+	scale := fr.bestScale
+	if scale == 0 {
+		scale = 1.0
+	}
+	theoryPoints := make([]PlotPoint, len(fr.curve))
+	for i, pt := range fr.curve {
+		theoryPoints[i] = PlotPoint{
+			X:     pt.time + fr.bestShift,
+			Y:     pt.intensity*scale + (1.0 - scale),
+			Index: -1,
+		}
+	}
+	ac.theorySeries = &PlotSeries{
+		Points:   theoryPoints,
+		Color:    color.RGBA{R: 255, G: 170, B: 170, A: 255},
+		Name:     "Theoretical (fit)",
+		LineOnly: true,
+	}
+	edgeXVals := make([]float64, len(fr.edgeTimes))
+	for i, et := range fr.edgeTimes {
+		edgeXVals[i] = et + fr.bestShift
+	}
+	ac.lightCurvePlot.SetVerticalLines(edgeXVals, true)
+
+	var sigmaXVals []float64
+	if len(edgeStds) > 0 {
+		for i, et := range fr.edgeTimes {
+			if i < len(edgeStds) {
+				edgeX := et + fr.bestShift
+				sigma3 := 3.0 * edgeStds[i]
+				sigmaXVals = append(sigmaXVals, edgeX-sigma3, edgeX+sigma3)
+			}
+		}
+	}
+	ac.lightCurvePlot.SetSigmaLines(sigmaXVals, len(sigmaXVals) > 0)
+	ac.lightCurvePlot.ShowBaselineLine = false
+	savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
+	ac.rebuildPlot()
+	ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+}
+
 // applyTabBgTheme switches all registered tab backgrounds between light and dark mode.
 func (ac *appContext) applyTabBgTheme(isDark bool) {
 	for _, entry := range ac.tabBgs {
