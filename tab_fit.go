@@ -34,6 +34,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 	// Stored baseline noise sigma for Monte Carlo and NIE
 	var noiseSigma float64
+	var baselineValues []float64 // baseline region values (after scaling to unity)
 
 	// Stored last fit result, params, candidate curves, and target data for Monte Carlo
 	var lastFitResult *fitResult
@@ -154,6 +155,12 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				noise = append(noise, col.Values[i]/mean-1.0)
 			}
 		}
+		// Store baseline values (scaled to unity) for testNoiseProcessing.
+		baselineValues = make([]float64, len(noise))
+		for i, n := range noise {
+			baselineValues[i] = n + 1.0
+		}
+
 		// Scale all column values to unity
 		scaleFactor := mean
 		logAction(fmt.Sprintf("Fit: Scaling all light curves by 1/%.4f to set baseline mean to unity", scaleFactor))
@@ -996,7 +1003,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 	var runNieBtn *widget.Button
 	runNieBtn = widget.NewButton("Run NIE analysis", func() {
-		testCorrNoise() // temporary test call — remove later
+		testNoiseProcessing(baselineValues) // temporary test call — remove later
 		if lastFitResult == nil {
 			dialog.ShowError(fmt.Errorf("no fit result available â run a fit first"), w)
 			return

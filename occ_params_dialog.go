@@ -458,7 +458,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 				if afterOccParamsSaved != nil {
 					cb := afterOccParamsSaved
 					sp := savePath
-					time.AfterFunc(150*time.Millisecond, func() {
+					time.AfterFunc(50*time.Millisecond, func() {
 						fyne.Do(func() { cb(sp) })
 					})
 				}
@@ -576,7 +576,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 				if afterOccParamsSaved != nil {
 					cb := afterOccParamsSaved
 					sp := savePath
-					time.AfterFunc(150*time.Millisecond, func() {
+					time.AfterFunc(50*time.Millisecond, func() {
 						fyne.Do(func() { cb(sp) })
 					})
 				}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image"
 	"image/color"
 	"math"
 
@@ -132,6 +133,10 @@ type LightCurvePlot struct {
 
 	// onRenderComplete is called once at the end of the next render pass, then cleared.
 	onRenderComplete func()
+
+	// selectionOnly — when true, the next Refresh redraws selection dots
+	// on the cached base image instead of re-rendering the full plot.
+	selectionOnly bool
 }
 
 // NewLightCurvePlot creates a new light curve plot widget
@@ -389,6 +394,13 @@ func (p *LightCurvePlot) SetSeries(series []PlotSeries) {
 	p.Refresh()
 }
 
+// RefreshSelection redraws only the selection dots on the cached base image,
+// avoiding the expensive full gonum/plot re-render.
+func (p *LightCurvePlot) RefreshSelection() {
+	p.selectionOnly = true
+	p.Refresh()
+}
+
 // MinSize returns the minimum size
 func (p *LightCurvePlot) MinSize() fyne.Size {
 	return fyne.NewSize(200, 150)
@@ -505,7 +517,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 			p.SelectedPoint1Valid = false
 			p.SelectedPoint1Frame = 0
 			p.SelectedPoint1Value = 0
-			p.Refresh()
+			p.RefreshSelection()
 			return
 		}
 
@@ -518,7 +530,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 			p.SelectedPoint1Valid = true
 			p.SelectedPoint1Frame = clickedPoint.X
 			p.SelectedPoint1Value = clickedPoint.Y
-			p.Refresh()
+			p.RefreshSelection()
 			if p.onPointClicked != nil {
 				p.onPointClicked(clickedPoint)
 			}
@@ -533,7 +545,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 					(pair.Point2SeriesIdx == closestSeries && pair.Point2Idx == closestIdx) {
 					// Remove this pair
 					p.SelectedPairs = append(p.SelectedPairs[:i], p.SelectedPairs[i+1:]...)
-					p.Refresh()
+					p.RefreshSelection()
 					if p.onPointClicked != nil {
 						p.onPointClicked(clickedPoint)
 					}
@@ -550,7 +562,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 				p.SelectedPoint1Valid = false
 				p.SelectedPoint1Frame = 0
 				p.SelectedPoint1Value = 0
-				p.Refresh()
+				p.RefreshSelection()
 				return
 			}
 
@@ -563,7 +575,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 				p.SelectedPoint1Valid = true
 				p.SelectedPoint1Frame = clickedPoint.X
 				p.SelectedPoint1Value = clickedPoint.Y
-				p.Refresh()
+				p.RefreshSelection()
 				if p.onPointClicked != nil {
 					p.onPointClicked(clickedPoint)
 				}
@@ -604,7 +616,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 			p.SelectedPoint1Frame = 0
 			p.SelectedPoint1Value = 0
 
-			p.Refresh()
+			p.RefreshSelection()
 			if p.onPointClicked != nil {
 				p.onPointClicked(clickedPoint)
 			}
@@ -620,7 +632,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 			p.SelectedPoint2Valid = false
 			p.SelectedPoint2Frame = 0
 			p.SelectedPoint2Value = 0
-			p.Refresh()
+			p.RefreshSelection()
 			return
 		}
 
@@ -633,7 +645,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 			p.SelectedPoint1Valid = true
 			p.SelectedPoint1Frame = clickedPoint.X
 			p.SelectedPoint1Value = clickedPoint.Y
-			p.Refresh()
+			p.RefreshSelection()
 			if p.onPointClicked != nil {
 				p.onPointClicked(clickedPoint)
 			}
@@ -655,7 +667,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 			p.SelectedPoint2Valid = true
 			p.SelectedPoint2Frame = clickedPoint.X
 			p.SelectedPoint2Value = clickedPoint.Y
-			p.Refresh()
+			p.RefreshSelection()
 			if p.onPointClicked != nil {
 				p.onPointClicked(clickedPoint)
 			}
@@ -670,7 +682,7 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 		p.SelectedPoint1Valid = true
 		p.SelectedPoint1Frame = clickedPoint.X
 		p.SelectedPoint1Value = clickedPoint.Y
-		p.Refresh()
+		p.RefreshSelection()
 		if p.onPointClicked != nil {
 			p.onPointClicked(clickedPoint)
 		}
@@ -679,9 +691,10 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 
 // lightCurvePlotRenderer renders the plot using gonum/plot
 type lightCurvePlotRenderer struct {
-	plot    *LightCurvePlot
-	image   *canvas.Image
-	objects []fyne.CanvasObject
+	plot            *LightCurvePlot
+	image           *canvas.Image
+	objects         []fyne.CanvasObject
+	cachedBaseImage *image.RGBA // base plot without selection dots
 }
 
 func (r *lightCurvePlotRenderer) Destroy() {}
@@ -700,9 +713,91 @@ func (r *lightCurvePlotRenderer) Objects() []fyne.CanvasObject {
 	return r.objects
 }
 
+// drawSelectionDot draws a filled circle on img at pixel (cx, cy) with the given radius and color.
+func drawSelectionDot(img *image.RGBA, cx, cy, radius int, c color.RGBA) {
+	bounds := img.Bounds()
+	r2 := radius * radius
+	for dy := -radius; dy <= radius; dy++ {
+		for dx := -radius; dx <= radius; dx++ {
+			if dx*dx+dy*dy <= r2 {
+				px, py := cx+dx, cy+dy
+				if px >= bounds.Min.X && px < bounds.Max.X && py >= bounds.Min.Y && py < bounds.Max.Y {
+					img.SetRGBA(px, py, c)
+				}
+			}
+		}
+	}
+}
+
 func (r *lightCurvePlotRenderer) Refresh() {
 	p := r.plot
 	size := p.Size()
+
+	// Fast path: redraw only selection dots on the cached base image.
+	if p.selectionOnly && r.cachedBaseImage != nil {
+		p.selectionOnly = false
+
+		// Copy the cached base image.
+		bounds := r.cachedBaseImage.Bounds()
+		overlay := image.NewRGBA(bounds)
+		copy(overlay.Pix, r.cachedBaseImage.Pix)
+
+		imgW := float64(bounds.Dx())
+		imgH := float64(bounds.Dy())
+		plotW := imgW - float64(p.marginLeft) - float64(p.marginRight)
+		plotH := imgH - float64(p.marginTop) - float64(p.marginBottom)
+
+		toPixelX := func(dataX float64) int {
+			return int(float64(p.marginLeft) + (dataX-p.minX)/(p.maxX-p.minX)*plotW)
+		}
+		toPixelY := func(dataY float64) int {
+			return int(float64(p.marginTop) + (1.0-(dataY-p.minY)/(p.maxY-p.minY))*plotH)
+		}
+
+		dotRadius := 7
+
+		// Draw selected point 1 (red)
+		if p.selectedSeries >= 0 && p.selectedIndex >= 0 &&
+			p.selectedSeries < len(p.series) &&
+			p.selectedIndex < len(p.series[p.selectedSeries].Points) {
+			pt := p.series[p.selectedSeries].Points[p.selectedIndex]
+			drawSelectionDot(overlay, toPixelX(pt.X), toPixelY(pt.Y), dotRadius,
+				color.RGBA{R: 255, G: 50, B: 50, A: 255})
+		}
+
+		// Draw selected point 2 (blue)
+		if p.selectedSeries2 >= 0 && p.selectedIndex2 >= 0 &&
+			p.selectedSeries2 < len(p.series) &&
+			p.selectedIndex2 < len(p.series[p.selectedSeries2].Points) {
+			pt := p.series[p.selectedSeries2].Points[p.selectedIndex2]
+			drawSelectionDot(overlay, toPixelX(pt.X), toPixelY(pt.Y), dotRadius,
+				color.RGBA{R: 50, G: 50, B: 255, A: 255})
+		}
+
+		// Draw saved pairs
+		pairColors := []color.RGBA{
+			{R: 0, G: 200, B: 0, A: 255},
+			{R: 255, G: 165, B: 0, A: 255},
+			{R: 148, G: 0, B: 211, A: 255},
+			{R: 0, G: 206, B: 209, A: 255},
+			{R: 255, G: 20, B: 147, A: 255},
+			{R: 139, G: 69, B: 19, A: 255},
+			{R: 50, G: 205, B: 50, A: 255},
+			{R: 255, G: 215, B: 0, A: 255},
+		}
+		for pairIdx, pair := range p.SelectedPairs {
+			pc := pairColors[pairIdx%len(pairColors)]
+			drawSelectionDot(overlay, toPixelX(pair.Point1Frame), toPixelY(pair.Point1Value), dotRadius, pc)
+			drawSelectionDot(overlay, toPixelX(pair.Point2Frame), toPixelY(pair.Point2Value), dotRadius, pc)
+		}
+
+		if r.image != nil {
+			r.image.Image = overlay
+			r.image.Refresh()
+		}
+		return
+	}
+	p.selectionOnly = false
 
 	if size.Width < 10 || size.Height < 10 {
 		if cb := p.onRenderComplete; cb != nil {
@@ -791,7 +886,7 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	lineTarget := plotPixelWidth * 2
 
 	// Add each series
-	for s, series := range p.series {
+	for _, series := range p.series {
 		// Separate regular, interpolated, and negative delta points
 		var regularPts, interpolatedPts, negativeDeltaPts plotter.XYs
 		for _, pt := range series.Points {
@@ -893,80 +988,8 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			}
 		}
 
-		// Highlight selected point 1 (red)
-		if s == p.selectedSeries && p.selectedIndex >= 0 && p.selectedIndex < len(series.Points) {
-			selectedPt := make(plotter.XYs, 1)
-			selectedPt[0].X = series.Points[p.selectedIndex].X
-			selectedPt[0].Y = series.Points[p.selectedIndex].Y
-			selectedScatter, err := plotter.NewScatter(selectedPt)
-			if err != nil {
-				fmt.Printf("Error creating selected point 1 scatter: %v\n", err)
-			} else {
-				selectedScatter.Color = color.RGBA{R: 255, G: 50, B: 50, A: 255} // Red
-				selectedScatter.GlyphStyle.Shape = draw.CircleGlyph{}
-				selectedScatter.GlyphStyle.Radius = vg.Points(7)
-				plt.Add(selectedScatter)
-			}
-		}
-
-		// Highlight selected point 2 (blue)
-		if s == p.selectedSeries2 && p.selectedIndex2 >= 0 && p.selectedIndex2 < len(series.Points) {
-			selectedPt := make(plotter.XYs, 1)
-			selectedPt[0].X = series.Points[p.selectedIndex2].X
-			selectedPt[0].Y = series.Points[p.selectedIndex2].Y
-			selectedScatter, err := plotter.NewScatter(selectedPt)
-			if err != nil {
-				fmt.Printf("Error creating selected point 2 scatter: %v\n", err)
-			} else {
-				selectedScatter.Color = color.RGBA{R: 50, G: 50, B: 255, A: 255} // Blue
-				selectedScatter.GlyphStyle.Shape = draw.CircleGlyph{}
-				selectedScatter.GlyphStyle.Radius = vg.Points(7)
-				plt.Add(selectedScatter)
-			}
-		}
-
-		// Highlight saved pairs (for multi-pair selection mode)
-		pairColors := []color.RGBA{
-			{R: 0, G: 200, B: 0, A: 255},    // Green
-			{R: 255, G: 165, B: 0, A: 255},  // Orange
-			{R: 148, G: 0, B: 211, A: 255},  // Purple
-			{R: 0, G: 206, B: 209, A: 255},  // Cyan
-			{R: 255, G: 20, B: 147, A: 255}, // Pink
-			{R: 139, G: 69, B: 19, A: 255},  // Brown
-			{R: 50, G: 205, B: 50, A: 255},  // Lime
-			{R: 255, G: 215, B: 0, A: 255},  // Gold
-		}
-		for pairIdx, pair := range p.SelectedPairs {
-			pairColor := pairColors[pairIdx%len(pairColors)]
-
-			// Draw point 1 of this pair if it's in the current series
-			if pair.Point1SeriesIdx == s && pair.Point1Idx >= 0 && pair.Point1Idx < len(series.Points) {
-				pairPt1 := make(plotter.XYs, 1)
-				pairPt1[0].X = series.Points[pair.Point1Idx].X
-				pairPt1[0].Y = series.Points[pair.Point1Idx].Y
-				pairScatter1, err := plotter.NewScatter(pairPt1)
-				if err == nil {
-					pairScatter1.Color = pairColor
-					pairScatter1.GlyphStyle.Shape = draw.CircleGlyph{}
-					pairScatter1.GlyphStyle.Radius = vg.Points(7)
-					plt.Add(pairScatter1)
-				}
-			}
-
-			// Draw point 2 of this pair if it's in the current series
-			if pair.Point2SeriesIdx == s && pair.Point2Idx >= 0 && pair.Point2Idx < len(series.Points) {
-				pairPt2 := make(plotter.XYs, 1)
-				pairPt2[0].X = series.Points[pair.Point2Idx].X
-				pairPt2[0].Y = series.Points[pair.Point2Idx].Y
-				pairScatter2, err := plotter.NewScatter(pairPt2)
-				if err == nil {
-					pairScatter2.Color = pairColor
-					pairScatter2.GlyphStyle.Shape = draw.CircleGlyph{}
-					pairScatter2.GlyphStyle.Radius = vg.Points(7)
-					plt.Add(pairScatter2)
-				}
-			}
-		}
+		// Selection dots are drawn as a post-processing step on the cached
+		// base image (see below) so they can be updated without a full re-render.
 
 		// Add to legend
 		legendScatter, _ := plotter.NewScatter(pts)
@@ -1061,13 +1084,78 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	dc := draw.New(img)
 	plt.Draw(dc)
 
-	// Use rendered image directly (no PNG encode/decode round-trip)
+	// Cache the base image (without selection dots) for fast selection redraws.
+	baseImg := img.Image()
+	if rgbaImg, ok := baseImg.(*image.RGBA); ok {
+		r.cachedBaseImage = rgbaImg
+	} else {
+		// Convert to RGBA if needed.
+		bounds := baseImg.Bounds()
+		rgbaImg := image.NewRGBA(bounds)
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				rgbaImg.Set(x, y, baseImg.At(x, y))
+			}
+		}
+		r.cachedBaseImage = rgbaImg
+	}
+
+	// Draw selection dots on a copy of the base image.
+	overlay := image.NewRGBA(r.cachedBaseImage.Bounds())
+	copy(overlay.Pix, r.cachedBaseImage.Pix)
+
+	imgW := float64(r.cachedBaseImage.Bounds().Dx())
+	imgH := float64(r.cachedBaseImage.Bounds().Dy())
+	plotW := imgW - float64(p.marginLeft) - float64(p.marginRight)
+	plotH := imgH - float64(p.marginTop) - float64(p.marginBottom)
+
+	toPixelX := func(dataX float64) int {
+		return int(float64(p.marginLeft) + (dataX-p.minX)/(p.maxX-p.minX)*plotW)
+	}
+	toPixelY := func(dataY float64) int {
+		return int(float64(p.marginTop) + (1.0-(dataY-p.minY)/(p.maxY-p.minY))*plotH)
+	}
+	dotRadius := 7
+
+	// Selected point 1 (red)
+	if p.selectedSeries >= 0 && p.selectedIndex >= 0 &&
+		p.selectedSeries < len(p.series) &&
+		p.selectedIndex < len(p.series[p.selectedSeries].Points) {
+		pt := p.series[p.selectedSeries].Points[p.selectedIndex]
+		drawSelectionDot(overlay, toPixelX(pt.X), toPixelY(pt.Y), dotRadius,
+			color.RGBA{R: 255, G: 50, B: 50, A: 255})
+	}
+	// Selected point 2 (blue)
+	if p.selectedSeries2 >= 0 && p.selectedIndex2 >= 0 &&
+		p.selectedSeries2 < len(p.series) &&
+		p.selectedIndex2 < len(p.series[p.selectedSeries2].Points) {
+		pt := p.series[p.selectedSeries2].Points[p.selectedIndex2]
+		drawSelectionDot(overlay, toPixelX(pt.X), toPixelY(pt.Y), dotRadius,
+			color.RGBA{R: 50, G: 50, B: 255, A: 255})
+	}
+	// Saved pairs
+	pairColors := []color.RGBA{
+		{R: 0, G: 200, B: 0, A: 255},
+		{R: 255, G: 165, B: 0, A: 255},
+		{R: 148, G: 0, B: 211, A: 255},
+		{R: 0, G: 206, B: 209, A: 255},
+		{R: 255, G: 20, B: 147, A: 255},
+		{R: 139, G: 69, B: 19, A: 255},
+		{R: 50, G: 205, B: 50, A: 255},
+		{R: 255, G: 215, B: 0, A: 255},
+	}
+	for pairIdx, pair := range p.SelectedPairs {
+		pc := pairColors[pairIdx%len(pairColors)]
+		drawSelectionDot(overlay, toPixelX(pair.Point1Frame), toPixelY(pair.Point1Value), dotRadius, pc)
+		drawSelectionDot(overlay, toPixelX(pair.Point2Frame), toPixelY(pair.Point2Value), dotRadius, pc)
+	}
+
 	if r.image == nil {
-		r.image = canvas.NewImageFromImage(img.Image())
+		r.image = canvas.NewImageFromImage(overlay)
 		r.image.FillMode = canvas.ImageFillStretch
 		r.objects = []fyne.CanvasObject{r.image}
 	} else {
-		r.image.Image = img.Image()
+		r.image.Image = overlay
 		r.image.Refresh()
 	}
 	r.image.Resize(size)

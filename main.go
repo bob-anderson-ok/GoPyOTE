@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"GoPyOTE/lightcurve"
@@ -67,7 +68,7 @@ var fresnelScaleResolutionMarkdown embed.FS
 var monteCarloExplanation embed.FS
 
 // Version information
-const Version = "1.2.19"
+const Version = "1.2.20"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1987,8 +1988,17 @@ func main() {
 	// Select the OBS select tab on startup
 	tabs.Select(tab3)
 
+	// Shared widgets for the IOTAdiffraction output window.
+	// A fresh OS window is created each time to let Fyne centre it automatically.
+	iotaOutputLabel := widget.NewLabel("Starting IOTAdiffraction...")
+	iotaOutputLabel.Wrapping = fyne.TextWrapWord
+	iotaScrollContainer := container.NewVScroll(container.NewPadded(iotaOutputLabel))
+	var iotaOutputWindow fyne.Window
+
 	// Helper function to run IOTAdiffraction with a given parameter file
 	runIOTAdiffraction := func(paramFilePath string) {
+		// This function runs inside a goroutine — all UI updates use fyne.Do.
+
 		// If the parameters file has a non-empty path_to_qe_table_file, prefix it with CAMERA-QE/
 		// and write a temporary modified copy for IOTAdiffraction to use.
 		actualParamFile := paramFilePath
@@ -2022,46 +2032,49 @@ func main() {
 
 		// Check if the file exists
 		if _, err := os.Stat(exePath); os.IsNotExist(err) {
-			dialog.ShowInformation("File Not Found",
-				"IOTAdiffraction.exe was not found in the application directory.\n\n"+
-					"Please ensure the file is located at:\n"+exePath, w)
+			fyne.Do(func() {
+				iotaOutputWindow.Hide()
+				dialog.ShowInformation("File Not Found",
+					"IOTAdiffraction.exe was not found in the application directory.\n\n"+
+						"Please ensure the file is located at:\n"+exePath, w)
+			})
 			return
 		}
-
-		// Create output display
-		outputLabel := widget.NewLabel("")
-		outputLabel.Wrapping = fyne.TextWrapWord
-
-		scrollContainer := container.NewVScroll(container.NewPadded(outputLabel))
-		scrollContainer.SetMinSize(fyne.NewSize(500, 300))
-
-		// Create a custom dialog with the output
-		outputDialog := dialog.NewCustom("IOTAdiffraction Output", "Close", scrollContainer, w)
 
 		// Set up the command with pipes using the selected file as a parameter
 		showPlots := fmt.Sprintf("%v", prefs.BoolWithFallback("showIOTAPlots", true))
 		cmd := exec.Command(exePath, actualParamFile, showPlots)
 		cmd.Dir = appDir
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("error creating stdout pipe: %v", err), w)
+			fyne.Do(func() {
+				iotaOutputWindow.Hide()
+				dialog.ShowError(fmt.Errorf("error creating stdout pipe: %v", err), w)
+			})
 			return
 		}
 
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("error creating stderr pipe: %v", err), w)
+			fyne.Do(func() {
+				iotaOutputWindow.Hide()
+				dialog.ShowError(fmt.Errorf("error creating stderr pipe: %v", err), w)
+			})
 			return
 		}
 
 		// Start the command
 		if err := cmd.Start(); err != nil {
-			dialog.ShowError(fmt.Errorf("error starting IOTAdiffraction: %v", err), w)
+			fyne.Do(func() {
+				iotaOutputWindow.Hide()
+				dialog.ShowError(fmt.Errorf("error starting IOTAdiffraction: %v", err), w)
+			})
 			return
 		}
 
-		outputDialog.Show()
+		fyne.Do(func() { iotaOutputLabel.SetText("") })
 
 		// Mutex to protect output text updates
 		var mu sync.Mutex
@@ -2073,8 +2086,8 @@ func main() {
 			text := outputLines
 			mu.Unlock()
 			fyne.Do(func() {
-				outputLabel.SetText(text)
-				scrollContainer.ScrollToBottom()
+				iotaOutputLabel.SetText(text)
+				iotaScrollContainer.ScrollToBottom()
 			})
 		}
 
@@ -2114,42 +2127,66 @@ func main() {
 		}()
 	}
 
-	// useParamFile sets up a global state and runs IOTAdiffraction with the given .occparams file.
+	// useParamFile sets up global state and runs IOTAdiffraction with the given .occparams file.
 	// Extracted here (rather than inside btnIOTA) so it can also be triggered automatically
 	// when the parameters dialog saves a new file.
 	useParamFile := func(paramFilePath string) {
 		logAction(fmt.Sprintf("Running IOTAdiffraction with parameters file: %s", paramFilePath))
 		lastDiffractionParamsPath = paramFilePath
 		prefs.SetString("lastDiffractionParamsPath", paramFilePath)
-		// Extract title and embedded occelmnt XML from the parameters file
-		lastDiffractionTitle = ""
-		if f, err := os.Open(paramFilePath); err == nil {
-			if p, err := parseOccultationParameters(f); err == nil {
-				lastDiffractionTitle = normalizeAsteroidTitle(p.Title)
-				if p.OccelmntXml != "" {
-					lastLoadedOccelmntXml = p.OccelmntXml
+
+		// Create a fresh output window each time so Fyne centres it on screen.
+		iotaOutputLabel.SetText("Starting IOTAdiffraction...")
+		if iotaOutputWindow != nil {
+			iotaOutputWindow.Close()
+		}
+		iotaOutputWindow = a.NewWindow("IOTAdiffraction Output")
+		iotaOutputWindow.SetContent(iotaScrollContainer)
+		iotaOutputWindow.Resize(fyne.NewSize(520, 350))
+		iotaOutputWindow.Show()
+
+		// Move ALL remaining work (param parsing, VizieR fills, process
+		// launch) into a goroutine so the dialog can render immediately.
+		go func() {
+			// Extract title and embedded occelmnt XML from the parameters file
+			title := ""
+			var occXml string
+			if f, err := os.Open(paramFilePath); err == nil {
+				if p, err := parseOccultationParameters(f); err == nil {
+					title = normalizeAsteroidTitle(p.Title)
+					occXml = p.OccelmntXml
+				}
+				if err := f.Close(); err != nil {
+					fmt.Printf("Warning: failed to close parameters file: %v\n", err)
+				}
+			}
+
+			// UI updates must happen on the main thread
+			fyne.Do(func() {
+				lastDiffractionTitle = title
+				prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
+				ac.lightCurvePlot.occultationTitle = lastDiffractionTitle
+				if occXml != "" {
+					lastLoadedOccelmntXml = occXml
 					prefs.SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
 					vizierTab.FillStarFromOccelmntXml(lastLoadedOccelmntXml)
 				}
-			}
-			if err := f.Close(); err != nil {
-				fmt.Printf("Warning: failed to close parameters file: %v\n", err)
-			}
-		}
-		prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
-		ac.lightCurvePlot.occultationTitle = lastDiffractionTitle
-		// Fill VizieR Number and Name entries from title (e.g. "(2731) Cucula" → "2731", "Cucula")
-		if strings.HasPrefix(lastDiffractionTitle, "(") {
-			if end := strings.Index(lastDiffractionTitle, ")"); end > 0 {
-				if num := strings.TrimSpace(lastDiffractionTitle[1:end]); num != "" {
-					vizierTab.SetAsteroidNumber(num)
+				// Fill VizieR Number and Name entries from title (e.g. "(2731) Cucula" -> "2731", "Cucula")
+				if strings.HasPrefix(lastDiffractionTitle, "(") {
+					if end := strings.Index(lastDiffractionTitle, ")"); end > 0 {
+						if num := strings.TrimSpace(lastDiffractionTitle[1:end]); num != "" {
+							vizierTab.SetAsteroidNumber(num)
+						}
+						if name := strings.TrimSpace(lastDiffractionTitle[end+1:]); name != "" {
+							vizierTab.AsteroidNameEntry.SetText(name)
+						}
+					}
 				}
-				if name := strings.TrimSpace(lastDiffractionTitle[end+1:]); name != "" {
-					vizierTab.AsteroidNameEntry.SetText(name)
-				}
-			}
-		}
-		runIOTAdiffraction(paramFilePath)
+			})
+
+			// Launch IOTAdiffraction (reuses the already-visible dialog)
+			runIOTAdiffraction(paramFilePath)
+		}()
 	}
 	afterOccParamsSaved = useParamFile
 
