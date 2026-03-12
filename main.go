@@ -67,7 +67,7 @@ var fresnelScaleResolutionMarkdown embed.FS
 var monteCarloExplanation embed.FS
 
 // Version information
-const Version = "1.2.18"
+const Version = "1.2.19"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -432,6 +432,11 @@ func main() {
 	})
 	showIOTAPlotsCheck.Checked = prefs.BoolWithFallback("showIOTAPlots", true)
 
+	showDiagnosticsCheck := widget.NewCheck("Show diagnostics plots (Fit tab)", func(checked bool) {
+		ac.showDiagnostics = checked
+	})
+	showDiagnosticsCheck.Checked = false
+
 	obsHomeDirEntry := widget.NewEntry()
 	obsHomeDirEntry.SetPlaceHolder("Path to your observations folder...")
 	obsHomeDirEntry.SetText(prefs.StringWithFallback("obsHomeDir", ""))
@@ -457,7 +462,7 @@ func main() {
 	)
 
 	tab2Bg := ac.makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
-	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, showIOTAPlotsCheck, widget.NewSeparator(), obsHomeDirBox)))
+	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, showIOTAPlotsCheck, showDiagnosticsCheck, widget.NewSeparator(), obsHomeDirBox)))
 	tab2 := container.NewTabItem("Settings", tab2Content)
 
 	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
@@ -755,11 +760,20 @@ func main() {
 
 	// Save min/max frame numbers from loaded CSV for validation
 
-	// Function to rebuild the plot with all currently displayed curves
-	ac.rebuildPlot = func() {
+	// rebuildGeneration tracks the latest rebuildPlot invocation so that a
+	// stale deferred apply (from the async "many points" path) is discarded
+	// if a newer rebuildPlot call has already started.
+	var rebuildGeneration int
+	var busyDialog dialog.Dialog
+
+	// Function to rebuild the plot with all currently displayed curves.
+	// Optional afterApply callbacks run after SetSeries (useful for SetYBounds etc.).
+	ac.rebuildPlot = func(afterApply ...func()) {
 		if loadedLightCurveData == nil {
 			return
 		}
+		rebuildGeneration++
+		myGen := rebuildGeneration
 
 		// Check if timestamps are empty (all zeros) - use frame numbers instead
 		useFrameNumbers := true
@@ -893,13 +907,56 @@ func main() {
 			}
 		}
 
-		if len(allSeries) == 0 {
-			// Clear the plot if no curves are selected
-			ac.lightCurvePlot.SetSeries(nil)
-			plotStatusLabel.SetText("No light curves selected")
+		// apply sets the series on the plot and runs any afterApply callbacks.
+		apply := func() {
+			if myGen != rebuildGeneration {
+				return // a newer rebuildPlot call supersedes this one
+			}
+			if len(allSeries) == 0 {
+				ac.lightCurvePlot.SetSeries(nil)
+				plotStatusLabel.SetText("No light curves selected")
+			} else {
+				ac.lightCurvePlot.SetSeries(allSeries)
+				plotStatusLabel.SetText(fmt.Sprintf("Displaying: %s", strings.Join(displayedNames, ", ")))
+			}
+			for _, fn := range afterApply {
+				if fn != nil {
+					fn()
+				}
+			}
+		}
+
+		// Count total points to decide whether to show a busy dialog.
+		totalPoints := 0
+		for _, s := range allSeries {
+			totalPoints += len(s.Points)
+		}
+
+		const busyThreshold = 5000
+		if totalPoints > busyThreshold {
+			// Hide any dialog from a previous async rebuild.
+			if busyDialog != nil {
+				busyDialog.Hide()
+				busyDialog = nil
+			}
+			d := dialog.NewCustomWithoutButtons("", widget.NewLabel("  Redrawing plot — please wait...  "), ac.window)
+			d.Show()
+			busyDialog = d
+			ac.lightCurvePlot.onRenderComplete = func() {
+				fyne.Do(func() {
+					if busyDialog == d {
+						d.Hide()
+						busyDialog = nil
+					}
+				})
+			}
+			// Defer apply so the dialog frame renders before the heavy plot draw.
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				fyne.Do(apply)
+			}()
 		} else {
-			ac.lightCurvePlot.SetSeries(allSeries)
-			plotStatusLabel.SetText(fmt.Sprintf("Displaying: %s", strings.Join(displayedNames, ", ")))
+			apply()
 		}
 	}
 
@@ -925,18 +982,18 @@ func main() {
 			savedMinY, savedMaxY = ac.lightCurvePlot.GetYBounds()
 		}
 
-		ac.rebuildPlot()
-
-		// Restore bounds if the user had set them, otherwise set Y min to 0 and update entries
-		if userSetBounds {
-			ac.lightCurvePlot.SetXBounds(savedMinX, savedMaxX)
-			ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
-		} else {
-			// Set Y min to 0.0 by default
-			_, maxY := ac.lightCurvePlot.GetYBounds()
-			ac.lightCurvePlot.SetYBounds(0.0, maxY)
-			updateRangeEntries()
-		}
+		ac.rebuildPlot(func() {
+			// Restore bounds if the user had set them, otherwise set Y min to 0 and update entries
+			if userSetBounds {
+				ac.lightCurvePlot.SetXBounds(savedMinX, savedMaxX)
+				ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+			} else {
+				// Set Y min to 0.0 by default
+				_, maxY := ac.lightCurvePlot.GetYBounds()
+				ac.lightCurvePlot.SetYBounds(0.0, maxY)
+				updateRangeEntries()
+			}
+		})
 		lightCurveList.Refresh() // Refresh to update visual indicators
 	}
 
@@ -1044,8 +1101,9 @@ func main() {
 			logAction(fmt.Sprintf("Set start frame to %.0f", val))
 			// Save Y bounds before rebuild to preserve Y axis scaling
 			savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
-			ac.rebuildPlot()
-			ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+			ac.rebuildPlot(func() {
+				ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+			})
 		}
 	}
 
@@ -1074,8 +1132,9 @@ func main() {
 			logAction(fmt.Sprintf("Set end frame to %.0f", val))
 			// Save Y bounds before rebuild to preserve Y axis scaling
 			savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
-			ac.rebuildPlot()
-			ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+			ac.rebuildPlot(func() {
+				ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+			})
 		}
 	}
 
@@ -1164,26 +1223,27 @@ func main() {
 		ac.frameRangeStart = frame1
 		ac.frameRangeEnd = frame2
 		savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
-		ac.rebuildPlot()
-		ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		ac.rebuildPlot(func() {
+			ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 
-		// Clear selected points
-		ac.lightCurvePlot.selectedSeries = -1
-		ac.lightCurvePlot.selectedIndex = -1
-		ac.lightCurvePlot.selectedPointDataIndex = -1
-		ac.lightCurvePlot.selectedSeriesName = ""
-		ac.lightCurvePlot.SelectedPoint1Valid = false
-		ac.lightCurvePlot.SelectedPoint1Frame = 0
-		ac.lightCurvePlot.SelectedPoint1Value = 0
-		ac.lightCurvePlot.selectedSeries2 = -1
-		ac.lightCurvePlot.selectedIndex2 = -1
-		ac.lightCurvePlot.selectedPointDataIndex2 = -1
-		ac.lightCurvePlot.selectedSeriesName2 = ""
-		ac.lightCurvePlot.SelectedPoint2Valid = false
-		ac.lightCurvePlot.SelectedPoint2Frame = 0
-		ac.lightCurvePlot.SelectedPoint2Value = 0
-		ac.lightCurvePlot.Refresh()
-		plotStatusLabel.SetText("Click on a point to see details")
+			// Clear selected points
+			ac.lightCurvePlot.selectedSeries = -1
+			ac.lightCurvePlot.selectedIndex = -1
+			ac.lightCurvePlot.selectedPointDataIndex = -1
+			ac.lightCurvePlot.selectedSeriesName = ""
+			ac.lightCurvePlot.SelectedPoint1Valid = false
+			ac.lightCurvePlot.SelectedPoint1Frame = 0
+			ac.lightCurvePlot.SelectedPoint1Value = 0
+			ac.lightCurvePlot.selectedSeries2 = -1
+			ac.lightCurvePlot.selectedIndex2 = -1
+			ac.lightCurvePlot.selectedPointDataIndex2 = -1
+			ac.lightCurvePlot.selectedSeriesName2 = ""
+			ac.lightCurvePlot.SelectedPoint2Valid = false
+			ac.lightCurvePlot.SelectedPoint2Frame = 0
+			ac.lightCurvePlot.SelectedPoint2Value = 0
+			ac.lightCurvePlot.Refresh()
+			plotStatusLabel.SetText("Click on a point to see details")
+		})
 
 		logAction(fmt.Sprintf("Set trim range: %.0f to %.0f", frame1, frame2))
 		trimPerformed = true
@@ -1214,8 +1274,9 @@ func main() {
 		ac.startFrameEntry.SetText(fmt.Sprintf("%.0f", startVal))
 		ac.endFrameEntry.SetText(fmt.Sprintf("%.0f", endVal))
 		savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
-		ac.rebuildPlot()
-		ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		ac.rebuildPlot(func() {
+			ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		})
 		logAction(fmt.Sprintf("Applied trim: %.0f to %.0f", startVal, endVal))
 	}
 
@@ -1355,8 +1416,9 @@ func main() {
 			scrollDebounceTimer = time.AfterFunc(150*time.Millisecond, func() {
 				fyne.Do(func() {
 					savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
-					ac.rebuildPlot()
-					ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+					ac.rebuildPlot(func() {
+						ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+					})
 				})
 			})
 		}
@@ -1890,9 +1952,10 @@ func main() {
 				return
 			}
 
-			// Fit tab: multi-pair mode for baseline selection.
+			// Fit tab: multi-pair mode for baseline selection, unless the NIE manual
+			// selection checkbox is checked, in which case keep two-point mode.
 			ac.lightCurvePlot.SingleSelectMode = false
-			ac.lightCurvePlot.MultiPairSelectMode = true
+			ac.lightCurvePlot.MultiPairSelectMode = !ac.nieManualSelectMode
 			ac.lightCurvePlot.Refresh()
 
 			// Autofill search range defaults from the parameters file only when

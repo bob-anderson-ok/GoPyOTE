@@ -43,7 +43,7 @@ type appContext struct {
 	tabBgs []tabBgEntry
 
 	// Callbacks set by builders, called by other tabs or main
-	rebuildPlot      func()
+	rebuildPlot      func(...func())
 	toggleLightCurve func(columnIndex int)
 
 	// Callbacks set during tab construction
@@ -54,6 +54,12 @@ type appContext struct {
 	resetIOTABtn            func()
 	enableShowIOTAPlots     func()
 	autoFillSearchRange     func()
+
+	// NIE manual selection mode flag — true when the checkbox is checked.
+	nieManualSelectMode bool
+
+	// Show diagnostics plots flag — checked on Settings tab, read by Fit tab.
+	showDiagnostics bool
 }
 
 // makeTabBg creates a colored background rectangle and registers it for dark-mode toggling.
@@ -103,8 +109,9 @@ func (ac *appContext) overlayTheoryCurve(fr *fitResult, edgeStds []float64) {
 	ac.lightCurvePlot.SetSigmaLines(sigmaXVals, len(sigmaXVals) > 0)
 	ac.lightCurvePlot.ShowBaselineLine = false
 	savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
-	ac.rebuildPlot()
-	ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+	ac.rebuildPlot(func() {
+		ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+	})
 }
 
 // applyTabBgTheme switches all registered tab backgrounds between light and dark mode.

@@ -43,11 +43,39 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	var lastFitTargetTimes []float64
 	var lastMCResult *mcTrialsResult // most recent successful Monte Carlo run
 
-	mcShowDiagnosticsCheck := widget.NewCheck("Show diagnostics plots", nil)
-	mcShowDiagnosticsCheck.Checked = false
-
 	mcNarrowSearchCheck := widget.NewCheck("Narrow MC offset search (±20 steps)", nil)
 	mcNarrowSearchCheck.Checked = true
+
+	nieSinglePointCheck := widget.NewCheck("Enable NIE point(s) selection", func(checked bool) {
+		ac.nieManualSelectMode = checked
+		if checked {
+			// Switch to regular two-point mode so clicks set Point1/Point2 directly
+			// instead of creating baseline pairs.
+			ac.lightCurvePlot.SingleSelectMode = false
+			ac.lightCurvePlot.MultiPairSelectMode = false
+			// Clear any pending point selections so the user starts fresh.
+			ac.lightCurvePlot.selectedSeries = -1
+			ac.lightCurvePlot.selectedIndex = -1
+			ac.lightCurvePlot.selectedPointDataIndex = -1
+			ac.lightCurvePlot.selectedSeriesName = ""
+			ac.lightCurvePlot.SelectedPoint1Valid = false
+			ac.lightCurvePlot.SelectedPoint1Frame = 0
+			ac.lightCurvePlot.SelectedPoint1Value = 0
+			ac.lightCurvePlot.selectedSeries2 = -1
+			ac.lightCurvePlot.selectedIndex2 = -1
+			ac.lightCurvePlot.selectedPointDataIndex2 = -1
+			ac.lightCurvePlot.selectedSeriesName2 = ""
+			ac.lightCurvePlot.SelectedPoint2Valid = false
+			ac.lightCurvePlot.SelectedPoint2Frame = 0
+			ac.lightCurvePlot.SelectedPoint2Value = 0
+			ac.lightCurvePlot.Refresh()
+		} else {
+			// Restore multi-pair mode for baseline region selection.
+			ac.lightCurvePlot.MultiPairSelectMode = true
+			ac.lightCurvePlot.Refresh()
+		}
+	})
+	nieSinglePointCheck.Checked = false
 
 	// Calculate Baseline mean button: computes mean, extracts noise, scales to unity
 	var calcBaselineMeanBtn *widget.Button
@@ -141,8 +169,9 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		baselineScaledToUnity = true
 
 		savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
-		ac.rebuildPlot()
-		ac.lightCurvePlot.SetYBounds(savedMinY/scaleFactor, savedMaxY/scaleFactor)
+		ac.rebuildPlot(func() {
+			ac.lightCurvePlot.SetYBounds(savedMinY/scaleFactor, savedMaxY/scaleFactor)
+		})
 
 		// Show noise histogram if we have enough points and diagnostics are enabled
 		if len(noise) >= 2 {
@@ -151,7 +180,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				dialog.ShowError(fmt.Errorf("failed to create noise histogram: %v", err), w)
 			} else {
 				noiseSigma = sigma
-				if mcShowDiagnosticsCheck.Checked {
+				if ac.showDiagnostics {
 					histWindow := a.NewWindow("Baseline Noise Histogram")
 					histCanvas := canvas.NewImageFromImage(histImg)
 					histCanvas.FillMode = canvas.ImageFillOriginal
@@ -563,7 +592,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 							if err != nil {
 								dialog.ShowError(err, w)
 							} else {
-								fr, err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
+								fr, err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues, ac.showDiagnostics)
 								if err != nil {
 									dialog.ShowError(err, w)
 								} else {
@@ -589,7 +618,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 						})
 					}()
 				} else {
-					fr, pc, err := performFit(a, w, params, targetTimes, targetValues, mcShowDiagnosticsCheck.Checked)
+					fr, pc, err := performFit(a, w, params, targetTimes, targetValues, ac.showDiagnostics)
 					if err != nil {
 						dialog.ShowError(err, w)
 					} else {
@@ -813,7 +842,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				summaryLabel.Wrapping = fyne.TextWrapWord
 
 				var mcContainer *fyne.Container
-				if mcShowDiagnosticsCheck.Checked {
+				if ac.showDiagnostics {
 					// Show individual trial edge times (max 100)
 					trialsMsg := "Individual trial edge times:\n"
 					numCompleted := 0
@@ -967,6 +996,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 	var runNieBtn *widget.Button
 	runNieBtn = widget.NewButton("Run NIE analysis", func() {
+		testCorrNoise() // temporary test call — remove later
 		if lastFitResult == nil {
 			dialog.ShowError(fmt.Errorf("no fit result available â run a fit first"), w)
 			return
@@ -1037,28 +1067,83 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			}()
 		}
 
-		// Compute window width from event edges and event drop from the fit.
-		windowWidth := 0
-		edge1Abs := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
-		edge2Abs := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
-		if edge1Abs > edge2Abs {
-			edge1Abs, edge2Abs = edge2Abs, edge1Abs
-		}
-		for _, t := range lastFitTargetTimes {
-			if t >= edge1Abs && t <= edge2Abs {
-				windowWidth++
+		if nieSinglePointCheck.Checked {
+			// Manual selection mode: 1 point -> window=1; 2 points -> window=span count.
+			p1 := ac.lightCurvePlot.SelectedPoint1Valid
+			p2 := ac.lightCurvePlot.SelectedPoint2Valid
+			if p1 && p2 {
+				// Two-point mode: window = number of observed samples in the span,
+				// event drop = mean of those observed values.
+				x1 := ac.lightCurvePlot.SelectedPoint1Frame
+				x2 := ac.lightCurvePlot.SelectedPoint2Frame
+				if x1 > x2 {
+					x1, x2 = x2, x1
+				}
+				// Extract current observed values within the trim range.
+				var displayedColIdx int
+				for k := range ac.displayedCurves {
+					displayedColIdx = k
+					break
+				}
+				col := loadedLightCurveData.Columns[displayedColIdx]
+				var dropSum float64
+				windowWidth := 0
+				for i, val := range col.Values {
+					frameNum := loadedLightCurveData.FrameNumbers[i]
+					if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
+						continue
+					}
+					if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
+						continue
+					}
+					t := loadedLightCurveData.TimeValues[i]
+					if t >= x1 && t <= x2 {
+						dropSum += val
+						windowWidth++
+					}
+				}
+				if windowWidth < 1 {
+					dialog.ShowError(fmt.Errorf("no target samples found between the two selected points"), w)
+					return
+				}
+				eventDrop := dropSum / float64(windowWidth)
+				logAction(fmt.Sprintf("NIE two-point: x1=%.6f x2=%.6f window=%d eventDrop=%.6f", x1, x2, windowWidth, eventDrop))
+				launchNIE(windowWidth, eventDrop, true)
+			} else if p1 {
+				// Single-point mode: window=1, the drop=selected point value.
+				y := ac.lightCurvePlot.SelectedPoint1Value
+				logAction(fmt.Sprintf("NIE single-point: using selected point value=%.6f", y))
+				launchNIE(1, y, true)
+			} else {
+				dialog.ShowInformation("Manual NIE Selection",
+					"No point is currently selected.\n\nSelect one or two points on the light curve, then click Run NIE analysis again.\n\n"+
+						"One point selected: window size = 1, event drop = that point's value.\n"+
+						"Two points selected: window = number of samples in the span (inclusive), event drop = mean of those samples.", w)
 			}
+		} else {
+			// Normal mode: compute window width from event edges and event drop from the fit.
+			windowWidth := 0
+			edge1Abs := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
+			edge2Abs := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
+			if edge1Abs > edge2Abs {
+				edge1Abs, edge2Abs = edge2Abs, edge1Abs
+			}
+			for _, t := range lastFitTargetTimes {
+				if t >= edge1Abs && t <= edge2Abs {
+					windowWidth++
+				}
+			}
+			if windowWidth < 1 {
+				dialog.ShowError(fmt.Errorf("no target samples found between event edges — check fit result"), w)
+				return
+			}
+			// Event drop = 1 - bestScale, where bestScale is the amplitude scale factor
+			// found by the post-fit scale search (scaledTLC = bestTLC*scale + (1-scale)).
+			// bestScale==0 (zero value, search not run) maps naturally to eventDrop=1.0 (full drop).
+			eventDrop := 1.0 - lastFitResult.bestScale
+			logAction(fmt.Sprintf("NIE fit-derived: bestScale=%.4f, eventDrop=%.4f", lastFitResult.bestScale, eventDrop))
+			launchNIE(windowWidth, eventDrop, false)
 		}
-		if windowWidth < 1 {
-			dialog.ShowError(fmt.Errorf("no target samples found between event edges â check fit result"), w)
-			return
-		}
-		// Event drop = 1 - bestScale, where bestScale is the amplitude scale factor
-		// found by the post-fit scale search (scaledTLC = bestTLC*scale + (1-scale)).
-		// bestScale==0 (zero value, search not run) maps naturally to eventDrop=1.0 (full drop).
-		eventDrop := 1.0 - lastFitResult.bestScale
-		logAction(fmt.Sprintf("NIE fit-derived: bestScale=%.4f, eventDrop=%.4f", lastFitResult.bestScale, eventDrop))
-		launchNIE(windowWidth, eventDrop, false)
 	})
 	runNieBtn.Importance = widget.HighImportance
 	runNieBtn.Disable()
@@ -1178,7 +1263,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
-		container.NewHBox(mcNarrowSearchCheck),
+		container.NewHBox(mcNarrowSearchCheck, nieSinglePointCheck),
 		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, fillSodisNegBtn),
 		mcProgressBar,
 		widget.NewSeparator(),

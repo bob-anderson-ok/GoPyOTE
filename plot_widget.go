@@ -129,6 +129,9 @@ type LightCurvePlot struct {
 	minX, maxX, minY, maxY float64
 	// Plot area margins (in pixels) - approximate values for gonum/plot
 	marginLeft, marginRight, marginTop, marginBottom float32
+
+	// onRenderComplete is called once at the end of the next render pass, then cleared.
+	onRenderComplete func()
 }
 
 // NewLightCurvePlot creates a new light curve plot widget
@@ -702,6 +705,10 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	size := p.Size()
 
 	if size.Width < 10 || size.Height < 10 {
+		if cb := p.onRenderComplete; cb != nil {
+			p.onRenderComplete = nil
+			cb()
+		}
 		return
 	}
 
@@ -756,6 +763,10 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			r.image.Refresh()
 		}
 		r.image.Resize(size)
+		if cb := p.onRenderComplete; cb != nil {
+			p.onRenderComplete = nil
+			cb()
+		}
 		return
 	}
 	plt.Title.Text = "Light Curve"
@@ -1060,4 +1071,10 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		r.image.Refresh()
 	}
 	r.image.Resize(size)
+
+	// Fire one-shot render-complete callback if set.
+	if cb := p.onRenderComplete; cb != nil {
+		p.onRenderComplete = nil
+		cb()
+	}
 }

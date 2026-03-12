@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -451,10 +452,15 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 				}
 				qeInitialValue = pathToQeTableFileSelect.Selected
 
-				// Close the parameters dialog after a successful save
+				// Close the parameters dialog and defer the callback so the
+				// dialog visually disappears before IOTAdiffraction starts.
 				customDialog.Hide()
 				if afterOccParamsSaved != nil {
-					afterOccParamsSaved(savePath)
+					cb := afterOccParamsSaved
+					sp := savePath
+					time.AfterFunc(150*time.Millisecond, func() {
+						fyne.Do(func() { cb(sp) })
+					})
 				}
 				return
 			}
@@ -564,10 +570,15 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 				}
 				qeInitialValue = pathToQeTableFileSelect.Selected
 
-				// Close the parameters dialog after a successful save
+				// Close the parameters dialog and defer the callback so the
+				// dialog visually disappears before IOTAdiffraction starts.
 				customDialog.Hide()
 				if afterOccParamsSaved != nil {
-					afterOccParamsSaved(savePath)
+					cb := afterOccParamsSaved
+					sp := savePath
+					time.AfterFunc(150*time.Millisecond, func() {
+						fyne.Do(func() { cb(sp) })
+					})
 				}
 			}, w)
 			fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".occparams"}))

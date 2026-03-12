@@ -149,10 +149,10 @@ func buildBlockIntTab(ac *appContext) *container.TabItem {
 		savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
 
 		// Rebuild the plot with the new data
-		ac.rebuildPlot()
-
-		// Restore Y bounds to preserve user scaling
-		ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		ac.rebuildPlot(func() {
+			// Restore Y bounds to preserve user scaling
+			ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		})
 
 		// Update status
 		statusMsg := fmt.Sprintf("Block integrated: %d points → %d blocks (block size: %d)", numPoints, numBlocks, blockSize)

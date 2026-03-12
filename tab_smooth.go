@@ -23,8 +23,9 @@ func buildSmoothTab(ac *appContext) *container.TabItem {
 		ac.smoothedSeries = nil
 		// Save Y bounds before rebuild
 		savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
-		ac.rebuildPlot()
-		ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		ac.rebuildPlot(func() {
+			ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		})
 		smoothStatusLabel.SetText("Smooth curve cleared")
 		logAction("Cleared Savitzky-Golay smooth curve")
 	})
@@ -143,10 +144,10 @@ func buildSmoothTab(ac *appContext) *container.TabItem {
 		savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
 
 		// Rebuild the plot to include the smoothed series
-		ac.rebuildPlot()
-
-		// Restore Y bounds
-		ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		ac.rebuildPlot(func() {
+			// Restore Y bounds
+			ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
+		})
 
 		// Update status
 		statusMsg := fmt.Sprintf("Smoothed %s with window size %d", refColumn.Name, windowSize)
@@ -205,19 +206,19 @@ func buildSmoothTab(ac *appContext) *container.TabItem {
 		savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
 
 		// Rebuild the plot with normalized data
-		ac.rebuildPlot()
+		ac.rebuildPlot(func() {
+			// Restore Y bounds
+			ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 
-		// Restore Y bounds
-		ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
-
-		// Clear selected points on the reference curve
-		ac.lightCurvePlot.selectedSeries = -1
-		ac.lightCurvePlot.selectedIndex = -1
-		ac.lightCurvePlot.selectedSeries2 = -1
-		ac.lightCurvePlot.selectedIndex2 = -1
-		ac.lightCurvePlot.selectedSeriesName = ""
-		ac.lightCurvePlot.selectedSeriesName2 = ""
-		ac.lightCurvePlot.Refresh()
+			// Clear selected points on the reference curve
+			ac.lightCurvePlot.selectedSeries = -1
+			ac.lightCurvePlot.selectedIndex = -1
+			ac.lightCurvePlot.selectedSeries2 = -1
+			ac.lightCurvePlot.selectedIndex2 = -1
+			ac.lightCurvePlot.selectedSeriesName = ""
+			ac.lightCurvePlot.selectedSeriesName2 = ""
+			ac.lightCurvePlot.Refresh()
+		})
 
 		// Update status
 		statusMsg := fmt.Sprintf("Normalized all light curves (reference mean = %.4f)", meanSmooth)
