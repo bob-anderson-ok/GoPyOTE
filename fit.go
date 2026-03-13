@@ -308,7 +308,11 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 		logAction(fmt.Sprintf("Scale search: best scale=%.4f, percent drop=%.2f, MSE=%.6f", bestScale, bestScale*100, scaleMSE))
 
 		// Show scaled overlay plot; nil edgeStds saves it as fitPlot.png
-		scaleOverlayImg, scaleErr := createOverlayPlotImage(scaledCurve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, scaledSampledVals, displayTitle, 1200, 500, nil)
+		overlayTitle := displayTitle
+		if overlayTitle != "" {
+			overlayTitle += fmt.Sprintf("  path offset=%.3f km", params.PathPerpendicularOffsetKm)
+		}
+		scaleOverlayImg, scaleErr := createOverlayPlotImage(scaledCurve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, scaledSampledVals, overlayTitle, 1200, 500, nil)
 		if scaleErr == nil {
 			scaleWindowTitle := fmt.Sprintf("Scaled Fit Result (percent drop = %.2f) — Theoretical vs Observed", bestScale*100)
 			scaleOverlayWindow := app.NewWindow(scaleWindowTitle)
@@ -413,6 +417,14 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 			if sampleCount > 0 {
 				logAction(fmt.Sprintf("  Minimum theoretical value at event: %.4f", minTheoretical))
 			}
+		}
+
+		// Warn if the path offset is very close to the asteroid center.
+		if params.MainBody.MajorAxisKm > 0 && math.Abs(params.PathPerpendicularOffsetKm) < 0.1*params.MainBody.MajorAxisKm {
+			msg += "\nWARNING: The observation path is very close to the asteroid center. " +
+				"There is a danger that the maximum width of available theoretical light curves " +
+				"was not enough to match the actual observation. In that case, use the " +
+				"Edit occultation parameters button and increase the size of the asteroid.\n"
 		}
 
 		edgeLabel := widget.NewLabel(msg)

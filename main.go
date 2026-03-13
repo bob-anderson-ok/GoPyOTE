@@ -68,7 +68,7 @@ var fresnelScaleResolutionMarkdown embed.FS
 var monteCarloExplanation embed.FS
 
 // Version information
-const Version = "1.2.20"
+const Version = "1.2.21"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -933,8 +933,11 @@ func main() {
 			totalPoints += len(s.Points)
 		}
 
-		const busyThreshold = 5000
-		if totalPoints > busyThreshold {
+		showBusy := ac.suppressBusyDialog
+		ac.suppressBusyDialog = false // consume the flag
+
+		const busyThreshold = 500
+		if !showBusy && totalPoints > busyThreshold {
 			// Hide any dialog from a previous async rebuild.
 			if busyDialog != nil {
 				busyDialog.Hide()
@@ -976,6 +979,9 @@ func main() {
 			logAction(fmt.Sprintf("Displayed light curve: %s", curveName))
 		}
 
+		// Update list bold/non-bold indicators before the heavy plot rebuild.
+		lightCurveList.Refresh()
+
 		// Save bounds if the user has set them manually
 		var savedMinX, savedMaxX, savedMinY, savedMaxY float64
 		if userSetBounds {
@@ -995,7 +1001,6 @@ func main() {
 				updateRangeEntries()
 			}
 		})
-		lightCurveList.Refresh() // Refresh to update visual indicators
 	}
 
 	lightCurveList = widget.NewList(
@@ -1026,11 +1031,11 @@ func main() {
 
 	// Handle click on list items to toggle the display
 	lightCurveList.OnSelected = func(id widget.ListItemID) {
-		// Map list index to actual column index
+		lightCurveList.UnselectAll() // Clear selection highlight immediately
+		// Map list index to the actual column index
 		if id >= 0 && id < len(listIndexToColumnIndex) {
 			ac.toggleLightCurve(listIndexToColumnIndex[id])
 		}
-		lightCurveList.UnselectAll() // Unselect so clicking again works
 	}
 
 	// Set up the function to refresh the light curve list when filter checkboxes change
@@ -1417,6 +1422,7 @@ func main() {
 			scrollDebounceTimer = time.AfterFunc(150*time.Millisecond, func() {
 				fyne.Do(func() {
 					savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
+					ac.suppressBusyDialog = true
 					ac.rebuildPlot(func() {
 						ac.lightCurvePlot.SetYBounds(savedMinY, savedMaxY)
 					})
@@ -1989,7 +1995,7 @@ func main() {
 	tabs.Select(tab3)
 
 	// Shared widgets for the IOTAdiffraction output window.
-	// A fresh OS window is created each time to let Fyne centre it automatically.
+	// A fresh OS window is created each time to let Fyne center it automatically.
 	iotaOutputLabel := widget.NewLabel("Starting IOTAdiffraction...")
 	iotaOutputLabel.Wrapping = fyne.TextWrapWord
 	iotaScrollContainer := container.NewVScroll(container.NewPadded(iotaOutputLabel))
@@ -2127,7 +2133,7 @@ func main() {
 		}()
 	}
 
-	// useParamFile sets up global state and runs IOTAdiffraction with the given .occparams file.
+	// useParamFile sets up a global state and runs IOTAdiffraction with the given .occparams file.
 	// Extracted here (rather than inside btnIOTA) so it can also be triggered automatically
 	// when the parameters dialog saves a new file.
 	useParamFile := func(paramFilePath string) {

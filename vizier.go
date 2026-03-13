@@ -1993,46 +1993,25 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 					}
 				}
 
-				// DATE and PREDICTTIME: from <Elements> fields (0-indexed: 2=year, 3=month, 4=day, 5=UT hours)
+				// DATE from <Elements> fields (0-indexed: 2=year, 3=month, 4=day)
 				if ev.Elements != "" {
 					elParts := splitCSVPreserveEmpty(strings.TrimSpace(ev.Elements))
 					if len(elParts) >= 6 {
 						year, yearErr := strconv.Atoi(strings.TrimSpace(elParts[2]))
 						month, monthErr := strconv.Atoi(strings.TrimSpace(elParts[3]))
 						day, dayErr := strconv.Atoi(strings.TrimSpace(elParts[4]))
-						utHours, utErr := strconv.ParseFloat(strings.TrimSpace(elParts[5]), 64)
 						if yearErr == nil && monthErr == nil && dayErr == nil && month >= 1 && month <= 12 {
 							monthNames := [13]string{"", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"}
-							monthAbbrevs := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 							// DATE: "D MonthName YYYY"
 							setEntry("DATE", fmt.Sprintf("%d %s %d", day, monthNames[month], year))
-							// PREDICTTIME: "DD Mon; HH:MM:SS UT"
-							// Use observer-corrected t0 when available, else fall back to geocentric.
-							fmt.Printf("[SODIS PREDICTTIME] fill.observerT0=%v  IsZero=%v\n", fill.observerT0, fill.observerT0.IsZero())
-							if !fill.observerT0.IsZero() {
-								t := fill.observerT0.UTC()
-								val := fmt.Sprintf("%02d %s; %02d:%02d:%02d UT",
-									t.Day(), monthAbbrevs[t.Month()], t.Hour(), t.Minute(), t.Second())
-								fmt.Printf("[SODIS PREDICTTIME] using observerT0 -> %q\n", val)
-								setEntry("PREDICTTIME", val)
-							} else if utErr == nil {
-								totalSec := int(math.Round(utHours * 3600))
-								h := totalSec / 3600
-								m := (totalSec % 3600) / 60
-								s := totalSec % 60
-								val := fmt.Sprintf("%02d %s; %02d:%02d:%02d UT", day, monthAbbrevs[month], h, m, s)
-								fmt.Printf("[SODIS PREDICTTIME] using geocentric -> %q\n", val)
-								setEntry("PREDICTTIME", val)
-							} else {
-								fmt.Printf("[SODIS PREDICTTIME] skipped: observerT0 is zero AND utErr=%v\n", utErr)
-							}
+							// PREDICTTIME: only filled from details.csv (below); calculated values are unreliable.
 						}
 					}
 				}
 			}
 		}
 
-		// Details file Event Time (UT) overrides any calculated PREDICTTIME.
+		// Details file Event Time (UT) is the sole source for PREDICTTIME (calculated values are unreliable).
 		if fill.detailsEventTimeUT != "" {
 			monthAbbrevs := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 			if t, perr := time.Parse("02 Jan 2006 15:04:05", fill.detailsEventTimeUT); perr == nil {

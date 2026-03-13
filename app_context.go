@@ -60,6 +60,10 @@ type appContext struct {
 
 	// Show diagnostics plots flag — checked on Settings tab, read by Fit tab.
 	showDiagnostics bool
+
+	// suppressBusyDialog, when true, skips the "Redrawing plot" dialog for
+	// the next rebuildPlot call. Automatically cleared after use.
+	suppressBusyDialog bool
 }
 
 // makeTabBg creates a colored background rectangle and registers it for dark-mode toggling.

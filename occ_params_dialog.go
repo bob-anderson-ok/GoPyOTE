@@ -1261,7 +1261,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			return
 		}
 
-		geocT0, obsT0, corrSecs, t0Err := ObserverT0CorrectionFromOWC(xmlContent, lat, lon, alt, 0.0, 0.0, 0.0)
+		_, _, _, t0Err := ObserverT0CorrectionFromOWC(xmlContent, lat, lon, alt, 0.0, 0.0, 0.0)
 
 		// Persist the observer location so the SODIS fill can use it even after app restart.
 		if t0Err == nil {
@@ -1312,7 +1312,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 		params := OccultationParameters{
 			Title:                          titleStr,
 			WindowSizePixels:               600,
-			FundamentalPlaneWidthKm:        math.Ceil(3 * bodyDiamKm),
+			FundamentalPlaneWidthKm:        math.Ceil(5 * bodyDiamKm),
 			FundamentalPlaneWidthNumPoints: 2000,
 			DXKmPerSec:                     vx,
 			DYKmPerSec:                     vy,
@@ -1341,19 +1341,9 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			wavelength = 550
 		}
 		infoMsg := ""
-		if t0Err == nil {
-			infoMsg += fmt.Sprintf(
-				"Geocentric t0:        %s UTC\nObserver event time:  %s UTC\nCorrection:           %+.3f sec",
-				geocT0.Format("15:04:05.000"),
-				obsT0.Format("15:04:05.000"),
-				corrSecs)
-		}
 		if params.DistanceAu > 0 {
 			fresnelKm := FresnelScale(wavelength, params.DistanceAu)
 			fresnelM := fresnelKm * 1000
-			if infoMsg != "" {
-				infoMsg += "\n\n"
-			}
 			infoMsg += fmt.Sprintf("Fresnel scale: %.4f km (%.1f meters)\n\nWavelength: %.0f nm\nDistance: %.4f AU",
 				fresnelKm, fresnelM, wavelength, params.DistanceAu)
 			if params.FundamentalPlaneWidthKm > 0 && params.FundamentalPlaneWidthNumPoints > 0 {
@@ -1365,7 +1355,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 				"See the Help Topics entry titled 'Fresnel scale resolution' for more information."
 		}
 		if infoMsg != "" {
-			dialog.ShowInformation("Event Prediction & Fresnel Scale", infoMsg, w)
+			dialog.ShowInformation("Fresnel Scale Sampling Report", infoMsg, w)
 		}
 	})
 	calcDxDyBtn.Importance = widget.HighImportance

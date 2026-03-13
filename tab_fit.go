@@ -958,7 +958,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					for i, v := range mcFitResult.sampledVals {
 						mcScaledSampledVals[i] = v*mcScale + (1.0 - mcScale)
 					}
-					mcOverlayImg, err := createOverlayPlotImage(mcScaledCurve, mcFitResult.bestShift, mcFitResult.edgeTimes, mcTargetTimes, mcTargetValues, mcFitResult.sampledTimes, mcScaledSampledVals, mcTitle, 1200, 500, result.edgeStds)
+					mcOverlayTitle := mcTitle
+					if mcOverlayTitle != "" {
+						mcOverlayTitle += fmt.Sprintf("  path offset=%.3f km", mcFitParams.PathPerpendicularOffsetKm)
+					}
+					mcOverlayImg, err := createOverlayPlotImage(mcScaledCurve, mcFitResult.bestShift, mcFitResult.edgeTimes, mcTargetTimes, mcTargetValues, mcFitResult.sampledTimes, mcScaledSampledVals, mcOverlayTitle, 1200, 500, result.edgeStds)
 					if err != nil {
 						fmt.Printf("Failed to create MC overlay plot: %v\n", err)
 					} else {
