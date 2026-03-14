@@ -67,8 +67,11 @@ var fresnelScaleResolutionMarkdown embed.FS
 //go:embed help_markdown/edgeTimeSigmaExplanation.md
 var monteCarloExplanation embed.FS
 
+//go:embed help_markdown help_images
+var correlatedNoiseExplanation embed.FS
+
 // Version information
-const Version = "1.2.22"
+const Version = "1.2.23"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -295,6 +298,14 @@ func main() {
 				return
 			}
 			ShowMarkdownDialogWithImages("Monte Carlo sigma estimation", string(content), &monteCarloExplanation, w)
+		}),
+		fyne.NewMenuItem("Correlated Noise", func() {
+			content, err := correlatedNoiseExplanation.ReadFile("help_markdown/correlatedNoise.md")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load correlatedNoise.md: %w", err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages("Correlated Noise", string(content), &correlatedNoiseExplanation, w)
 		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("About GoPyOTE", func() {
