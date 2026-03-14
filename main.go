@@ -68,7 +68,7 @@ var fresnelScaleResolutionMarkdown embed.FS
 var monteCarloExplanation embed.FS
 
 // Version information
-const Version = "1.2.21"
+const Version = "1.2.22"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -438,6 +438,12 @@ func main() {
 	})
 	showDiagnosticsCheck.Checked = false
 
+	useCorrelatedNoiseCheck := widget.NewCheck("Use correlated noise", func(checked bool) {
+		ac.useCorrelatedNoise = checked
+	})
+	useCorrelatedNoiseCheck.Checked = true
+	ac.useCorrelatedNoise = true
+
 	obsHomeDirEntry := widget.NewEntry()
 	obsHomeDirEntry.SetPlaceHolder("Path to your observations folder...")
 	obsHomeDirEntry.SetText(prefs.StringWithFallback("obsHomeDir", ""))
@@ -463,7 +469,7 @@ func main() {
 	)
 
 	tab2Bg := ac.makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
-	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, showIOTAPlotsCheck, showDiagnosticsCheck, widget.NewSeparator(), obsHomeDirBox)))
+	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, showIOTAPlotsCheck, showDiagnosticsCheck, useCorrelatedNoiseCheck, widget.NewSeparator(), obsHomeDirBox)))
 	tab2 := container.NewTabItem("Settings", tab2Content)
 
 	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
@@ -904,6 +910,41 @@ func main() {
 					Color:    ac.theorySeries.Color,
 					Name:     ac.theorySeries.Name,
 					LineOnly: ac.theorySeries.LineOnly,
+				})
+			}
+		}
+
+		// DEBUG: Add correlated-noise trend series if available (gated by showDiagnostics).
+		if ac.trendSeries != nil {
+			var trendPoints []PlotPoint
+			for _, pt := range ac.trendSeries.Points {
+				if pt.Index < 0 || pt.Index >= len(loadedLightCurveData.FrameNumbers) {
+					continue
+				}
+				frameNum := loadedLightCurveData.FrameNumbers[pt.Index]
+				if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
+					continue
+				}
+				if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
+					continue
+				}
+				xVal := loadedLightCurveData.TimeValues[pt.Index]
+				if useFrameNumbers {
+					xVal = frameNum
+				}
+				trendPoints = append(trendPoints, PlotPoint{
+					X:      xVal,
+					Y:      pt.Y,
+					Index:  pt.Index,
+					Series: len(allSeries),
+				})
+			}
+			if len(trendPoints) > 0 {
+				allSeries = append(allSeries, PlotSeries{
+					Points:   trendPoints,
+					Color:    ac.trendSeries.Color,
+					Name:     ac.trendSeries.Name,
+					LineOnly: ac.trendSeries.LineOnly,
 				})
 			}
 		}
@@ -1596,6 +1637,7 @@ func main() {
 			normalizationApplied = false                                 // Reset normalization flag
 			baselineScaledToUnity = false
 			ac.theorySeries = nil
+			ac.trendSeries = nil
 			ac.lightCurvePlot.SetVerticalLines(nil, false)
 			ac.lightCurvePlot.SetSigmaLines(nil, false)
 			ac.lightCurvePlot.ShowBaselineLine = false

@@ -31,6 +31,7 @@ type appContext struct {
 	// Mutable plot state shared across tabs
 	smoothedSeries    *PlotSeries
 	theorySeries      *PlotSeries
+	trendSeries       *PlotSeries // DEBUG: Savitzky-Golay trend from correlated noise analysis
 	frameRangeStart   float64
 	frameRangeEnd     float64
 	minFrameNum       float64
@@ -60,6 +61,15 @@ type appContext struct {
 
 	// Show diagnostics plots flag — checked on Settings tab, read by Fit tab.
 	showDiagnostics bool
+
+	// Use correlated noise flag — checked on Settings tab, read by Fit tab.
+	useCorrelatedNoise bool
+
+	// AR model parameters fitted from pre-detrend autocorrelation (rho).
+	// Set during baseline normalization; used by Monte Carlo and NIE when
+	// useCorrelatedNoise is true.
+	arPhi    []float64
+	arSigma2 float64
 
 	// suppressBusyDialog, when true, skips the "Redrawing plot" dialog for
 	// the next rebuildPlot call. Automatically cleared after use.

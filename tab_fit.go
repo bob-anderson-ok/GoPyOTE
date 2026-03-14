@@ -35,6 +35,8 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	// Stored baseline noise sigma for Monte Carlo and NIE
 	var noiseSigma float64
 	var baselineValues []float64 // baseline region values (after scaling to unity)
+	var baselineIndices []int    // corresponding indices into loadedLightCurveData
+	var rho []float64            // pre-detrend autocorrelation coefficients, rho[0]=1.0, out to lag 10
 
 	// Stored last fit result, params, candidate curves, and target data for Monte Carlo
 	var lastFitResult *fitResult
@@ -133,6 +135,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 		// Extract noise before scaling: noise = value/mean - 1.0 (equivalent to (value - mean)/mean)
 		var noise []float64
+		var noiseDataIndices []int // track original data indices for trend plotting
 		for _, pair := range ac.lightCurvePlot.SelectedPairs {
 			idx1 := pair.Point1DataIdx
 			idx2 := pair.Point2DataIdx
@@ -153,12 +156,15 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 			for i := idx1; i <= idx2 && i < len(col.Values); i++ {
 				noise = append(noise, col.Values[i]/mean-1.0)
+				noiseDataIndices = append(noiseDataIndices, i)
 			}
 		}
-		// Store baseline values (scaled to unity) for testNoiseProcessing.
+		// Store baseline values (scaled to unity) and their data indices.
 		baselineValues = make([]float64, len(noise))
+		baselineIndices = make([]int, len(noise))
 		for i, n := range noise {
 			baselineValues[i] = n + 1.0
+			baselineIndices[i] = noiseDataIndices[i]
 		}
 
 		// Scale all column values to unity
@@ -175,6 +181,45 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		ac.lightCurvePlot.SelectedPairs = nil
 		baselineScaledToUnity = true
 
+		// Compute autocorrelation coefficients and fit an AR model for correlated noise.
+		if len(baselineValues) >= 5 {
+			preLagMax := 10
+			if len(noise) <= preLagMax {
+				preLagMax = len(noise) - 1
+			}
+			if preLagMax >= 1 {
+				preLagCoeffs, preLagErr := autocorrCoeffs(noise, preLagMax)
+				if preLagErr != nil {
+					fmt.Printf("Autocorrelation failed: %v\n", preLagErr)
+				} else {
+					// Build rho[0..10] with rho[0]=1.0 for use by testARmethod.
+					rho = make([]float64, len(preLagCoeffs)+1)
+					rho[0] = 1.0
+					copy(rho[1:], preLagCoeffs)
+
+					// Fit AR model from rho and store phi/sigma2 for correlated noise generation.
+					arOrder := len(preLagCoeffs)
+					phi, sigma2, arErr := fitARFromACF(rho, arOrder)
+					if arErr != nil {
+						fmt.Printf("AR model fit failed: %v\n", arErr)
+						ac.arPhi = nil
+						ac.arSigma2 = 0
+					} else {
+						ac.arPhi = phi
+						ac.arSigma2 = sigma2
+						logAction(fmt.Sprintf("Fit: AR(%d) model fitted, innovation variance=%.6f", arOrder, sigma2))
+					}
+
+					fmt.Printf("\nBaseline noise (sigma=%.10f):\n", stddev(noise))
+					fmt.Println("Lag autocorrelation coefficients:")
+					for i, v := range rho {
+						fmt.Printf("  lag %d: %.10f\n", i, v)
+					}
+				}
+			}
+		}
+
+		// Rebuild the plot after the trend series is set so the trend line is visible.
 		savedMinY, savedMaxY := ac.lightCurvePlot.GetYBounds()
 		ac.rebuildPlot(func() {
 			ac.lightCurvePlot.SetYBounds(savedMinY/scaleFactor, savedMaxY/scaleFactor)
@@ -196,7 +241,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					histWindow.CenterOnScreen()
 					histWindow.Show()
 				}
-				logAction(fmt.Sprintf("Fit: Extracted baseline noise: %d points, mean=%.6f, sigma=%.6f", len(noise), noiseMean, noiseSigma))
+				logAction(fmt.Sprintf("Fit: Extracted baseline noise: %d points, mean=%.6f, histogram sigma=%.6f", len(noise), noiseMean, sigma))
 			}
 		}
 
@@ -495,6 +540,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				lastFitCandidates = nil
 				lastFitTargetTimes = nil
 				ac.theorySeries = nil
+				ac.trendSeries = nil
 				ac.lightCurvePlot.SetVerticalLines(nil, false)
 				ac.lightCurvePlot.SetSigmaLines(nil, false)
 
@@ -718,7 +764,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		}
 		mcFitParams := lastFitParams
 		// Re-extract target data from the current trim range so that the user can
-		// adjust the trim after the fit search and have MC honour it.
+		// adjust the trim after the fit search and have MC honor it.
 		var displayedColIdx int
 		for k := range ac.displayedCurves {
 			displayedColIdx = k
@@ -778,7 +824,15 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			// before the Show() calls above have been rendered, making the progress bar
 			// and Abort button appear to never show up (rare race condition).
 			time.Sleep(32 * time.Millisecond)
-			result, err := runMonteCarloTrials(mcCandidates, mcFitResult, mcNoiseSigma, numTrials, &mcAbortFlag, func(progress float64) {
+			// Pass AR parameters when "Use correlated noise" is checked.
+			var mcArPhi []float64
+			var mcArSigma2 float64
+			if ac.useCorrelatedNoise && len(ac.arPhi) > 0 {
+				mcArPhi = ac.arPhi
+				mcArSigma2 = ac.arSigma2
+				logAction("Monte Carlo: using correlated AR noise")
+			}
+			result, err := runMonteCarloTrials(mcCandidates, mcFitResult, mcNoiseSigma, numTrials, mcArPhi, mcArSigma2, &mcAbortFlag, func(progress float64) {
 				fyne.Do(func() {
 					mcProgressBar.SetValue(progress)
 				})
@@ -962,6 +1016,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					if mcOverlayTitle != "" {
 						mcOverlayTitle += fmt.Sprintf("  path offset=%.3f km", mcFitParams.PathPerpendicularOffsetKm)
 					}
+					if len(mcArPhi) > 0 {
+						mcOverlayTitle += "  (correlated noise)"
+					} else {
+						mcOverlayTitle += "  (uncorrelated noise)"
+					}
 					mcOverlayImg, err := createOverlayPlotImage(mcScaledCurve, mcFitResult.bestShift, mcFitResult.edgeTimes, mcTargetTimes, mcTargetValues, mcFitResult.sampledTimes, mcScaledSampledVals, mcOverlayTitle, 1200, 500, result.edgeStds)
 					if err != nil {
 						fmt.Printf("Failed to create MC overlay plot: %v\n", err)
@@ -1007,7 +1066,9 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 	var runNieBtn *widget.Button
 	runNieBtn = widget.NewButton("Run NIE analysis", func() {
-		testNoiseProcessing(baselineValues) // temporary test call — remove later
+		if len(rho) >= 2 {
+			testARmethod(rho)
+		}
 		if lastFitResult == nil {
 			dialog.ShowError(fmt.Errorf("no fit result available â run a fit first"), w)
 			return
@@ -1032,6 +1093,15 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		numTrials := mcTrials * 10
 		nPoints := len(lastFitTargetTimes)
 
+		// Pass AR parameters when "Use correlated noise" is checked.
+		var nieArPhi []float64
+		var nieArSigma2 float64
+		if ac.useCorrelatedNoise && len(ac.arPhi) > 0 {
+			nieArPhi = ac.arPhi
+			nieArSigma2 = ac.arSigma2
+			logAction("NIE: using correlated AR noise")
+		}
+
 		// launchNIE starts the goroutine given a known windowWidth, eventDrop, and selection source.
 		launchNIE := func(windowWidth int, eventDrop float64, manualSelection bool) {
 			logAction(fmt.Sprintf("NIE: starting %d trials, nPoints=%d, windowWidth=%d, noiseSigma=%.6f", numTrials, nPoints, windowWidth, noiseSigma))
@@ -1042,7 +1112,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			nieAbortBtn.Show()
 			nieAbortBtn.Enable()
 			go func() {
-				minMeans, err := runNIETrials(numTrials, nPoints, windowWidth, noiseSigma, &nieAbortFlag, func(progress float64) {
+				minMeans, err := runNIETrials(numTrials, nPoints, windowWidth, noiseSigma, nieArPhi, nieArSigma2, &nieAbortFlag, func(progress float64) {
 					fyne.Do(func() {
 						mcProgressBar.SetValue(progress)
 					})
@@ -1055,7 +1125,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 						dialog.ShowError(err, w)
 						return
 					}
-					histImg, nieMean, nieSigma, err := createNIEHistogramImage(minMeans, windowWidth, eventDrop, lastDiffractionTitle, 800, 500)
+					nieNoiseLabel := "uncorrelated noise"
+					if len(nieArPhi) > 0 {
+						nieNoiseLabel = "correlated noise"
+					}
+					histImg, nieMean, nieSigma, err := createNIEHistogramImage(minMeans, windowWidth, eventDrop, lastDiffractionTitle, nieNoiseLabel, 800, 500)
 					if err != nil {
 						dialog.ShowError(fmt.Errorf("failed to create NIE histogram: %v", err), w)
 						return
@@ -1083,8 +1157,8 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			p1 := ac.lightCurvePlot.SelectedPoint1Valid
 			p2 := ac.lightCurvePlot.SelectedPoint2Valid
 			if p1 && p2 {
-				// Two-point mode: window = number of observed samples in the span,
-				// event drop = mean of those observed values.
+				// Two-point mode: the window = number of observed samples in the span,
+				// the event drop = mean of those observed values.
 				x1 := ac.lightCurvePlot.SelectedPoint1Frame
 				x2 := ac.lightCurvePlot.SelectedPoint2Frame
 				if x1 > x2 {

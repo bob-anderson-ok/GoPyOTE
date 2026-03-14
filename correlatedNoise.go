@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"time"
 )
 
 type FitResult struct {
@@ -221,60 +220,6 @@ func printFit(name string, fit FitResult, target []float64) {
 	}
 }
 
-func testCorrNoise() {
-	// Example measured ACF.
-	// Replace this with your measured lag correlations.
-	target := []float64{
-		1.0,
-		0.55,
-		0.26,
-		0.09,
-	}
-
-	// Weights: emphasize small lags.
-	weights := []float64{
-		0.0, // lag 0 ignored
-		4.0, // lag 1
-		2.0, // lag 2
-		1.0, // lag 3
-	}
-
-	// Search region.
-	// For a monotone positive-decay shape, start with nonnegative taps.
-	steps := 60
-
-	fit3 := fitMA3Grid(target,
-		0.0, 1.5, // c1 range
-		0.0, 1.0, // c2 range
-		steps,
-		weights,
-	)
-
-	fit4 := fitMA4Grid(target,
-		0.0, 1.5, // c1 range
-		0.0, 1.0, // c2 range
-		0.0, 0.7, // c3 range
-		steps,
-		weights,
-	)
-
-	printFit("3-tap", fit3, target)
-	printFit("4-tap", fit4, target)
-
-	best := fit3
-	if fit4.Error < fit3.Error {
-		best = fit4
-	}
-
-	fmt.Printf("\nChosen model: MA(%d)\n", best.ModelOrder)
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	white := generateWhiteNoise(200000, rng)
-	sim := applyMAFilter(white, best.Coeffs)
-	simACF := sampleACF(sim, len(target)-1)
-
-	fmt.Println("\nlag   target      model      simulated")
-	for k := 0; k < len(target); k++ {
-		fmt.Printf("%2d   %.6f   %.6f   %.6f\n",
-			k, target[k], best.TheoryACF[k], simACF[k])
-	}
-}
+// testCorrNoise is the original MA-based correlated noise test (kept for reference).
+// Use the testARmethod (in ARcorrelatedNoise.go) instead.
+//func testCorrNoise() { ... }

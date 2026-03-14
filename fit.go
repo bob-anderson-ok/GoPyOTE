@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"math"
+	randv1 "math/rand"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -286,8 +287,6 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 		nccWindow.Show()
 	}
 
-	fmt.Printf("Best NCC fit: offset=%.4f sec, NCC=%.6f\n", fr.bestShift, fr.bestNCC)
-
 	// --- Scale (drop amplitude) search ---
 	// scaledTLC = bestTLC * scale + (1 - scale), sweep scale 1.0→0.0 in 100 steps.
 	// MSE is minimized (NCC cannot discriminate amplitude — it is scale-invariant).
@@ -468,7 +467,10 @@ type mcRefitResult struct {
 	pathOffset  float64
 }
 
-func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigma float64) (*mcRefitResult, error) {
+// runMonteCarloRefit takes the sampled theoretical curve from the best fit,
+// adds noise, and re-runs the fit to get new edge times.
+// If arPhi is non-nil, correlated AR noise is generated; otherwise white Gaussian noise is used.
+func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigma float64, arPhi []float64, arSigma2 float64) (*mcRefitResult, error) {
 	if len(fr.sampledTimes) == 0 || len(fr.sampledVals) == 0 {
 		return nil, fmt.Errorf("no sampled theoretical curve available for Monte Carlo")
 	}
@@ -479,11 +481,21 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 		return nil, fmt.Errorf("no precomputed candidate curves available")
 	}
 
-	// Create a noisy version of the sampled theoretical curve by adding
-	// Gaussian noise with the measured baseline noise sigma.
-	noisyValues := make([]float64, len(fr.sampledVals))
-	for i, v := range fr.sampledVals {
-		noisyValues[i] = v + rand.NormFloat64()*noiseSigma*v
+	// Create a noisy version of the sampled theoretical curve.
+	n := len(fr.sampledVals)
+	noisyValues := make([]float64, n)
+	if len(arPhi) > 0 {
+		// Correlated AR noise scaled by noiseSigma and signal level.
+		rng := randv1.New(randv1.NewSource(randv1.Int63()))
+		arNoise := generateAR(n, arPhi, arSigma2, rng)
+		for i, v := range fr.sampledVals {
+			noisyValues[i] = v + arNoise[i]*noiseSigma*v
+		}
+	} else {
+		// White Gaussian noise.
+		for i, v := range fr.sampledVals {
+			noisyValues[i] = v + rand.NormFloat64()*noiseSigma*v
+		}
 	}
 
 	// Search across precomputed path offset candidates
@@ -534,7 +546,7 @@ type mcTrialsResult struct {
 // runMonteCarloTrials runs numTrials Monte Carlo re-noise refits and computes
 // the mean and standard deviation of the edge times. Safe to call from a goroutine.
 // Candidates are the precomputed theoretical light curves from the fit search.
-func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noiseSigma float64, numTrials int, abort *atomic.Bool, onProgress func(float64)) (*mcTrialsResult, error) {
+func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noiseSigma float64, numTrials int, arPhi []float64, arSigma2 float64, abort *atomic.Bool, onProgress func(float64)) (*mcTrialsResult, error) {
 	if len(fr.sampledTimes) == 0 || len(fr.sampledVals) == 0 {
 		return nil, fmt.Errorf("no sampled theoretical curve available — run a fit first")
 	}
@@ -570,7 +582,7 @@ func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noiseSig
 			fmt.Printf("Monte Carlo aborted after %d trials\n", trial)
 			break
 		}
-		mcResult, err := runMonteCarloRefit(candidates, fr, noiseSigma)
+		mcResult, err := runMonteCarloRefit(candidates, fr, noiseSigma, arPhi, arSigma2)
 		if err != nil {
 			fmt.Printf("Monte Carlo trial %d failed: %v\n", trial+1, err)
 			continue
@@ -645,7 +657,7 @@ func runMonteCarloTrials(candidates []*precomputedCurve, fr *fitResult, noiseSig
 // baseline of nPoints values drawn from N(1.0, noiseSigma), slides a window of
 // windowWidth across it, and records the minimum window mean (the biggest dip).
 // Returns the slice of minimum window means.
-func runNIETrials(numTrials, nPoints, windowWidth int, noiseSigma float64, abort *atomic.Bool, onProgress func(float64)) ([]float64, error) {
+func runNIETrials(numTrials, nPoints, windowWidth int, noiseSigma float64, arPhi []float64, arSigma2 float64, abort *atomic.Bool, onProgress func(float64)) ([]float64, error) {
 	if windowWidth < 1 {
 		return nil, fmt.Errorf("event window width must be at least 1")
 	}
@@ -668,10 +680,18 @@ func runNIETrials(numTrials, nPoints, windowWidth int, noiseSigma float64, abort
 			break
 		}
 
-		// Generate noisy baseline: N(1.0, noiseSigma)
+		// Generate noisy baseline: correlated AR noise or white Gaussian.
 		seq := make([]float64, nPoints)
-		for i := range seq {
-			seq[i] = 1.0 + rand.NormFloat64()*noiseSigma
+		if len(arPhi) > 0 {
+			rng := randv1.New(randv1.NewSource(randv1.Int63()))
+			arNoise := generateAR(nPoints, arPhi, arSigma2, rng)
+			for i := range seq {
+				seq[i] = 1.0 + arNoise[i]*noiseSigma
+			}
+		} else {
+			for i := range seq {
+				seq[i] = 1.0 + rand.NormFloat64()*noiseSigma
+			}
 		}
 
 		// Sliding window: find minimum mean (the biggest dip)
@@ -705,7 +725,7 @@ func runNIETrials(numTrials, nPoints, windowWidth int, noiseSigma float64, abort
 
 // createNIEHistogramImage renders a histogram of NIE minimum window means with a
 // Gaussian fit overlay and a blue vertical line at eventDrop. Returns the image, mean, and sigma.
-func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop float64, occultationTitle string, plotWidth, plotHeight int) (image.Image, float64, float64, error) {
+func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop float64, occultationTitle string, noiseLabel string, plotWidth, plotHeight int) (image.Image, float64, float64, error) {
 	n := float64(len(minMeans))
 	var sum float64
 	for _, v := range minMeans {
@@ -749,9 +769,9 @@ func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop floa
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
 	if occultationTitle != "" {
-		plt.Title.Text = fmt.Sprintf("%s — NIE Analysis (%d trials)", occultationTitle, len(minMeans))
+		plt.Title.Text = fmt.Sprintf("%s — NIE Analysis (%d trials, %s)", occultationTitle, len(minMeans), noiseLabel)
 	} else {
-		plt.Title.Text = fmt.Sprintf("NIE Analysis (%d trials)", len(minMeans))
+		plt.Title.Text = fmt.Sprintf("NIE Analysis (%d trials, %s)", len(minMeans), noiseLabel)
 	}
 	plt.X.Label.Text = "Drop position (drops are bigger toward the right)"
 	plt.Y.Label.Text = "Density"
@@ -895,7 +915,6 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 			if firstErr == nil {
 				firstErr = err
 			}
-			fmt.Printf("Fit at path offset %.3f km failed: %v\n", offset, err)
 			continue
 		}
 		fr, err := nccSlidingFit(pc, targetTimes, targetValues)
@@ -903,11 +922,9 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 			if firstErr == nil {
 				firstErr = err
 			}
-			fmt.Printf("Fit at path offset %.3f km failed: %v\n", offset, err)
 			continue
 		}
 
-		fmt.Printf("Path offset %.3f km: peak NCC=%.6f at time shift=%.4f sec\n", offset, fr.bestNCC, fr.bestShift)
 		results = append(results, searchResult{pathOffset: offset, peakNCC: fr.bestNCC, fr: fr, pc: pc})
 
 		if onProgress != nil {
@@ -930,7 +947,6 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 		}
 	}
 	bestPathOffset := results[bestIdx].pathOffset
-	fmt.Printf("Best path offset: %.3f km (peak NCC=%.6f)\n", bestPathOffset, results[bestIdx].peakNCC)
 
 	return &fitSearchResult{results: results, bestIdx: bestIdx, bestPathOffset: bestPathOffset}, nil
 }

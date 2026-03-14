@@ -218,49 +218,170 @@ func autocorrCoeffs(x []float64, maxLag int) ([]float64, error) {
 	return rho, nil
 }
 
-func testNoiseProcessing(data []float64) {
-	// Replace this with your data.
-	//data := []float64{
-	//	0.12, 0.15, 0.20, 0.16, 0.21, 0.25, 0.31, 0.34, 0.36, 0.39,
-	//	0.43, 0.45, 0.49, 0.53, 0.50, 0.47, 0.44, 0.40, 0.37, 0.35,
-	//	0.33, 0.29, 0.25, 0.22, 0.18, 0.16, 0.14, 0.12, 0.11, 0.10,
-	//	0.13, 0.12, 0.15, 0.17, 0.20, 0.24, 0.27, 0.30, 0.28, 0.26,
-	//	0.23, 0.21, 0.19, 0.18, 0.16, 0.15, 0.14, 0.13, 0.12, 0.11,
-	//}
+// fitPolynomial fits a polynomial of the given degree to (x, y) data using
+// least-squares (normal equations solved via Gaussian elimination).
+// Returns the coefficients [c0, c1, c2, ...] where y = c0 + c1*x + c2*x² + ...
+func fitPolynomial(x, y []float64, degree int) ([]float64, error) {
+	n := len(x)
+	if n != len(y) {
+		return nil, errors.New("x and y length mismatch")
+	}
+	if n <= degree {
+		return nil, fmt.Errorf("need at least %d points for degree-%d polynomial", degree+1, degree)
+	}
 
-	// SG settings: degree 3, odd window > degree.
-	// Typical starting values: 7, 9, 11, 15 ...
-	window := len(data) / 3
+	p := degree + 1
+
+	// Center and scale x to improve numerical conditioning.
+	xMean := 0.0
+	for _, v := range x {
+		xMean += v
+	}
+	xMean /= float64(n)
+
+	xScale := 0.0
+	for _, v := range x {
+		d := math.Abs(v - xMean)
+		if d > xScale {
+			xScale = d
+		}
+	}
+	if xScale == 0 {
+		xScale = 1.0
+	}
+
+	xs := make([]float64, n)
+	for i, v := range x {
+		xs[i] = (v - xMean) / xScale
+	}
+
+	// Build normal equations: (X^T X) a = X^T y
+	XTX := make([][]float64, p)
+	for i := range XTX {
+		XTX[i] = make([]float64, p)
+	}
+	XTy := make([]float64, p)
+
+	for i := 0; i < n; i++ {
+		powers := make([]float64, p)
+		powers[0] = 1.0
+		for k := 1; k < p; k++ {
+			powers[k] = powers[k-1] * xs[i]
+		}
+		for r := 0; r < p; r++ {
+			XTy[r] += powers[r] * y[i]
+			for c := 0; c < p; c++ {
+				XTX[r][c] += powers[r] * powers[c]
+			}
+		}
+	}
+
+	scaledCoeffs, err := solveLinearSystem(XTX, XTy)
+	if err != nil {
+		return nil, fmt.Errorf("polynomial fit: %w", err)
+	}
+
+	// Convert coefficients back to the original x domain.
+	// The scaled polynomial is: y = Σ a_k * ((x - xMean)/xScale)^k
+	// Expand to get coefficients in the original x domain.
+	// Use binomial expansion: ((x - xMean)/xScale)^k = Σ C(k,j) * x^j * (-xMean)^(k-j) / xScale^k
+	// This is complex, so instead store xMean and xScale with the coefficients
+	// and evaluate using evalPolynomial.
+	// Return scaled coefficients with xMean, xScale encoded as the last two elements.
+	result := make([]float64, p+2)
+	copy(result, scaledCoeffs)
+	result[p] = xMean
+	result[p+1] = xScale
+	return result, nil
+}
+
+// evalPolynomial evaluates a polynomial (from fitPolynomial) at the given x value.
+// coeffs has p coefficients followed by xMean and xScale.
+func evalPolynomial(coeffs []float64, x float64) float64 {
+	p := len(coeffs) - 2
+	xMean := coeffs[p]
+	xScale := coeffs[p+1]
+	xs := (x - xMean) / xScale
+
+	result := coeffs[p-1]
+	for k := p - 2; k >= 0; k-- {
+		result = result*xs + coeffs[k]
+	}
+	return result
+}
+
+// detrendPolynomial subtracts a degree-3 polynomial trend from baseline data
+// using the actual X positions. Returns the detrended residuals, the polynomial
+// coefficients (for plotting), and the detrended sigma.
+func detrendPolynomial(xPositions, yValues []float64) (residuals []float64, coeffs []float64, sigma float64, err error) {
+	n := len(xPositions)
+	if n != len(yValues) {
+		return nil, nil, 0, errors.New("x and y length mismatch")
+	}
+	if n < 5 {
+		return nil, nil, 0, fmt.Errorf("need at least 5 points for polynomial detrending, got %d", n)
+	}
+
+	coeffs, err = fitPolynomial(xPositions, yValues, 3)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("polynomial fit failed: %w", err)
+	}
+
+	residuals = make([]float64, n)
+	for i := range yValues {
+		residuals[i] = yValues[i] - evalPolynomial(coeffs, xPositions[i])
+	}
+
+	sigma = stddev(residuals)
+	return residuals, coeffs, sigma, nil
+}
+
+// computeBaselineTrend computes a Savitzky-Golay trend line from baseline data
+// using the given window size and returns it. Also prints detrending diagnostics.
+// The window must be odd and > 3; the caller is responsible for computing it
+// (e.g., from sample rate × 5 seconds).
+func computeBaselineTrend(data []float64, window int) ([]float64, error) {
+	if len(data) < 5 {
+		return nil, fmt.Errorf("need at least 5 baseline points for trend computation")
+	}
+
 	if window%2 == 0 {
 		window += 1
+	}
+	if window <= 3 {
+		window = 5
+	}
+	if window > len(data) {
+		window = len(data)
+		if window%2 == 0 {
+			window -= 1
+		}
 	}
 	degree := 3
 
 	trend, err := savitzkyGolaySmooth(data, window, degree)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("savitzkyGolaySmooth: %w", err)
 	}
 
 	noise, err := detrend(data, trend)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("detrend: %w", err)
 	}
 
 	sd := stddev(noise)
 
-	lagCoeffs, err := autocorrCoeffs(noise, 5)
+	lagCoeffs, err := autocorrCoeffs(noise, 10)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Savitzky-Golay detrending (autocorr failed: %v)\n", err)
+		return trend, nil
 	}
 
-	fmt.Printf("Savitzky-Golay detrending\n")
-	fmt.Printf("  degree = %d\n", degree)
-	fmt.Printf("  window = %d\n\n", window)
-
-	fmt.Printf("Standard deviation of detrended noise = %.10f\n\n", sd)
-
-	fmt.Println("First 5 lag autocorrelation coefficients:")
+	fmt.Printf("\nAfter Savitzky-Golay detrending (degree=%d, window=%d, sigma=%.10f):\n", degree, window, sd)
+	fmt.Println("Lag autocorrelation coefficients:")
 	for i, v := range lagCoeffs {
 		fmt.Printf("  lag %d: %.10f\n", i+1, v)
 	}
+
+	return trend, nil
 }
