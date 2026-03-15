@@ -1084,6 +1084,16 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	dc := draw.New(img)
 	plt.Draw(dc)
 
+	// Extract the actual data area from gonum/plot so selection dots align
+	// precisely with the rendered glyphs. The vg coordinate system has its
+	// origin at the bottom-left; pixel coordinates have origin at top-left.
+	dataDC := plt.DataCanvas(dc)
+	vgPerPx := vg.Inch / 96
+	p.marginLeft = float32(float64(dataDC.Min.X) / float64(vgPerPx))
+	p.marginRight = float32(float64(size.Width) - float64(dataDC.Max.X)/float64(vgPerPx))
+	p.marginBottom = float32(float64(dataDC.Min.Y) / float64(vgPerPx))
+	p.marginTop = float32(float64(size.Height) - float64(dataDC.Max.Y)/float64(vgPerPx))
+
 	// Cache the base image (without selection dots) for fast selection redraws.
 	baseImg := img.Image()
 	if rgbaImg, ok := baseImg.(*image.RGBA); ok {
@@ -1160,7 +1170,7 @@ func (r *lightCurvePlotRenderer) Refresh() {
 	}
 	r.image.Resize(size)
 
-	// Fire one-shot render-complete callback if set.
+	// Fire a one-shot render-complete callback if set.
 	if cb := p.onRenderComplete; cb != nil {
 		p.onRenderComplete = nil
 		cb()

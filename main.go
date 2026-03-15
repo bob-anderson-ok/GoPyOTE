@@ -71,7 +71,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.26"
+const Version = "1.2.27"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2061,11 +2061,6 @@ func main() {
 
 		// Enable the Generate button now that the user has previewed the submission.
 		vizierTab.GenerateBtn.Enable()
-	}
-
-	// Set up a Zip button callback
-	vizierTab.ZipBtn.OnTapped = func() {
-		zipDatFiles(w, vizierTab.OutputFolderEntry.Text, vizierTab.StatusLabel)
 	}
 
 	// Set up Load from NA spreadsheet button callback

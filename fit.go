@@ -1742,10 +1742,8 @@ func createNoiseHistogramImage(noise []float64, occultationTitle string, plotWid
 //
 //	scaledTLC[i] = sampledVals[i]*scale + (1.0 - scale)
 //
-// and targetValues. NCC cannot be used here because it is invariant to linear
-// amplitude scaling, so MSE is used instead.
-// Returns the best scale value (lowest MSE), its MSE, and the scaled sampled values.
-// The corresponding NIE event drop is (1 - bestScale).
+// and targetValues. Returns the best scale value (lowest MSE), its MSE, and the
+// scaled sampled values.
 func findBestScale(sampledVals, targetValues []float64) (bestScale, bestMSE float64, scaledVals []float64) {
 	const numSteps = 100
 	bestMSE = math.MaxFloat64
