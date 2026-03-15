@@ -213,6 +213,8 @@ func testARmethod(rho []float64) {
 
 	x := generateAR(200000, phi, sigma2, rng)
 
+	fmt.Printf("Standard deviation of simulated AR noise = %.10f\n", stddev(x))
+
 	acf := sampleACF(x, 10)
 
 	fmt.Println("Target vs simulated ACF")

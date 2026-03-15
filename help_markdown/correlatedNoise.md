@@ -65,6 +65,8 @@ For the EY18 example shown above, the lag coefficients extracted from the baseli
 ##
 ```
 1.000, 0.572, 0.316, 0.196, 0.131, 0.079, 0.062, 0.055, 0.042, 0.046, 0.045
+
+noise sigma = 0.1198
 ```
 ##
 The autoregressive model weights that, when applied to white noise,
@@ -73,8 +75,14 @@ produce noise with identical lag coefficients to those from the obeservation bas
 ```
 (c1 ... c10) = 0.5827, -0.0367, 0.0227, 0.0212, -0.0226, 0.0152, 0.0124, -0.0128, 0.0191, 0.0074
 
-innovation sigma = 0.670038 (new noise sigma)
+innovation variance = 0.670038
 ```
 ##
-A generated noise point x(n) = c1 * x(n-1) + c2 * x(n-2) + ... + gaussian(innovation sigma)
+A generated noise point x(n) = c1 * x(n-1) + c2 * x(n-2) + ... + gaussian( sqrt(innovation variance) )
+##
+This generates noise with a standard deviation of 1.0, a mean of 0.0, and the first 10 lag coefficients
+matching those of the baseline noise closely. 
+##
+This is then multiplied by the noise sigma of the baseline noise (0.1198)
+to give the final noise values to be used in the analysis.
 ##
