@@ -59,3 +59,22 @@ normally be left in that state, but if you want to experiment with the use of wh
 in place of correlated noise,
 you can turn it off.
 ##
+## Appendix:
+##
+For the EY18 example shown above, the lag coefficients extracted from the baseline noise were:
+##
+```
+1.000, 0.572, 0.316, 0.196, 0.131, 0.079, 0.062, 0.055, 0.042, 0.046, 0.045
+```
+##
+The autoregressive model weights that, when applied to white noise,
+produce noise with identical lag coefficients to those from the obeservation baseline noise were:
+##
+```
+(c1 ... c10) = 0.5827, -0.0367, 0.0227, 0.0212, -0.0226, 0.0152, 0.0124, -0.0128, 0.0191, 0.0074
+
+innovation sigma = 0.670038 (new noise sigma)
+```
+##
+A generated noise point x(n) = c1 * x(n-1) + c2 * x(n-2) + ... + gaussian(innovation sigma)
+##
