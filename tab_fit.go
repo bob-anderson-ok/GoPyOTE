@@ -1073,10 +1073,6 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			dialog.ShowError(fmt.Errorf("no fit result available â run a fit first"), w)
 			return
 		}
-		if len(lastFitResult.edgeTimes) < 2 {
-			dialog.ShowError(fmt.Errorf("NIE requires a two-edge fit result"), w)
-			return
-		}
 		if noiseSigma == 0 {
 			dialog.ShowError(fmt.Errorf("no noise sigma available â run Normalize Baseline first"), w)
 			return
@@ -1207,25 +1203,43 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			}
 		} else {
 			// Normal mode: compute window width from event edges and event drop from the fit.
-			windowWidth := 0
-			edge1Abs := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
-			edge2Abs := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
-			if edge1Abs > edge2Abs {
-				edge1Abs, edge2Abs = edge2Abs, edge1Abs
-			}
-			for _, t := range lastFitTargetTimes {
-				if t >= edge1Abs && t <= edge2Abs {
-					windowWidth++
-				}
-			}
-			if windowWidth < 1 {
-				dialog.ShowError(fmt.Errorf("no target samples found between event edges — check fit result"), w)
-				return
-			}
 			// Event drop = 1 - bestScale, where bestScale is the amplitude scale factor
 			// found by the post-fit scale search (scaledTLC = bestTLC*scale + (1-scale)).
 			// bestScale==0 (zero value, search not run) maps naturally to eventDrop=1.0 (full drop).
 			eventDrop := 1.0 - lastFitResult.bestScale
+			windowWidth := 0
+
+			if len(lastFitResult.edgeTimes) >= 2 {
+				// Two or more edges: count samples between the first two edges.
+				edge1Abs := lastFitResult.edgeTimes[0] + lastFitResult.bestShift
+				edge2Abs := lastFitResult.edgeTimes[1] + lastFitResult.bestShift
+				if edge1Abs > edge2Abs {
+					edge1Abs, edge2Abs = edge2Abs, edge1Abs
+				}
+				for _, t := range lastFitTargetTimes {
+					if t >= edge1Abs && t <= edge2Abs {
+						windowWidth++
+					}
+				}
+			} else {
+				// Fewer than 2 edges: count sampled theoretical points at or below
+				// the half-drop value (midpoint between baseline and full drop),
+				// then divide by 2 (truncated) to get the window width.
+				halfDropLevel := 1.0 - eventDrop/2.0
+				belowCount := 0
+				for _, v := range lastFitResult.sampledVals {
+					if v <= halfDropLevel {
+						belowCount++
+					}
+				}
+				windowWidth = belowCount / 2
+				logAction(fmt.Sprintf("NIE: <2 edges, using half-drop level=%.4f, belowCount=%d, windowWidth=%d", halfDropLevel, belowCount, windowWidth))
+			}
+
+			if windowWidth < 1 {
+				dialog.ShowError(fmt.Errorf("no target samples found for NIE window width — check fit result"), w)
+				return
+			}
 			logAction(fmt.Sprintf("NIE fit-derived: bestScale=%.4f, eventDrop=%.4f", lastFitResult.bestScale, eventDrop))
 			launchNIE(windowWidth, eventDrop, false)
 		}

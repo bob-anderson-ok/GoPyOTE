@@ -71,7 +71,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.25"
+const Version = "1.2.26"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1559,6 +1559,99 @@ func main() {
 				}
 			}
 
+			// Check the -RESULTS folder for prior run artifacts (.occparams, .site, targetImage16bit.png).
+			// If all three are present, restore the state so the Fit tab can be used immediately.
+			var foundOccparams, foundSite, foundImage string
+			if resultsFolder != "" {
+				if entries, err := os.ReadDir(resultsFolder); err == nil {
+					for _, entry := range entries {
+						if entry.IsDir() {
+							continue
+						}
+						name := entry.Name()
+						switch {
+						case strings.ToLower(filepath.Ext(name)) == ".occparams" && foundOccparams == "":
+							foundOccparams = filepath.Join(resultsFolder, name)
+						case strings.ToLower(filepath.Ext(name)) == ".site" && foundSite == "":
+							foundSite = filepath.Join(resultsFolder, name)
+						case name == "targetImage16bit.png":
+							foundImage = filepath.Join(resultsFolder, name)
+						}
+					}
+				}
+				if foundOccparams != "" && foundSite != "" && foundImage != "" {
+					// Copy the diffraction image to the application directory
+					if imgData, err := os.ReadFile(foundImage); err == nil {
+						dstPath := filepath.Join(appDir, "targetImage16bit.png")
+						if err := os.WriteFile(dstPath, imgData, 0644); err != nil {
+							fmt.Printf("Warning: could not copy targetImage16bit.png to app dir: %v\n", err)
+						}
+					}
+
+					// Set up the parameters path and title so the Fit tab recognizes a diffraction run
+					lastDiffractionParamsPath = foundOccparams
+					prefs.SetString("lastDiffractionParamsPath", foundOccparams)
+					if f, err := os.Open(foundOccparams); err == nil {
+						if p, err := parseOccultationParameters(f); err == nil && p.Title != "" {
+							lastDiffractionTitle = normalizeAsteroidTitle(p.Title)
+							prefs.SetString("lastDiffractionTitle", lastDiffractionTitle)
+							ac.lightCurvePlot.occultationTitle = lastDiffractionTitle
+						}
+						if cerr := f.Close(); cerr != nil {
+							fmt.Printf("Warning: failed to close occparams file: %v\n", cerr)
+						}
+					}
+
+					// Fill site data from the .site file
+					lastLoadedSitePath = foundSite
+					if sf, err := os.Open(foundSite); err == nil {
+						scanner := bufio.NewScanner(sf)
+						for scanner.Scan() {
+							line := scanner.Text()
+							if strings.HasPrefix(line, "latitude_decimal:") {
+								val := strings.TrimSpace(strings.TrimPrefix(line, "latitude_decimal:"))
+								if lat, perr := strconv.ParseFloat(val, 64); perr == nil {
+									lastObserverLatDeg = lat
+									lastObserverLocationSet = true
+									prefs.SetFloat("lastObserverLatDeg", lat)
+									prefs.SetBool("lastObserverLocationSet", true)
+									deg, minutes, sec := decimalToDMS(lat)
+									vizierTab.SiteLatDegEntry.SetText(deg)
+									vizierTab.SiteLatMinEntry.SetText(minutes)
+									vizierTab.SiteLatSecsEntry.SetText(sec)
+								}
+							} else if strings.HasPrefix(line, "longitude_decimal:") {
+								val := strings.TrimSpace(strings.TrimPrefix(line, "longitude_decimal:"))
+								if lon, perr := strconv.ParseFloat(val, 64); perr == nil {
+									lastObserverLonDeg = lon
+									prefs.SetFloat("lastObserverLonDeg", lon)
+									deg, minutes, sec := decimalToDMS(lon)
+									vizierTab.SiteLongDegEntry.SetText(deg)
+									vizierTab.SiteLongMinEntry.SetText(minutes)
+									vizierTab.SiteLongSecsEntry.SetText(sec)
+								}
+							} else if strings.HasPrefix(line, "altitude:") {
+								val := strings.TrimSpace(strings.TrimPrefix(line, "altitude:"))
+								if alt, perr := strconv.ParseFloat(val, 64); perr == nil {
+									lastObserverAltMeters = alt
+									prefs.SetFloat("lastObserverAltMeters", alt)
+								}
+								vizierTab.SiteAltitudeEntry.SetText(val)
+							} else if strings.HasPrefix(line, "observer1:") {
+								val := strings.TrimSpace(strings.TrimPrefix(line, "observer1:"))
+								vizierTab.ObserverNameEntry.SetText(val)
+							}
+						}
+						if cerr := sf.Close(); cerr != nil {
+							fmt.Printf("Warning: failed to close site file: %v\n", cerr)
+						}
+					}
+					logAction(fmt.Sprintf("Restored prior results: occparams=%s, site=%s, image copied", foundOccparams, foundSite))
+				}
+			}
+
+			priorResultsFound := foundOccparams != "" && foundSite != "" && foundImage != ""
+
 			loadedLightCurveData = data
 			sodisReportSavedThisSession = false
 			vizierDatWrittenThisSession = false
@@ -1572,11 +1665,32 @@ func main() {
 			trimPerformed = false
 			setTrimBtn.Importance = widget.HighImportance
 			setTrimBtn.Refresh()
-			if ac.resetProcessOccelmntBtn != nil {
-				ac.resetProcessOccelmntBtn()
-			}
-			if ac.resetIOTABtn != nil {
-				ac.resetIOTABtn()
+			if priorResultsFound {
+				// Prior results found: blue button (enabled, no blink), hide Run IOTAdiffraction.
+				if ac.stopProcessOccelmntBlink != nil {
+					ac.stopProcessOccelmntBlink()
+				}
+				if ac.resetProcessOccelmntBtn != nil {
+					ac.resetProcessOccelmntBtn()
+				}
+				// Stop the blink that resetProcessOccelmntBtn just started.
+				if ac.stopProcessOccelmntBlink != nil {
+					ac.stopProcessOccelmntBlink()
+				}
+				if ac.hideIOTABtn != nil {
+					ac.hideIOTABtn()
+				}
+				dialog.ShowInformation("Prior Results Found",
+					"This observation has been fully processed in the past.\n"+
+						"Unless you need to change site data or an occultation parameter value, "+
+						"you can go directly to the Fit tab.", w)
+			} else {
+				if ac.resetProcessOccelmntBtn != nil {
+					ac.resetProcessOccelmntBtn()
+				}
+				if ac.resetIOTABtn != nil {
+					ac.resetIOTABtn()
+				}
 			}
 			// Create an action log file for this CSV
 			if err := createActionLog(filePath); err != nil {
@@ -2182,6 +2296,18 @@ func main() {
 				if ac.enableShowIOTAPlots != nil {
 					fyne.Do(func() { ac.enableShowIOTAPlots() })
 				}
+				// Copy targetImage16bit.png to the -RESULTS folder if available.
+				if resultsFolder != "" {
+					srcPath := filepath.Join(appDir, "targetImage16bit.png")
+					if data, rerr := os.ReadFile(srcPath); rerr == nil {
+						dstPath := filepath.Join(resultsFolder, "targetImage16bit.png")
+						if werr := os.WriteFile(dstPath, data, 0644); werr != nil {
+							fmt.Printf("Warning: could not copy targetImage16bit.png to results folder: %v\n", werr)
+						} else {
+							logAction(fmt.Sprintf("targetImage16bit.png copied to: %s", dstPath))
+						}
+					}
+				}
 			}
 		}()
 	}
@@ -2256,7 +2382,8 @@ func main() {
 				"when you save the file.", w)
 	})
 	btnIOTA.Disable()
-	ac.resetIOTABtn = func() { btnIOTA.Disable() }
+	ac.resetIOTABtn = func() { btnIOTA.Disable(); btnIOTA.Show() }
+	ac.hideIOTABtn = func() { btnIOTA.Hide() }
 	btnOccultParams := widget.NewButton("Edit Occultation Parameters", func() {
 		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
 			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
@@ -2331,6 +2458,12 @@ func main() {
 				}
 			}
 		}()
+	}
+	ac.stopProcessOccelmntBlink = func() {
+		if stopProcessBlink != nil {
+			stopProcessBlink()
+			stopProcessBlink = nil
+		}
 	}
 	ac.resetProcessOccelmntBtn = func() {
 		btnProcessOccelemnt.Enable()

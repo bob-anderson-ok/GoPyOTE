@@ -48,21 +48,23 @@ type appContext struct {
 	toggleLightCurve func(columnIndex int)
 
 	// Callbacks set during tab construction
-	resetFitButtons         func()
-	resetNormalizeBtn       func()
-	enablePostFitButtons    func()
-	resetProcessOccelmntBtn func()
-	resetIOTABtn            func()
-	enableShowIOTAPlots     func()
-	autoFillSearchRange     func()
+	resetFitButtons          func()
+	resetNormalizeBtn        func()
+	enablePostFitButtons     func()
+	resetProcessOccelmntBtn  func()
+	resetIOTABtn             func()
+	enableShowIOTAPlots      func()
+	autoFillSearchRange      func()
+	stopProcessOccelmntBlink func()
+	hideIOTABtn              func()
 
 	// NIE manual selection mode flag — true when the checkbox is checked.
 	nieManualSelectMode bool
 
-	// Show diagnostics plots flag — checked on Settings tab, read by Fit tab.
+	// Show diagnostics plots flag — checked on the Settings tab, read by Fit tab.
 	showDiagnostics bool
 
-	// Use correlated noise flag — checked on Settings tab, read by Fit tab.
+	// Use correlated noise flag — checked on the Settings tab, read by Fit tab.
 	useCorrelatedNoise bool
 
 	// AR model parameters fitted from pre-detrend autocorrelation (rho).

@@ -1325,6 +1325,34 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			OccelmntXml: xmlContent,
 		}
 
+		// Write a copy of the site data into the -RESULTS folder if available.
+		if resultsFolder != "" {
+			var sb strings.Builder
+			sb.WriteString("latitude_decimal: " + strings.TrimSpace(latDecimalEntry.Text) + "\n")
+			sb.WriteString("longitude_decimal: " + strings.TrimSpace(longDecimalEntry.Text) + "\n")
+			sb.WriteString("altitude: " + strings.TrimSpace(altitudeEntry.Text) + "\n")
+			sb.WriteString("observer1: " + strings.TrimSpace(observer1Entry.Text) + "\n")
+			sb.WriteString("observer2: " + strings.TrimSpace(observer2Entry.Text) + "\n")
+			sb.WriteString("observatory: " + strings.TrimSpace(observatoryEntry.Text) + "\n")
+			sb.WriteString("email: " + strings.TrimSpace(emailEntry.Text) + "\n")
+			sb.WriteString("address: " + strings.TrimSpace(addressEntry.Text) + "\n")
+			sb.WriteString("nearest_city: " + strings.TrimSpace(nearestCityEntry.Text) + "\n")
+			sb.WriteString("country_code: " + strings.TrimSpace(countryCodeEntry.Text) + "\n")
+			sb.WriteString("telescope: " + telescopeOptToVal[telescopeSelect.Selected] + "\n")
+			sb.WriteString("aperture: " + strings.TrimSpace(apertureEntry.Text) + "\n")
+			sb.WriteString("focal_length: " + strings.TrimSpace(focalLengthEntry.Text) + "\n")
+			sb.WriteString("observing_method: " + observingMethodOptToVal[observingMethodSelect.Selected] + "\n")
+			sb.WriteString("time_source: " + timeSourceOptToVal[timeSourceSelect.Selected] + "\n")
+			sb.WriteString("camera: " + strings.TrimSpace(cameraEntry.Text) + "\n")
+
+			sitePath := filepath.Join(resultsFolder, "site_data.site")
+			if werr := os.WriteFile(sitePath, []byte(sb.String()), 0644); werr != nil {
+				fmt.Printf("Warning: could not write site copy to results folder: %v\n", werr)
+			} else {
+				logAction(fmt.Sprintf("Site data copied to: %s", sitePath))
+			}
+		}
+
 		// Close this dialog and open the parameters dialog pre-populated from the computed values
 		if occelmntDialog != nil {
 			occelmntDialog.Hide()
