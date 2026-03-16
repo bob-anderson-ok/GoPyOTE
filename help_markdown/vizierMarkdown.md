@@ -18,6 +18,14 @@ Before using the VizieR export:
 
 ## 
 
+## Workflow
+
+1. If the fields are not already filled, click **Copy from SODIS-REPORT.txt***
+2. Click **Preview submission**
+3. Click **Generate VizieR .dat file** to write the .dat file into the **-RESULTS** folder 
+
+## 
+
 ## Input Fields
 
 ## 
@@ -58,38 +66,8 @@ Your name as it should appear in the database.
 
 ### Asteroid
 
-- **Number**: The asteroid's catalog number (max 6 digits)
-- **Name**: The asteroid's name
-
-## 
-
-### Output Folder
-
-The destination folder for generated .dat files. Defaults to Documents/VizieR.
-
-## 
-
-## Auto-Fill Options
-
-The VizieR fields can be automatically populated from several sources:
-
-## 
-
-### RAVF File Headers
-
-When loading a CSV file exported from an RAVF (Astrid) recording, the fields are automatically filled from embedded metadata.
-
-## 
-
-### ADV File Headers
-
-When loading a CSV file exported from an **ADV** recording, available metadata is extracted and used to fill the fields. Note: **Tangra** apparently does not include the ADV meta-data in the csv file headers.
-
-## 
-
-### NA Spreadsheet
-
-Click **Load from NA spreadsheet** to import data from a North American Asteroid Occultation Report Form (.xlsx file).
+- **Number**: The asteroid's catalog number (max 6 digits). **Note: if the asteroid number is given as 0, a dash is substitued**
+- **Name**: The asteroid's name (if available)
 
 ## 
 
@@ -113,41 +91,10 @@ Dropped frames are represented as empty values in the output (a single space is 
 
 ## 
 
-## Workflow
-
-## 
-
-1. Fill in all required fields (or use autofill)
-2. Click **Generate VizieR .dat file**
-3. Repeat for additional observations if needed
-4. Click **Zip *.dat files for sending** to create a zip archive
-5. Email the zip file to [HeraldDR@bigpond.com]([HeraldDR@bigpond.com](mailto:HeraldDR@bigpond.com))
-
-## 
-
-Note: [HeraldDR@bigpond.com](mailto:HeraldDR@bigpond.com) is NOT Dave Herald's 'regular' email address but rather a special one for receiving these reports!
-
-The Subject line of the email must be (to avoid being treated as spam)
-
-    **Light curve report**
-
-There is no need to say anything in the body of the email,  but if you do so,  include the word **attachment**.  Some email clients will notice that word AND the fact that you didn't actually add any attachment and warn you about that!
-
-You should receive an automatic acknowledgement of your email in a few minutes.
-
-If there are any problems with the content of your report,  you will be notified when the next batch of light curve reports are being processed.  This may not be for several weeks or more.
-
-Your light curve will be visible within Occult4 after it has been vetted - this may take a couple of weeks.  It will later be archived at Vizier in Catalogue B/occ,  which can be accessed at[ https://vizier.u-strasbg.fr/viz-bin/VizieR?-source=B/occ](https://vizier.u-strasbg.fr/viz-bin/VizieR?-source=B/occ)
-
-## 
-
-## Notes
+## Note
 
 ## 
 
 - The .dat files use CRLF line endings for compatibility
-- After zipping, the original .dat files are automatically deleted (but they remain recoverable as they are in the zip folder just created)
-- In addition, a copy is always saved in the associated RESULTS folder.
-- The zip filename includes a timestamp for uniqueness
 
 ## 

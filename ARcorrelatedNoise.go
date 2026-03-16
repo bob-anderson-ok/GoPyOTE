@@ -121,11 +121,17 @@ func generateAR(n int, phi []float64, sigma2 float64, rng *rand.Rand) []float64 
 
 	p := len(phi)
 
-	x := make([]float64, n)
+	// Use a burn-in period so the AR process reaches its stationary variance
+	// before we start collecting output samples. Without this, the first p
+	// samples have reduced variance because the AR feedback terms are missing,
+	// which attenuates the effective noise amplitude.
+	burnIn := 10 * p
+	total := burnIn + n
+	x := make([]float64, total)
 
 	sigma := math.Sqrt(sigma2)
 
-	for t := 0; t < n; t++ {
+	for t := 0; t < total; t++ {
 
 		val := sigma * rng.NormFloat64()
 
@@ -139,7 +145,7 @@ func generateAR(n int, phi []float64, sigma2 float64, rng *rand.Rand) []float64 
 		x[t] = val
 	}
 
-	return x
+	return x[burnIn:]
 }
 
 //

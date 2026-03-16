@@ -58,9 +58,6 @@ var occelmntButtonExplanation embed.FS
 //go:embed help_markdown/editOccParams.md
 var editOccParamsExplanation embed.FS
 
-//go:embed help_markdown/runIOTAdiffraction.md
-var runIOTAdiffractionExplanation embed.FS
-
 //go:embed help_markdown/fresnelScaleResolution.md
 var fresnelScaleResolutionMarkdown embed.FS
 
@@ -71,7 +68,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.27"
+const Version = "1.2.28"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -274,14 +271,6 @@ func main() {
 				return
 			}
 			ShowMarkdownDialogWithImages("Edit Occ Params", string(content), &editOccParamsExplanation, w)
-		}),
-		fyne.NewMenuItem("Run IOTAdiffraction", func() {
-			content, err := runIOTAdiffractionExplanation.ReadFile("help_markdown/runIOTAdiffraction.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load runIOTAdiffraction.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Run IOTAdiffraction", string(content), &runIOTAdiffractionExplanation, w)
 		}),
 		fyne.NewMenuItem("Fresnel scale resolution", func() {
 			content, err := fresnelScaleResolutionMarkdown.ReadFile("help_markdown/fresnelScaleResolution.md")
@@ -1561,7 +1550,7 @@ func main() {
 
 			// Check the -RESULTS folder for prior run artifacts (.occparams, .site, targetImage16bit.png).
 			// If all three are present, restore the state so the Fit tab can be used immediately.
-			var foundOccparams, foundSite, foundImage string
+			var foundOccparams, foundSite, foundImage, foundGeoShadow string
 			if resultsFolder != "" {
 				if entries, err := os.ReadDir(resultsFolder); err == nil {
 					for _, entry := range entries {
@@ -1576,15 +1565,25 @@ func main() {
 							foundSite = filepath.Join(resultsFolder, name)
 						case name == "targetImage16bit.png":
 							foundImage = filepath.Join(resultsFolder, name)
+						case name == "geometricShadow.png":
+							foundGeoShadow = filepath.Join(resultsFolder, name)
 						}
 					}
 				}
 				if foundOccparams != "" && foundSite != "" && foundImage != "" {
-					// Copy the diffraction image to the application directory
-					if imgData, err := os.ReadFile(foundImage); err == nil {
-						dstPath := filepath.Join(appDir, "targetImage16bit.png")
-						if err := os.WriteFile(dstPath, imgData, 0644); err != nil {
-							fmt.Printf("Warning: could not copy targetImage16bit.png to app dir: %v\n", err)
+					// Copy the diffraction images to the application directory
+					for _, img := range []struct{ src, name string }{
+						{foundImage, "targetImage16bit.png"},
+						{foundGeoShadow, "geometricShadow.png"},
+					} {
+						if img.src == "" {
+							continue
+						}
+						if imgData, err := os.ReadFile(img.src); err == nil {
+							dstPath := filepath.Join(appDir, img.name)
+							if err := os.WriteFile(dstPath, imgData, 0644); err != nil {
+								fmt.Printf("Warning: could not copy %s to app dir: %v\n", img.name, err)
+							}
 						}
 					}
 
@@ -1680,10 +1679,16 @@ func main() {
 				if ac.hideIOTABtn != nil {
 					ac.hideIOTABtn()
 				}
-				dialog.ShowInformation("Prior Results Found",
+				priorDlg := dialog.NewInformation("Prior Results Found",
 					"This observation has been fully processed in the past.\n"+
 						"Unless you need to change site data or an occultation parameter value, "+
-						"you can go directly to the Fit tab.", w)
+						"the Fit tab will be opened automatically.", w)
+				priorDlg.SetOnClosed(func() {
+					if ac.selectFitTab != nil {
+						ac.selectFitTab()
+					}
+				})
+				priorDlg.Show()
 			} else {
 				if ac.resetProcessOccelmntBtn != nil {
 					ac.resetProcessOccelmntBtn()
@@ -1928,7 +1933,7 @@ func main() {
 						altitude, vizierTab.ObserverNameEntry.Text,
 						vizierTab.AsteroidNumberEntry.Text, vizierTab.AsteroidNameEntry.Text,
 						rangeStart, rangeEnd,
-						vizierTab.OutputFolderEntry.Text, vizierTab.StatusLabel)
+						vizierTab.StatusLabel)
 				}, w)
 			return
 		}
@@ -1940,7 +1945,7 @@ func main() {
 			altitude, vizierTab.ObserverNameEntry.Text,
 			vizierTab.AsteroidNumberEntry.Text, vizierTab.AsteroidNameEntry.Text,
 			rangeStart, rangeEnd,
-			vizierTab.OutputFolderEntry.Text, vizierTab.StatusLabel)
+			vizierTab.StatusLabel)
 	}
 
 	// Set up the Preview submission button callback
@@ -2076,6 +2081,10 @@ func main() {
 	tab10 := buildFitTab(ac)
 
 	tabs := container.NewAppTabs(tab2, tab3, tab10, vizierTab.TabItem, tab5, tab6, tab7)
+
+	ac.selectFitTab = func() {
+		tabs.Select(tab10)
+	}
 
 	// Apply dark tab backgrounds if dark mode was persisted
 	if prefs.BoolWithFallback("darkMode", false) {
@@ -2291,15 +2300,17 @@ func main() {
 				if ac.enableShowIOTAPlots != nil {
 					fyne.Do(func() { ac.enableShowIOTAPlots() })
 				}
-				// Copy targetImage16bit.png to the -RESULTS folder if available.
+				// Copy targetImage16bit.png and geometricShadow.png to the -RESULTS folder if available.
 				if resultsFolder != "" {
-					srcPath := filepath.Join(appDir, "targetImage16bit.png")
-					if data, rerr := os.ReadFile(srcPath); rerr == nil {
-						dstPath := filepath.Join(resultsFolder, "targetImage16bit.png")
-						if werr := os.WriteFile(dstPath, data, 0644); werr != nil {
-							fmt.Printf("Warning: could not copy targetImage16bit.png to results folder: %v\n", werr)
-						} else {
-							logAction(fmt.Sprintf("targetImage16bit.png copied to: %s", dstPath))
+					for _, imgName := range []string{"targetImage16bit.png", "geometricShadow.png"} {
+						srcPath := filepath.Join(appDir, imgName)
+						if data, rerr := os.ReadFile(srcPath); rerr == nil {
+							dstPath := filepath.Join(resultsFolder, imgName)
+							if werr := os.WriteFile(dstPath, data, 0644); werr != nil {
+								fmt.Printf("Warning: could not copy %s to results folder: %v\n", imgName, werr)
+							} else {
+								logAction(fmt.Sprintf("%s copied to: %s", imgName, dstPath))
+							}
 						}
 					}
 				}

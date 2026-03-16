@@ -2,19 +2,19 @@
 
 The **Process OWC occelmnt file** button, located at the bottom of the main window, opens a dialog for computing observer-relative shadow velocities from an OWC (Occult Watcher Cloud) occelmnt XML file.
 
-##
+## 
 
 ## Dialog Layout
 
 The dialog contains the following sections from top to bottom:
 
-##
+## 
 
 ### Paste Area
 
-A large multi-line text box where you paste the contents of an OWC occelmnt XML file using Ctrl+V. The text box is auto-focused when the dialog opens so you can paste immediately.
+A large multi-line text box where you paste the contents of an OWC occelmnt XML file using Ctrl+V. The text box is auto-focused when the dialog opens so you can paste immediately. When a paste is performed, the xml file is automatically saved to the **-RESULTS** folder and will be used the next this observation is opened for processing.
 
-##
+## 
 
 ### Site Location
 
@@ -28,7 +28,7 @@ Enter the observer's geographic coordinates. You can enter values in either form
 
 Use negative degrees for West longitude and South latitude.
 
-##
+## 
 
 ### Buttons
 
@@ -36,20 +36,18 @@ Use negative degrees for West longitude and South latitude.
 
 - **Write site file** — Opens a file save dialog in the `SITE-FILES` directory (created automatically if it does not exist) to write the current Site Location fields (latitude, longitude, altitude) to a `.site` file. The `.site` extension is enforced automatically.
 
-- **Calculate observer dX dY (closes dialog)** — Computes the observer-relative shadow velocity, creates a diffraction parameters file, closes this dialog, and opens the Edit/Enter Occultation Parameters dialog. A Fresnel scale information popup is also displayed. See workflow below.
-
 - **Cancel** — Closes the dialog without performing any calculation.
 
-##
+## 
 
 ## Workflow
 
-1. **Paste the occelmnt XML** into the text box (Ctrl+V).
+1. **Paste the occelmnt XML** into the text box (Ctrl+V). Alternatively, click the **Load Occelmnt file** button to open a browser to find an xml file that is saved somewhere else. This allows for alternate workflows for occelmnt.xml file access.
 
 2. **Enter your observer location.** Either type the coordinates manually, or click **Load site file** to load them from a previously saved `.site` file. You can save your current location using **Write site file** for future use.
 
-3. Click **Calculate observer dX dY (closes dialog)**. This will:
-
+3. Click **Create Occultation Parameter file (closes dialog)**. This will:
+   
    - Call `ShadowVelocityFromOWCEventKmPerSec` to compute the relative shadow velocity (vx, vy in km/s) for your observer location, accounting for Earth rotation via WGS-84 geodesy and Earth Rotation Angle.
    - Parse the `<Object>` element from the XML to extract:
      - **Index 0, 1:** asteroid number and name, used to set the `title` field as `(number) name`
@@ -65,19 +63,18 @@ Use negative degrees for West longitude and South latitude.
      - `fundamental_plane_width_num_points` — defaulted to 2000
      - `observation_wavelength_nm` — defaulted to 550
      - `main_body.major_axis_km` and `main_body.minor_axis_km` — body diameter
-   - Close this dialog and open the **Edit/Enter Occultation Parameters** dialog with the `from_occelmnt` file loaded, so you can review, adjust, and save the parameters before running IOTAdiffraction.
+   - Thedialog closes and opens in a new dialog: **Edit/Enter Occultation Parameters** dialog with the `from_occelmnt` file loaded, so you can review, and adjust if needed., and after you click on **Write**, IOTAdiffraction will be called
    - Display a **Fresnel Scale** popup showing:
      - The Fresnel scale in km and meters
      - The wavelength and distance used for the calculation
      - Samples per Fresnel scale (calculated from the fundamental plane parameters)
      - Guidance that 5-6 samples per Fresnel scale are needed as a minimum for observations exhibiting diffraction effects
-
-   ##
+   - Click on **Write**, and IOTAdiffraction will be called.
+   
+   ## 
 
 ## Notes
 
-- The calculation uses `dut1Seconds = 0`, `xpArcsec = 0`, and `ypArcsec = 0` by default. For sub-10 ms precision work, you would need actual UT1-UTC and polar motion values from the IERS.
-- The `from_occelmnt` file is overwritten each time you click Calculate. To preserve a set of parameters, use the Write button in the Parameters dialog to save to a named file (with `.occparams` extension).
-- Both **Load site file** and **Write site file** always open in the `SITE-FILES` directory relative to the application directory.
+- Both **Load site file** and **Write site file** always use the `SITE-FILES` directory relative to the application directory.
 
-##
+## 

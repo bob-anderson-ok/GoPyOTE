@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"bufio"
 	"bytes"
 	"encoding/xml"
@@ -9,7 +8,6 @@ import (
 	"image"
 	"image/color"
 	"image/png"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -58,9 +56,6 @@ type VizieRTab struct {
 	AsteroidNumberEntry *FocusLossEntry
 	AsteroidNameEntry   *FocusLossEntry
 
-	// Output folder path
-	OutputFolderEntry *FocusLossEntry
-
 	// Status label
 	StatusLabel *widget.Label
 
@@ -72,9 +67,6 @@ type VizieRTab struct {
 
 	// Preview button (exposed so the callback can be set from main)
 	PreviewBtn *widget.Button
-
-	// Zip button for zipping .dat files
-	ZipBtn *widget.Button
 
 	// Load from the NA spreadsheet button
 	LoadXlsxBtn *widget.Button
@@ -156,16 +148,6 @@ func NewVizieRTab() *VizieRTab {
 	asteroidNumberContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(80, 36)), vt.AsteroidNumberEntry)
 	asteroidNameContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), vt.AsteroidNameEntry)
 
-	// Output folder path with default
-	vt.OutputFolderEntry = NewFocusLossEntry()
-	defaultOutputFolder := ""
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		defaultOutputFolder = filepath.Join(homeDir, "Documents", "VizieR")
-	}
-	vt.OutputFolderEntry.SetText(defaultOutputFolder)
-	vt.OutputFolderEntry.SetPlaceHolder("path to output folder")
-	outputFolderContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(350, 36)), vt.OutputFolderEntry)
-
 	// Status label
 	vt.StatusLabel = widget.NewLabel("Enter observation data for VizieR export")
 	vt.StatusLabel.Wrapping = fyne.TextWrapWord
@@ -183,11 +165,9 @@ func NewVizieRTab() *VizieRTab {
 		vt.ClearInputs()
 	})
 
-	// Zip button (callback set below, needs access to vt)
-	vt.ZipBtn = widget.NewButton("Zip *.dat files for sending", func() {})
-
 	// Load from the NA spreadsheet button (callback set below, needs access to window)
 	vt.LoadXlsxBtn = widget.NewButton("Load from NA spreadsheet", func() {})
+	vt.LoadXlsxBtn.Disable()
 
 	// Load from the SODIS form button (callback set below, needs access to window)
 	vt.LoadSodisBtn = widget.NewButton("Copy from SODIS-REPORT.txt", func() {})
@@ -211,9 +191,7 @@ func NewVizieRTab() *VizieRTab {
 		widget.NewLabel("Asteroid:"),
 		container.NewHBox(widget.NewLabel("Number:"), asteroidNumberContainer, widget.NewLabel("Name:"), asteroidNameContainer),
 		widget.NewSeparator(),
-		container.NewHBox(widget.NewLabel("Output folder:"), outputFolderContainer),
-		widget.NewSeparator(),
-		container.NewHBox(vt.PreviewBtn, vt.GenerateBtn, vt.ZipBtn),
+		container.NewHBox(vt.PreviewBtn, vt.GenerateBtn),
 		container.NewHBox(clearBtn, vt.LoadXlsxBtn, vt.LoadSodisBtn),
 		widget.NewSeparator(),
 		vt.StatusLabel,
@@ -401,7 +379,6 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 	altitude, observer string,
 	asteroidNumber, asteroidName string,
 	rangeStart, rangeEnd int,
-	outputFolder string,
 	statusLabel *widget.Label) {
 
 	if data == nil || len(data.Columns) == 0 {
@@ -514,18 +491,12 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 
 	filename := fmt.Sprintf("(%s)_%d%02d%02d_%s%s%s.dat", asteroidNumber, year, month, day, hh, mm, sss)
 
-	// Determine the output directory
-	destDir := outputFolder
-	resultsOnly := false
-	if destDir == "" {
-		// If no output folder specified, write-only to the -RESULTS folder
-		if resultsFolder == "" {
-			dialog.ShowError(fmt.Errorf("no output folder specified and no -RESULTS folder available"), w)
-			return
-		}
-		destDir = resultsFolder
-		resultsOnly = true
+	// Write to the -RESULTS folder
+	if resultsFolder == "" {
+		dialog.ShowError(fmt.Errorf("no -RESULTS folder available"), w)
+		return
 	}
+	destDir := resultsFolder
 
 	// Create a directory if it doesn't exist
 	if _, err := os.Stat(destDir); os.IsNotExist(err) {
@@ -586,30 +557,14 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 		return
 	}
 
-	// Copy to the results folder if available (skip if already writing there)
-	resultsCopyMsg := ""
-	if resultsFolder != "" && !resultsOnly {
-		copyPath := filepath.Join(resultsFolder, filename)
-		if copyData, err := os.ReadFile(vizierFilePath); err == nil {
-			if err := os.WriteFile(copyPath, copyData, 0644); err != nil {
-				fmt.Printf("Warning: could not copy VizieR file to results folder: %v\n", err)
-			} else {
-				resultsCopyMsg = fmt.Sprintf("\nCopy written to:\n%s", copyPath)
-			}
-		}
-	}
-
-	statusLabel.SetText(fmt.Sprintf("VizieR file written to:\n%s%s", vizierFilePath, resultsCopyMsg))
+	statusLabel.SetText(fmt.Sprintf("VizieR file written to:\n%s", vizierFilePath))
 	dialog.ShowInformation("VizieR Export Complete",
-		fmt.Sprintf("Your VizieR lightcurve file was written to:\n\n%s%s", vizierFilePath, resultsCopyMsg), w)
+		fmt.Sprintf("Your VizieR lightcurve file was written to:\n\n%s", vizierFilePath), w)
 	vizierDatWrittenThisSession = true
 
 	// Log VizieR page entries
 	logAction(fmt.Sprintf("Generated VizieR file: %s", vizierFilePath))
 	logAction(fmt.Sprintf("  VizieR file written to: %s", vizierFilePath))
-	if resultsCopyMsg != "" {
-		logAction(fmt.Sprintf("  Copy written to results folder: %s", filepath.Join(resultsFolder, filename)))
-	}
 	logAction(fmt.Sprintf("  Date: %d-%02d-%02d", year, month, day))
 	logAction(fmt.Sprintf("  Timestamp: %s, Delta: %.2f sec, Readings: %d", vizierTimestamp, deltaTime, numReadings))
 	logAction(fmt.Sprintf("  Frame range: %d to %d", rangeStart, rangeEnd))
@@ -627,164 +582,6 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 	logAction(fmt.Sprintf("  Altitude: %s m", altitude))
 	logAction(fmt.Sprintf("  Observer: %s", observer))
 	logAction(fmt.Sprintf("  Asteroid: (%s) %s", asteroidNumber, asteroidName))
-}
-
-// zipDatFiles zips all .dat files in the specified directory
-func zipDatFiles(w fyne.Window, outputFolder string, statusLabel *widget.Label) {
-	// Determine the directory to zip
-	destDir := outputFolder
-	if destDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("could not determine home directory: %v", err), w)
-			return
-		}
-		destDir = filepath.Join(homeDir, "Documents", "VizieR")
-	}
-
-	// Check if a directory exists
-	if _, err := os.Stat(destDir); os.IsNotExist(err) {
-		dialog.ShowError(fmt.Errorf("output directory does not exist: %s", destDir), w)
-		return
-	}
-
-	// Find all .dat files in the directory
-	pattern := filepath.Join(destDir, "*.dat")
-	datFiles, err := filepath.Glob(pattern)
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("error searching for .dat files: %v", err), w)
-		return
-	}
-
-	if len(datFiles) == 0 {
-		dialog.ShowInformation("No Files Found",
-			fmt.Sprintf("No .dat files found in:\n%s", destDir), w)
-		return
-	}
-
-	// Create a zip file name with timestamp
-	timestamp := time.Now().Format("20060102_150405")
-	zipFileName := fmt.Sprintf("VizieR_dat_files_%s.zip", timestamp)
-	zipFilePath := filepath.Join(destDir, zipFileName)
-
-	// Create the zip file
-	zipFile, err := os.Create(zipFilePath)
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("could not create zip file: %v", err), w)
-		return
-	}
-
-	// Use the success flag to handle deferred closes properly
-	success := false
-	defer func() {
-		if !success {
-			_ = zipFile.Close()
-		}
-	}()
-
-	zipWriter := zip.NewWriter(zipFile)
-	defer func() {
-		if !success {
-			_ = zipWriter.Close()
-		}
-	}()
-
-	// Add each .dat file to the zip
-	filesAdded := 0
-	for _, datFilePath := range datFiles {
-		err := addFileToZip(zipWriter, datFilePath)
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("error adding %s to zip: %v", filepath.Base(datFilePath), err), w)
-			return
-		}
-		filesAdded++
-	}
-
-	// Close the zip writer to flush all data
-	if err := zipWriter.Close(); err != nil {
-		dialog.ShowError(fmt.Errorf("error finalizing zip file: %v", err), w)
-		return
-	}
-
-	// Close the underlying file
-	if err := zipFile.Close(); err != nil {
-		dialog.ShowError(fmt.Errorf("error closing zip file: %v", err), w)
-		return
-	}
-
-	// Mark success so defers don't close again
-	success = true
-
-	// Delete the .dat files after successful zip
-	filesDeleted := 0
-	for _, datFilePath := range datFiles {
-		if err := os.Remove(datFilePath); err != nil {
-			dialog.ShowError(fmt.Errorf("error deleting %s: %v", filepath.Base(datFilePath), err), w)
-		} else {
-			filesDeleted++
-		}
-	}
-
-	statusLabel.SetText(fmt.Sprintf("Zipped %d .dat files to:\n%s\n(%d files deleted)", filesAdded, zipFilePath, filesDeleted))
-	dialog.ShowInformation("Zip Complete",
-		fmt.Sprintf("Successfully zipped %d .dat file(s) to:\n\n%s\n\n%d .dat file(s) deleted.", filesAdded, zipFilePath, filesDeleted), w)
-	logAction(fmt.Sprintf("Zipped %d .dat files to: %s, deleted %d files", filesAdded, zipFilePath, filesDeleted))
-
-	// Reminder to email the zip file
-	dialog.ShowInformation("Email Reminder",
-		fmt.Sprintf("Please email the zip file to:\n\nHeraldDR@bigpond.com\n\nFile: %s", zipFileName), w)
-}
-
-// addFileToZip adds a single file to a zip archive
-func addFileToZip(zipWriter *zip.Writer, filePath string) error {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return err
-	}
-
-	// Use the success flag to handle deferred close properly
-	success := false
-	defer func() {
-		if !success {
-			_ = file.Close()
-		}
-	}()
-
-	// Get file info for the header
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-
-	// Create zip header
-	header, err := zip.FileInfoHeader(info)
-	if err != nil {
-		return err
-	}
-
-	// Use only the base name (not the full path)
-	header.Name = filepath.Base(filePath)
-	header.Method = zip.Deflate
-
-	// Create a writer for this file in the zip
-	writer, err := zipWriter.CreateHeader(header)
-	if err != nil {
-		return err
-	}
-
-	// Copy file contents to zip
-	_, err = io.Copy(writer, file)
-	if err != nil {
-		return err
-	}
-
-	// Explicitly close and check for error
-	if err := file.Close(); err != nil {
-		return err
-	}
-
-	success = true
-	return nil
 }
 
 // decimalToDMS converts a decimal degree value to degrees, minutes, seconds strings
@@ -1494,7 +1291,6 @@ func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
 	}
 
 	vt.StatusLabel.SetText("SODIS form data loaded successfully")
-	dialog.ShowInformation("Success", "SODIS form entries extracted successfully.", w)
 	return nil
 }
 

@@ -197,6 +197,13 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					rho[0] = 1.0
 					copy(rho[1:], preLagCoeffs)
 
+					// Log lag coefficients.
+					lagStrs := make([]string, len(preLagCoeffs))
+					for i, v := range preLagCoeffs {
+						lagStrs[i] = fmt.Sprintf("lag%d=%0.4f", i+1, v)
+					}
+					logAction(fmt.Sprintf("Lag coefficients: %s", strings.Join(lagStrs, " ")))
+
 					// Fit AR model from rho and store phi/sigma2 for correlated noise generation.
 					arOrder := len(preLagCoeffs)
 					phi, sigma2, arErr := fitARFromACF(rho, arOrder)

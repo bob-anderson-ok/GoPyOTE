@@ -20,7 +20,7 @@ A best-fit is found by sliding the theoretical diffraction light curve against t
 
 ## 
 
-The user normalizes the baseline, which measures `noiseSigma` — the standard deviation of the observed light curve's baseline noise.
+The user normalizes the baseline, which measures `noiseSigma` — the standard deviation of the observed light curve's baseline noise. During this process, the lag coefficients out to lag 10 are calculated and saved. These coefficients characterize the degree of correlation, caused by scintillation, that exists in the observation noise. These values are essential and are used to generate realistic noise samples for later operations.
 
 ## 
 
@@ -33,8 +33,9 @@ Each trial:
 ## 
 
 1. Takes the **sampled theoretical curve** from the best fit (the "true" signal)
-2. Adds **Gaussian noise** scaled by both `noiseSigma` and the signal value: `v + rand.NormFloat64() * noiseSigma * v` — brighter points get proportionally more noise
-3. This creates a synthetic "noisy observation"
+2. Adds **Gaussian noise** scaled by both `noiseSigma` and the signal value: `v + rand.NormFloat64() * noiseSigma * v` — brighter points get proportionally more noise.
+3. The noise from the above operation is white noise. This is converted to correlated noise using the measured lag coefficients.
+4. This creates a realistic synthetic  "noisy observation"
 
 ## 
 
@@ -42,7 +43,7 @@ Each trial:
 
 ## 
 
-Each noisy synthetic observation is re-fit against all precomputed candidate curves (across path offsets) using the same NCC sliding fit. The best-matching candidate gives new edge times for that trial.
+Each noisy synthetic observation is re-fit against some set of precomputed candidate curves (across path offsets) using the same NCC sliding fit. The best-matching candidate gives new edge times for that trial.
 
 ## 
 
