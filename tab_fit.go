@@ -49,6 +49,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	mcNarrowSearchCheck := widget.NewCheck("Narrow MC offset search (±20 steps)", nil)
 	mcNarrowSearchCheck.Checked = true
 
+	var runNieBtn *widget.Button
 	nieSinglePointCheck := widget.NewCheck("Enable NIE point(s) selection", func(checked bool) {
 		ac.nieManualSelectMode = checked
 		if checked {
@@ -72,10 +73,20 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			ac.lightCurvePlot.SelectedPoint2Frame = 0
 			ac.lightCurvePlot.SelectedPoint2Value = 0
 			ac.lightCurvePlot.Refresh()
+			// Enable the NIE button so the user can run manual NIE analysis.
+			runNieBtn.Enable()
+			runNieBtn.Importance = widget.HighImportance
+			runNieBtn.Refresh()
 		} else {
 			// Restore multi-pair mode for baseline region selection.
 			ac.lightCurvePlot.MultiPairSelectMode = true
 			ac.lightCurvePlot.Refresh()
+			// Disable the NIE button unless a fit result is available.
+			if lastFitResult == nil {
+				runNieBtn.Disable()
+				runNieBtn.Importance = widget.HighImportance
+				runNieBtn.Refresh()
+			}
 		}
 	})
 	nieSinglePointCheck.Checked = false
@@ -1071,21 +1082,22 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	nieAbortBtn.Importance = widget.DangerImportance
 	nieAbortBtn.Hide()
 
-	var runNieBtn *widget.Button
 	runNieBtn = widget.NewButton("Run NIE analysis", func() {
 		if len(rho) >= 2 {
 			testARmethod(rho)
 		}
-		if lastFitResult == nil {
-			dialog.ShowError(fmt.Errorf("no fit result available â run a fit first"), w)
+		manualWithPoints := nieSinglePointCheck.Checked &&
+			(ac.lightCurvePlot.SelectedPoint1Valid || ac.lightCurvePlot.SelectedPoint2Valid)
+		if lastFitResult == nil && !manualWithPoints {
+			dialog.ShowError(fmt.Errorf(`No fit result available. Either run a 'fit' first, or select one or a range of points to be included in the NIE analysis.`), w)
 			return
 		}
 		if noiseSigma == 0 {
-			dialog.ShowError(fmt.Errorf("no noise sigma available â run Normalize Baseline first"), w)
+			dialog.ShowError(fmt.Errorf("no noise sigma available — run Normalize Baseline first"), w)
 			return
 		}
-		if len(lastFitTargetTimes) == 0 {
-			dialog.ShowError(fmt.Errorf("no target light curve available â run a fit first"), w)
+		if len(lastFitTargetTimes) == 0 && !manualWithPoints {
+			dialog.ShowError(fmt.Errorf("no target light curve available — run a fit first"), w)
 			return
 		}
 		mcTrials, err := strconv.Atoi(mcNumTrialsEntry.Text)
@@ -1094,7 +1106,31 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			return
 		}
 		numTrials := mcTrials * 10
+
+		// Determine nPoints: use fit target times when available, otherwise count displayed points.
 		nPoints := len(lastFitTargetTimes)
+		if nPoints == 0 && manualWithPoints && loadedLightCurveData != nil {
+			var displayedColIdx int
+			for k := range ac.displayedCurves {
+				displayedColIdx = k
+				break
+			}
+			col := loadedLightCurveData.Columns[displayedColIdx]
+			for i := range col.Values {
+				frameNum := loadedLightCurveData.FrameNumbers[i]
+				if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
+					continue
+				}
+				if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
+					continue
+				}
+				nPoints++
+			}
+		}
+		if nPoints == 0 {
+			dialog.ShowError(fmt.Errorf("no light curve data available"), w)
+			return
+		}
 
 		// Pass AR parameters when "Use correlated noise" is checked.
 		var nieArPhi []float64
