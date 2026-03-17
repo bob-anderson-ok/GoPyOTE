@@ -68,7 +68,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.30"
+const Version = "1.2.31"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -116,6 +116,11 @@ var vizierDatWrittenThisSession bool
 // sodisNegativeReportSaved is set to true when a NEGATIVE SODIS report is saved.
 // A negative report does not require a VizieR .dat file, so the close warning is skipped.
 var sodisNegativeReportSaved bool
+
+// occultationProcessedForCurrentCSV is set to true when prior diffraction results
+// are found in the -RESULTS folder or when IOTAdiffraction runs for the current CSV.
+// Reset to false each time a new CSV is loaded.
+var occultationProcessedForCurrentCSV bool
 
 // afterOccParamsSaved, when non-nil, is called with the saved file path immediately after
 // showOccultationParametersDialog successfully writes a new .occparams file.
@@ -1655,6 +1660,7 @@ func main() {
 			sodisReportSavedThisSession = false
 			vizierDatWrittenThisSession = false
 			sodisNegativeReportSaved = false
+			occultationProcessedForCurrentCSV = priorResultsFound
 			if ac.resetFitButtons != nil {
 				ac.resetFitButtons()
 			}
@@ -2119,6 +2125,14 @@ func main() {
 			ac.lightCurvePlot.SelectedPoint2Value = 0
 			ac.lightCurvePlot.Refresh()
 		} else if tab == tab10 {
+			// Fit tab: require that the occultation has been processed first
+			if !occultationProcessedForCurrentCSV {
+				dialog.ShowError(fmt.Errorf(
+					"The \"Process occelmnt file\" operation must be performed first.\n\n"+
+						"Please process an occultation file before using the Fit tab."), w)
+				tabs.Select(tab3)
+				return
+			}
 			// Fit tab: require exactly one light curve to be displayed
 			if len(ac.displayedCurves) != 1 {
 				dialog.ShowError(fmt.Errorf(
@@ -2325,6 +2339,7 @@ func main() {
 		logAction(fmt.Sprintf("Running IOTAdiffraction with parameters file: %s", paramFilePath))
 		lastDiffractionParamsPath = paramFilePath
 		prefs.SetString("lastDiffractionParamsPath", paramFilePath)
+		occultationProcessedForCurrentCSV = true
 
 		// Create a fresh output window each time so Fyne centres it on screen.
 		iotaOutputLabel.SetText("Starting IOTAdiffraction...")
