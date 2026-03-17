@@ -31,6 +31,24 @@ import (
 	"gonum.org/v1/plot/vg/vgimg"
 )
 
+// safeShowWindow works around a Fyne/GLFW race condition where closing a
+// secondary window while the mouse cursor is still over it can panic
+// (nil dereference in processMouseMoved → SetInputMode). The intercept
+// hides the window immediately (removing it from GLFW event dispatch),
+// then schedules the actual Close on the next event-loop iteration so
+// that any pending GLFW callbacks for this window have already drained.
+func safeShowWindow(win fyne.Window) {
+	win.SetCloseIntercept(func() {
+		win.Hide()
+		go func() {
+			fyne.Do(func() {
+				win.Close()
+			})
+		}()
+	})
+	win.Show()
+}
+
 // reverseNorm is a plot.Normalizer that maps [min,max] to [1,0] instead of [0,1],
 // producing a reversed (right-to-left) axis when used as plt.X.Scale.
 type reverseNorm struct{}
@@ -268,23 +286,31 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 //	return nccSlidingFit(pc, targetTimes, targetValues)
 //}
 
-// displayFitResult shows the NCC plot, overlay plot, diffraction image, and edge times for a fit result.
-// showDiagnostics gates in the NCC Fit Result window.
-func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64, showDiagnostics bool) error {
+// fitDisplayData holds pre-computed images, messages, and metadata produced by
+// prepareFitDisplay so that the UI-thread work in showFitDisplay is minimal.
+type fitDisplayData struct {
+	nccPlotImg       image.Image // nil when diagnostics are off
+	scaleOverlayImg  image.Image // nil when scale search was skipped
+	scaleWindowTitle string
+	pathImg          image.Image // nil when an observation path could not be drawn
+	pathWindowTitle  string
+	edgeMsg          string // empty when there are no edges
+	showDiagnostics  bool
+}
+
+// prepareFitDisplay does all heavy computation (plot rendering, image loading,
+// file I/O, logging) and returns a fitDisplayData ready for showFitDisplay.
+// Safe to call from any goroutine.
+func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64, showDiagnostics bool) (*fitDisplayData, error) {
+	dd := &fitDisplayData{showDiagnostics: showDiagnostics}
 	displayTitle := normalizeAsteroidTitle(params.Title)
+
 	if showDiagnostics {
 		plotImg, err := createNCCPlotImage(fr.nccCurve, displayTitle, 1000, 500)
 		if err != nil {
-			return fmt.Errorf("failed to create NCC plot: %w", err)
+			return nil, fmt.Errorf("failed to create NCC plot: %w", err)
 		}
-
-		nccWindow := app.NewWindow("NCC Fit Result")
-		plotCanvas := canvas.NewImageFromImage(plotImg)
-		plotCanvas.FillMode = canvas.ImageFillOriginal
-		nccWindow.SetContent(container.NewScroll(plotCanvas))
-		nccWindow.Resize(fyne.NewSize(1050, 550))
-		nccWindow.CenterOnScreen()
-		nccWindow.Show()
+		dd.nccPlotImg = plotImg
 	}
 
 	// --- Scale (drop amplitude) search ---
@@ -313,14 +339,8 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 		}
 		scaleOverlayImg, scaleErr := createOverlayPlotImage(scaledCurve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, scaledSampledVals, overlayTitle, 1200, 500, nil)
 		if scaleErr == nil {
-			scaleWindowTitle := fmt.Sprintf("Scaled Fit Result (percent drop = %.2f) — Theoretical vs Observed", bestScale*100)
-			scaleOverlayWindow := app.NewWindow(scaleWindowTitle)
-			scaleOverlayCanvas := canvas.NewImageFromImage(scaleOverlayImg)
-			scaleOverlayCanvas.FillMode = canvas.ImageFillContain
-			scaleOverlayWindow.SetContent(scaleOverlayCanvas)
-			scaleOverlayWindow.Resize(fyne.NewSize(1250, 550))
-			scaleOverlayWindow.CenterOnScreen()
-			scaleOverlayWindow.Show()
+			dd.scaleOverlayImg = scaleOverlayImg
+			dd.scaleWindowTitle = fmt.Sprintf("Scaled Fit Result (percent drop = %.2f) — Theoretical vs Observed", bestScale*100)
 		}
 	}
 
@@ -350,6 +370,8 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 				if displayTitle != "" {
 					pathTitle = displayTitle + " — " + pathTitle
 				}
+				dd.pathImg = annotatedImg
+				dd.pathWindowTitle = pathTitle
 				// Save the observation path image to the results folder
 				if resultsFolder != "" {
 					var buf bytes.Buffer
@@ -360,18 +382,11 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 						}
 					}
 				}
-				pathWindow := app.NewWindow(pathTitle)
-				pathCanvas := canvas.NewImageFromImage(annotatedImg)
-				pathCanvas.FillMode = canvas.ImageFillContain
-				pathWindow.SetContent(container.NewScroll(pathCanvas))
-				pathWindow.Resize(fyne.NewSize(600, 600))
-				pathWindow.CenterOnScreen()
-				pathWindow.Show()
 			}
 		}
 	}
 
-	// Display edge times in a popup dialog
+	// Build edge times message and log
 	if len(fr.edgeTimes) > 0 {
 		msg := fmt.Sprintf("Best fit: NCC=%.4f, time offset=%.4f sec\n", fr.bestNCC, fr.bestShift)
 		msg += fmt.Sprintf("Path offset=%.3f km\n\n", params.PathPerpendicularOffsetKm)
@@ -425,13 +440,7 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 				"was not enough to match the actual observation. In that case, use the " +
 				"Edit occultation parameters button and increase the size of the asteroid.\n"
 		}
-
-		edgeLabel := widget.NewLabel(msg)
-		edgeLabel.Wrapping = fyne.TextWrapWord
-		spacer := canvas.NewRectangle(color.Transparent)
-		spacer.SetMinSize(fyne.NewSize(750, 0))
-		edgeContainer := container.NewVBox(spacer, edgeLabel)
-		dialog.ShowCustom("Fit Edge Times", "OK", edgeContainer, w)
+		dd.edgeMsg = msg
 	}
 
 	// Write the occultation parameters to the results folder
@@ -454,6 +463,60 @@ func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters
 		}
 	}
 
+	return dd, nil
+}
+
+// showFitDisplay creates and shows the fit result windows from pre-computed data.
+// Must be called on the UI thread (inside fyne.Do or from the main goroutine).
+func showFitDisplay(app fyne.App, w fyne.Window, dd *fitDisplayData) {
+	if dd.showDiagnostics && dd.nccPlotImg != nil {
+		nccWindow := app.NewWindow("NCC Fit Result")
+		plotCanvas := canvas.NewImageFromImage(dd.nccPlotImg)
+		plotCanvas.FillMode = canvas.ImageFillOriginal
+		nccWindow.SetContent(container.NewScroll(plotCanvas))
+		nccWindow.Resize(fyne.NewSize(1050, 550))
+		nccWindow.CenterOnScreen()
+		safeShowWindow(nccWindow)
+	}
+
+	if dd.scaleOverlayImg != nil {
+		scaleOverlayWindow := app.NewWindow(dd.scaleWindowTitle)
+		scaleOverlayCanvas := canvas.NewImageFromImage(dd.scaleOverlayImg)
+		scaleOverlayCanvas.FillMode = canvas.ImageFillContain
+		scaleOverlayWindow.SetContent(scaleOverlayCanvas)
+		scaleOverlayWindow.Resize(fyne.NewSize(1250, 550))
+		scaleOverlayWindow.CenterOnScreen()
+		safeShowWindow(scaleOverlayWindow)
+	}
+
+	if dd.pathImg != nil {
+		pathWindow := app.NewWindow(dd.pathWindowTitle)
+		pathCanvas := canvas.NewImageFromImage(dd.pathImg)
+		pathCanvas.FillMode = canvas.ImageFillContain
+		pathWindow.SetContent(container.NewScroll(pathCanvas))
+		pathWindow.Resize(fyne.NewSize(600, 600))
+		pathWindow.CenterOnScreen()
+		safeShowWindow(pathWindow)
+	}
+
+	if dd.edgeMsg != "" {
+		edgeLabel := widget.NewLabel(dd.edgeMsg)
+		edgeLabel.Wrapping = fyne.TextWrapWord
+		spacer := canvas.NewRectangle(color.Transparent)
+		spacer.SetMinSize(fyne.NewSize(750, 0))
+		edgeContainer := container.NewVBox(spacer, edgeLabel)
+		dialog.ShowCustom("Fit Edge Times", "OK", edgeContainer, w)
+	}
+}
+
+// displayFitResult shows the NCC plot, overlay plot, diffraction image, and edge times for a fit result.
+// showDiagnostics gates the NCC Fit Result window. Safe to call from the UI thread.
+func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64, showDiagnostics bool) error {
+	dd, err := prepareFitDisplay(params, fr, targetTimes, targetValues, showDiagnostics)
+	if err != nil {
+		return err
+	}
+	showFitDisplay(app, w, dd)
 	return nil
 }
 
@@ -951,29 +1014,52 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 	return &fitSearchResult{results: results, bestIdx: bestIdx, bestPathOffset: bestPathOffset}, nil
 }
 
-// displayFitSearchResult shows the path offset plot and the full fit for the best offset.
-// Must be called on the main thread.
-func displayFitSearchResult(app fyne.App, w fyne.Window, params *OccultationParameters, fsr *fitSearchResult, targetTimes, targetValues []float64, showDiagnostics bool) (*fitResult, error) {
+// fitSearchDisplayData holds pre-computed data for showing fit search results.
+type fitSearchDisplayData struct {
+	searchPlotImg   image.Image // nil when diagnostics are off
+	showDiagnostics bool
+	fitDD           *fitDisplayData
+	bestFr          *fitResult
+}
+
+// prepareFitSearchDisplay does all heavy computation for a fit search result.
+// Safe to call from any goroutine.
+func prepareFitSearchDisplay(params *OccultationParameters, fsr *fitSearchResult, targetTimes, targetValues []float64, showDiagnostics bool) (*fitSearchDisplayData, error) {
+	sd := &fitSearchDisplayData{showDiagnostics: showDiagnostics}
 	displayTitle := normalizeAsteroidTitle(params.Title)
+
 	if showDiagnostics {
 		searchPlotImg, err := createPathOffsetPlotImage(fsr.results, displayTitle, 1000, 500)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create path offset plot: %w", err)
 		}
+		sd.searchPlotImg = searchPlotImg
+	}
 
+	params.PathPerpendicularOffsetKm = fsr.bestPathOffset
+	sd.bestFr = fsr.results[fsr.bestIdx].fr
+
+	fitDD, err := prepareFitDisplay(params, sd.bestFr, targetTimes, targetValues, showDiagnostics)
+	if err != nil {
+		return nil, err
+	}
+	sd.fitDD = fitDD
+	return sd, nil
+}
+
+// showFitSearchDisplay creates and shows the fit search result windows.
+// Must be called on the UI thread.
+func showFitSearchDisplay(app fyne.App, w fyne.Window, sd *fitSearchDisplayData) {
+	if sd.showDiagnostics && sd.searchPlotImg != nil {
 		searchWindow := app.NewWindow("Peak NCC vs Path Offset")
-		searchCanvas := canvas.NewImageFromImage(searchPlotImg)
+		searchCanvas := canvas.NewImageFromImage(sd.searchPlotImg)
 		searchCanvas.FillMode = canvas.ImageFillOriginal
 		searchWindow.SetContent(container.NewScroll(searchCanvas))
 		searchWindow.Resize(fyne.NewSize(1050, 550))
 		searchWindow.CenterOnScreen()
-		searchWindow.Show()
+		safeShowWindow(searchWindow)
 	}
-
-	params.PathPerpendicularOffsetKm = fsr.bestPathOffset
-	bestFr := fsr.results[fsr.bestIdx].fr
-	err := displayFitResult(app, w, params, bestFr, targetTimes, targetValues, showDiagnostics)
-	return bestFr, err
+	showFitDisplay(app, w, sd.fitDD)
 }
 
 // searchResult holds results for one path offset in a search.

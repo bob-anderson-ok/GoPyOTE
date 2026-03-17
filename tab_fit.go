@@ -257,7 +257,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					histWindow.SetContent(container.NewScroll(histCanvas))
 					histWindow.Resize(fyne.NewSize(850, 550))
 					histWindow.CenterOnScreen()
-					histWindow.Show()
+					safeShowWindow(histWindow)
 				}
 				logAction(fmt.Sprintf("Fit: Extracted baseline noise: %d points, mean=%.6f, histogram sigma=%.6f", len(noise), noiseMean, sigma))
 			}
@@ -484,7 +484,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				searchPreviewWindow.SetContent(previewCanvas)
 				searchPreviewWindow.Resize(fyne.NewSize(600, 600))
 				searchPreviewWindow.CenterOnScreen()
-				searchPreviewWindow.Show()
+				safeShowWindow(searchPreviewWindow)
 			})
 		}()
 	}
@@ -656,6 +656,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 								fitProgressBar.SetValue(progress)
 							})
 						})
+						// Prepare to display data off the UI thread (image rendering, file I/O).
+						var sd *fitSearchDisplayData
+						if err == nil {
+							sd, err = prepareFitSearchDisplay(params, fsr, targetTimes, targetValues, ac.showDiagnostics)
+						}
 						fyne.Do(func() {
 							fitProgressBar.Hide()
 							fitAbortBtn.Hide()
@@ -663,28 +668,24 @@ func buildFitTab(ac *appContext) *container.TabItem {
 							if err != nil {
 								dialog.ShowError(err, w)
 							} else {
-								fr, err := displayFitSearchResult(a, w, params, fsr, targetTimes, targetValues, ac.showDiagnostics)
-								if err != nil {
-									dialog.ShowError(err, w)
-								} else {
-									lastFitResult = fr
-									paramsCopy := *params
-									lastFitParams = &paramsCopy
-									// Save all precomputed curves from the search for Monte Carlo
-									lastFitCandidates = make([]*precomputedCurve, 0, len(fsr.results))
-									for _, sr := range fsr.results {
-										lastFitCandidates = append(lastFitCandidates, sr.pc)
-									}
-									lastFitBestIdx = fsr.bestIdx
-									logAction(fmt.Sprintf("Fit search: %d of %d path offset steps succeeded, %d candidate curves saved for Monte Carlo", len(fsr.results), stepsVal, len(lastFitCandidates)))
-									lastFitTargetTimes = targetTimes
-									fitBtn.Importance = widget.WarningImportance
-									fitBtn.Refresh()
-									if ac.enablePostFitButtons != nil {
-										ac.enablePostFitButtons()
-									}
-									ac.overlayTheoryCurve(fr, nil)
+								showFitSearchDisplay(a, w, sd)
+								lastFitResult = sd.bestFr
+								paramsCopy := *params
+								lastFitParams = &paramsCopy
+								// Save all precomputed curves from the search for Monte Carlo
+								lastFitCandidates = make([]*precomputedCurve, 0, len(fsr.results))
+								for _, sr := range fsr.results {
+									lastFitCandidates = append(lastFitCandidates, sr.pc)
 								}
+								lastFitBestIdx = fsr.bestIdx
+								logAction(fmt.Sprintf("Fit search: %d of %d path offset steps succeeded, %d candidate curves saved for Monte Carlo", len(fsr.results), stepsVal, len(lastFitCandidates)))
+								lastFitTargetTimes = targetTimes
+								fitBtn.Importance = widget.WarningImportance
+								fitBtn.Refresh()
+								if ac.enablePostFitButtons != nil {
+									ac.enablePostFitButtons()
+								}
+								ac.overlayTheoryCurve(sd.bestFr, nil)
 							}
 						})
 					}()
@@ -977,7 +978,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 						histWin.SetContent(histCanvas)
 						histWin.Resize(fyne.NewSize(950, 550))
 						histWin.CenterOnScreen()
-						histWin.Show()
+						safeShowWindow(histWin)
 					}
 
 					// Show duration histogram if 2 edges
@@ -1003,7 +1004,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 							histWin.SetContent(histCanvas)
 							histWin.Resize(fyne.NewSize(950, 550))
 							histWin.CenterOnScreen()
-							histWin.Show()
+							safeShowWindow(histWin)
 						}
 					}
 				} else {
@@ -1061,7 +1062,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 						mcOverlayWin.SetContent(mcOverlayCanvas)
 						mcOverlayWin.Resize(fyne.NewSize(1250, 550))
 						mcOverlayWin.CenterOnScreen()
-						mcOverlayWin.Show()
+						safeShowWindow(mcOverlayWin)
 					}
 
 					// Update main plot: overlay theoretical curve, edge lines, and ±3σ lines
@@ -1089,7 +1090,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		manualWithPoints := nieSinglePointCheck.Checked &&
 			(ac.lightCurvePlot.SelectedPoint1Valid || ac.lightCurvePlot.SelectedPoint2Valid)
 		if lastFitResult == nil && !manualWithPoints {
-			dialog.ShowError(fmt.Errorf(`No fit result available. Either run a 'fit' first, or select one or a range of points to be included in the NIE analysis.`), w)
+			dialog.ShowError(fmt.Errorf(`no fit result available. Either run a 'fit' first, or select one or a range of points to be included in the NIE analysis`), w)
 			return
 		}
 		if noiseSigma == 0 {
@@ -1184,7 +1185,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					histWindow.SetContent(container.NewScroll(histCanvas))
 					histWindow.Resize(fyne.NewSize(850, 550))
 					histWindow.CenterOnScreen()
-					histWindow.Show()
+					safeShowWindow(histWindow)
 					runNieBtn.Importance = widget.WarningImportance
 					runNieBtn.Refresh()
 				})

@@ -68,7 +68,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.29"
+const Version = "1.2.30"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2062,7 +2062,7 @@ func main() {
 		previewWin.SetContent(container.NewScroll(plotCanvas))
 		previewWin.Resize(fyne.NewSize(1150, 550))
 		previewWin.CenterOnScreen()
-		previewWin.Show()
+		safeShowWindow(previewWin)
 
 		// Enable the Generate button now that the user has previewed the submission.
 		vizierTab.GenerateBtn.Enable()
@@ -2334,7 +2334,7 @@ func main() {
 		iotaOutputWindow = a.NewWindow("IOTAdiffraction Output")
 		iotaOutputWindow.SetContent(iotaScrollContainer)
 		iotaOutputWindow.Resize(fyne.NewSize(520, 350))
-		iotaOutputWindow.Show()
+		safeShowWindow(iotaOutputWindow)
 
 		// Move ALL remaining work (param parsing, VizieR fills, process
 		// launch) into a goroutine so the dialog can render immediately.
@@ -2638,7 +2638,7 @@ func main() {
 		plotsWin.SetContent(container.NewScroll(grid))
 		plotsWin.Resize(fyne.NewSize(1600, 500))
 		plotsWin.CenterOnScreen()
-		plotsWin.Show()
+		safeShowWindow(plotsWin)
 	})
 
 	btnShowIOTAPlots.Disable()
