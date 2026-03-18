@@ -1392,6 +1392,85 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		fillSodisBtn.Disable()
 	}
 
+	// resetFitTab clears all Fit tab state so analysis starts fresh when the
+	// displayed light curve changes.
+	ac.resetFitTab = func() {
+		// Clear local analysis results
+		noiseSigma = 0
+		baselineValues = nil
+		baselineIndices = nil
+		rho = nil
+		lastFitResult = nil
+		lastFitParams = nil
+		lastFitCandidates = nil
+		lastFitBestIdx = 0
+		lastFitTargetTimes = nil
+		lastMCResult = nil
+
+		// Clear AR model state on appContext
+		ac.arPhi = nil
+		ac.arSigma2 = 0
+
+		// Reset baseline scaling flag
+		baselineScaledToUnity = false
+
+		// Reset button states
+		ac.resetFitButtons()
+		calcBaselineMeanBtn.Importance = widget.HighImportance
+		calcBaselineMeanBtn.Refresh()
+		fillSodisNegBtn.Importance = widget.HighImportance
+		fillSodisNegBtn.Refresh()
+
+		// Reset checkboxes to defaults
+		mcNarrowSearchCheck.Checked = true
+		mcNarrowSearchCheck.Refresh()
+		nieSinglePointCheck.Checked = false
+		nieSinglePointCheck.Refresh()
+		ac.nieManualSelectMode = false
+
+		// Reset Monte Carlo trial count
+		mcNumTrialsEntry.SetText("1000")
+
+		// Clear search range entries
+		suppressSearchRangeEnable = true
+		searchInitialOffsetEntry.SetText("")
+		searchFinalOffsetEntry.SetText("")
+		searchNumStepsEntry.SetText("")
+		suppressSearchRangeEnable = false
+
+		// Reset status and progress
+		fitStatusLabel.SetText("Select pairs of points to define baseline regions")
+		fitProgressBar.SetValue(0)
+		fitProgressBar.Hide()
+		mcProgressBar.SetValue(0)
+		mcProgressBar.Hide()
+
+		// Clear plot overlays (theory curve, edge lines, sigma lines, baseline line)
+		ac.theorySeries = nil
+		ac.trendSeries = nil
+		ac.lightCurvePlot.SetVerticalLines(nil, false)
+		ac.lightCurvePlot.SetSigmaLines(nil, false)
+		ac.lightCurvePlot.ShowBaselineLine = false
+
+		// Clear selected point pairs and point selections on the plot
+		ac.lightCurvePlot.SelectedPairs = nil
+		ac.lightCurvePlot.selectedSeries = -1
+		ac.lightCurvePlot.selectedIndex = -1
+		ac.lightCurvePlot.selectedPointDataIndex = -1
+		ac.lightCurvePlot.selectedSeriesName = ""
+		ac.lightCurvePlot.SelectedPoint1Valid = false
+		ac.lightCurvePlot.SelectedPoint1Frame = 0
+		ac.lightCurvePlot.SelectedPoint1Value = 0
+		ac.lightCurvePlot.selectedSeries2 = -1
+		ac.lightCurvePlot.selectedIndex2 = -1
+		ac.lightCurvePlot.selectedPointDataIndex2 = -1
+		ac.lightCurvePlot.selectedSeriesName2 = ""
+		ac.lightCurvePlot.SelectedPoint2Valid = false
+		ac.lightCurvePlot.SelectedPoint2Frame = 0
+		ac.lightCurvePlot.SelectedPoint2Value = 0
+		ac.lightCurvePlot.MultiPairSelectMode = true
+	}
+
 	tab10Content := container.NewStack(tab10Bg, container.NewPadded(container.NewVBox(
 		widget.NewLabel("Fit"),
 		widget.NewSeparator(),

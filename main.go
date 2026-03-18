@@ -68,7 +68,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.31"
+const Version = "1.2.32"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1023,6 +1023,11 @@ func main() {
 		} else {
 			ac.displayedCurves[columnIndex] = true
 			logAction(fmt.Sprintf("Displayed light curve: %s", curveName))
+		}
+
+		// Reset the Fit tab so analysis starts fresh for the new selection.
+		if ac.resetFitTab != nil {
+			ac.resetFitTab()
 		}
 
 		// Update list bold/non-bold indicators before the heavy plot rebuild.

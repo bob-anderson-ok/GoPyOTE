@@ -48,6 +48,7 @@ type appContext struct {
 	toggleLightCurve func(columnIndex int)
 
 	// Callbacks set during tab construction
+	resetFitTab              func() // full reset of Fit tab state when light curve changes
 	resetFitButtons          func()
 	resetNormalizeBtn        func()
 	enablePostFitButtons     func()
