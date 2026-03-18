@@ -68,7 +68,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.32"
+const Version = "1.2.33"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -1057,11 +1057,16 @@ func main() {
 	lightCurveList = widget.NewList(
 		func() int { return len(lightCurveListData) },
 		func() fyne.CanvasObject {
+			swatch := canvas.NewRectangle(color.Transparent)
+			swatch.SetMinSize(fyne.NewSize(14, 14))
+			swatch.CornerRadius = 3
 			label := widget.NewLabel("Light Curve Name")
-			return label
+			return container.NewHBox(swatch, label)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			label := obj.(*widget.Label)
+			box := obj.(*fyne.Container)
+			swatch := box.Objects[0].(*canvas.Rectangle)
+			label := box.Objects[1].(*widget.Label)
 
 			name := lightCurveListData[id]
 			label.SetText(name)
@@ -1072,10 +1077,21 @@ func main() {
 				colIdx = listIndexToColumnIndex[id]
 			}
 			if ac.displayedCurves[colIdx] {
+				// Compute color index matching rebuildPlot order:
+				// count displayed curves with column index < colIdx
+				ci := 0
+				for c := 0; c < colIdx; c++ {
+					if ac.displayedCurves[c] {
+						ci++
+					}
+				}
+				swatch.FillColor = ac.curveColors[ci%len(ac.curveColors)]
 				label.TextStyle.Bold = true
 			} else {
+				swatch.FillColor = color.Transparent
 				label.TextStyle.Bold = false
 			}
+			swatch.Refresh()
 			label.Refresh()
 		},
 	)
