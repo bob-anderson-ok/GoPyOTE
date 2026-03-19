@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -68,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.33"
+const Version = "1.2.34"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -126,6 +127,10 @@ var occultationProcessedForCurrentCSV bool
 // showOccultationParametersDialog successfully writes a new .occparams file.
 // Assigned in main() once all UI elements needed by IOTAdiffraction are initialized.
 var afterOccParamsSaved func(string)
+
+// iotaDiffractionRunning is true while IOTAdiffraction.exe is executing.
+// Used to prevent fit searches from running against stale diffraction images.
+var iotaDiffractionRunning atomic.Bool
 
 // appDir is the directory containing the executable. Used to resolve relative file paths
 // (diffraction images, IOTAdiffraction.exe, etc.) regardless of the OS working directory.
@@ -199,6 +204,9 @@ func main() {
 		lastObserverAltMeters = prefs.FloatWithFallback("lastObserverAltMeters", 0.0)
 	}
 	lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
+	if lastDiffractionParamsPath != "" {
+		logOccparamsRead("startup restore", lastDiffractionParamsPath)
+	}
 	lastDiffractionTitle = normalizeAsteroidTitle(prefs.StringWithFallback("lastDiffractionTitle", ""))
 	// Backfill the title from the parameters file if a path exists but title was never saved
 	if lastDiffractionParamsPath != "" && lastDiffractionTitle == "" {
@@ -1614,6 +1622,7 @@ func main() {
 					}
 
 					// Set up the parameters path and title so the Fit tab recognizes a diffraction run
+					logOccparamsRead("prior results restore", foundOccparams)
 					lastDiffractionParamsPath = foundOccparams
 					prefs.SetString("lastDiffractionParamsPath", foundOccparams)
 					if f, err := os.Open(foundOccparams); err == nil {
@@ -2235,15 +2244,21 @@ func main() {
 							fmt.Printf("Warning: failed to close temp params file: %v\n", cerr)
 						}
 					}
+					if tempParamFile != "" {
+						logOccparamsWrite("IOTAdiffraction temp file", tempParamFile)
+					}
 				}
 			}
 		}
+
+		logOccparamsRead("IOTAdiffraction input", actualParamFile)
 
 		// Build the path to IOTAdiffraction.exe using the app directory
 		exePath := filepath.Join(appDir, "IOTAdiffraction.exe")
 
 		// Check if the file exists
 		if _, err := os.Stat(exePath); os.IsNotExist(err) {
+			iotaDiffractionRunning.Store(false)
 			fyne.Do(func() {
 				iotaOutputWindow.Hide()
 				dialog.ShowInformation("File Not Found",
@@ -2261,6 +2276,7 @@ func main() {
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
+			iotaDiffractionRunning.Store(false)
 			fyne.Do(func() {
 				iotaOutputWindow.Hide()
 				dialog.ShowError(fmt.Errorf("error creating stdout pipe: %v", err), w)
@@ -2270,6 +2286,7 @@ func main() {
 
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
+			iotaDiffractionRunning.Store(false)
 			fyne.Do(func() {
 				iotaOutputWindow.Hide()
 				dialog.ShowError(fmt.Errorf("error creating stderr pipe: %v", err), w)
@@ -2279,6 +2296,7 @@ func main() {
 
 		// Start the command
 		if err := cmd.Start(); err != nil {
+			iotaDiffractionRunning.Store(false)
 			fyne.Do(func() {
 				iotaOutputWindow.Hide()
 				dialog.ShowError(fmt.Errorf("error starting IOTAdiffraction: %v", err), w)
@@ -2322,6 +2340,8 @@ func main() {
 		// Wait for completion in a goroutine
 		go func() {
 			err := cmd.Wait()
+			iotaDiffractionRunning.Store(false)
+			logAction("IOTAdiffraction process exited")
 			// Clean up the temporary parameter file if one was created
 			if tempParamFile != "" {
 				if rerr := os.Remove(tempParamFile); rerr != nil {
@@ -2329,8 +2349,20 @@ func main() {
 				}
 			}
 			if err != nil {
+				logAction(fmt.Sprintf("IOTAdiffraction failed: %v", err))
 				appendOutput(fmt.Sprintf("\n[Error: %v]", err))
 			} else {
+				logAction("IOTAdiffraction completed successfully")
+				// Log image file timestamps immediately after completion
+				for _, imgName := range []string{"targetImage16bit.png", "geometricShadow.png"} {
+					imgPath := filepath.Join(appDir, imgName)
+					if info, serr := os.Stat(imgPath); serr == nil {
+						logAction(fmt.Sprintf("  %s: modified %s, %d bytes",
+							imgName, info.ModTime().Format("2006-01-02 15:04:05"), info.Size()))
+					} else {
+						logAction(fmt.Sprintf("  %s: NOT FOUND in %s", imgName, appDir))
+					}
+				}
 				appendOutput("\n[Process completed successfully]")
 				if ac.enableShowIOTAPlots != nil {
 					fyne.Do(func() { ac.enableShowIOTAPlots() })
@@ -2357,7 +2389,8 @@ func main() {
 	// Extracted here (rather than inside btnIOTA) so it can also be triggered automatically
 	// when the parameters dialog saves a new file.
 	useParamFile := func(paramFilePath string) {
-		logAction(fmt.Sprintf("Running IOTAdiffraction with parameters file: %s", paramFilePath))
+		logOccparamsRead("useParamFile", paramFilePath)
+		iotaDiffractionRunning.Store(true)
 		lastDiffractionParamsPath = paramFilePath
 		prefs.SetString("lastDiffractionParamsPath", paramFilePath)
 		occultationProcessedForCurrentCSV = true
@@ -2523,7 +2556,13 @@ func main() {
 		}
 		btnProcessOccelemnt.Importance = widget.WarningImportance
 		btnProcessOccelemnt.Refresh()
+		if ac.resetFitTab != nil {
+			ac.resetFitTab()
+		}
 		tabs.Select(tab10)
+		if ac.autoFillSearchRange != nil {
+			ac.autoFillSearchRange()
+		}
 	}
 
 	btnShowDetails := widget.NewButton("Show details file", func() {

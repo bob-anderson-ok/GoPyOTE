@@ -346,6 +346,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			return
 		}
 		go func() {
+			logOccparamsRead("autoFillSearchRange", lastDiffractionParamsPath)
 			file, err := os.Open(lastDiffractionParamsPath)
 			if err != nil {
 				return
@@ -544,6 +545,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			issues = append(issues, "No diffraction image available (targetImage16bit.png not found)")
 		}
 
+		// Check 5: IOTAdiffraction not currently running
+		if iotaDiffractionRunning.Load() {
+			issues = append(issues, "IOTAdiffraction is still running — please wait for it to finish")
+		}
+
 		if len(issues) > 0 {
 			msg := "Cannot perform fit. The following conditions are not met:\n\n"
 			for i, issue := range issues {
@@ -563,6 +569,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				ac.lightCurvePlot.SetSigmaLines(nil, false)
 
 				// Load parameters from the file used to generate the diffraction image
+				logOccparamsRead("fit search", lastDiffractionParamsPath)
 				file, err := os.Open(lastDiffractionParamsPath)
 				if err != nil {
 					dialog.ShowError(fmt.Errorf("could not open parameters file: %v", err), w)

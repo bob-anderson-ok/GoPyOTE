@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/KevinWang15/go-json5"
 )
@@ -20,4 +21,50 @@ func parseOccultationParameters(reader io.Reader) (*OccultationParameters, error
 	}
 
 	return &params, nil
+}
+
+// logOccparamsRead logs an .occparams file read with key parameter values.
+func logOccparamsRead(context, path string) {
+	info, serr := os.Stat(path)
+	if serr != nil {
+		logAction(fmt.Sprintf("OCCPARAMS READ [%s]: %s — FILE NOT FOUND", context, path))
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		logAction(fmt.Sprintf("OCCPARAMS READ [%s]: %s — OPEN FAILED: %v", context, path, err))
+		return
+	}
+	p, perr := parseOccultationParameters(f)
+	_ = f.Close()
+	if perr != nil {
+		logAction(fmt.Sprintf("OCCPARAMS READ [%s]: %s — PARSE FAILED: %v", context, path, perr))
+		return
+	}
+	logAction(fmt.Sprintf("OCCPARAMS READ [%s]: %s (modified %s, %d bytes) major=%.3f minor=%.3f",
+		context, path, info.ModTime().Format("15:04:05"), info.Size(),
+		p.MainBody.MajorAxisKm, p.MainBody.MinorAxisKm))
+}
+
+// logOccparamsWrite logs an .occparams file with key parameter values.
+func logOccparamsWrite(context, path string) {
+	info, serr := os.Stat(path)
+	if serr != nil {
+		logAction(fmt.Sprintf("OCCPARAMS WRITE [%s]: %s — STAT FAILED: %v", context, path, serr))
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		logAction(fmt.Sprintf("OCCPARAMS WRITE [%s]: %s — OPEN FAILED: %v", context, path, err))
+		return
+	}
+	p, perr := parseOccultationParameters(f)
+	_ = f.Close()
+	if perr != nil {
+		logAction(fmt.Sprintf("OCCPARAMS WRITE [%s]: %s — PARSE FAILED: %v", context, path, perr))
+		return
+	}
+	logAction(fmt.Sprintf("OCCPARAMS WRITE [%s]: %s (modified %s, %d bytes) major=%.3f minor=%.3f",
+		context, path, info.ModTime().Format("15:04:05"), info.Size(),
+		p.MainBody.MajorAxisKm, p.MainBody.MinorAxisKm))
 }

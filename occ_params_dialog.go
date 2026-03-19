@@ -433,7 +433,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 					return
 				}
 
-				logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
+				logOccparamsWrite("dialog save", savePath)
 
 				// Track the saved path so CSV-read autofill and future Browse defaults use it
 				lastLoadedParamsPath = savePath
@@ -551,7 +551,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 					return
 				}
 
-				logAction(fmt.Sprintf("Saved parameters file: %s", savePath))
+				logOccparamsWrite("dialog save", savePath)
 
 				// Track the saved path so CSV-read autofill and future Browse defaults use it
 				lastLoadedParamsPath = savePath
