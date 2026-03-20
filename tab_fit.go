@@ -884,6 +884,12 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					fitDuration := math.Abs(mcFitResult.edgeTimes[1] - mcFitResult.edgeTimes[0])
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
 					msg += fmt.Sprintf("\n  Duration: %.4f +/- %.4f sec (3 sigma)\n", fitDuration, 3*durationStd)
+					shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
+					if shadowSpeed > 0 {
+						chordKm := fitDuration * shadowSpeed
+						chordStdKm := 3 * durationStd * shadowSpeed
+						msg += fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]\n", chordKm, chordStdKm, shadowSpeed)
+					}
 				}
 				fmt.Print(msg)
 
@@ -896,13 +902,23 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					durationMean := math.Abs(result.edgeMeans[1] - result.edgeMeans[0])
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
 					logAction(fmt.Sprintf("  Duration: mean=%.4f sec, 3 sigma=%.4f sec", durationMean, 3*durationStd))
+					shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
+					if shadowSpeed > 0 {
+						chordKm := durationMean * shadowSpeed
+						chordStdKm := 3 * durationStd * shadowSpeed
+						logAction(fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]", chordKm, chordStdKm, shadowSpeed))
+					}
 				}
 
 				// Final report: fit edge times (as timestamps) with MC uncertainty
 				logAction("--- Final Report ---")
 				logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", mcFitResult.bestNCC, mcFitParams.PathPerpendicularOffsetKm))
 				if mcFitResult.bestScale > 0 {
-					logAction(fmt.Sprintf("  Percent drop: %.2f%%", mcFitResult.bestScale*100.0))
+					effectiveDrop := mcFitResult.bestScale * 100.0
+					if mcFitParams.PercentMagDrop > 0 {
+						effectiveDrop = effectiveDrop * float64(mcFitParams.PercentMagDrop) / 100
+					}
+					logAction(fmt.Sprintf("  Percent drop: %.2f%%", effectiveDrop))
 				}
 				if lastCsvExposureSecs > 0 {
 					logAction(fmt.Sprintf("  Camera exposure time: %.6f seconds", lastCsvExposureSecs))
@@ -922,6 +938,12 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					fitDuration := math.Abs((mcFitResult.edgeTimes[1] + mcFitResult.bestShift) - (mcFitResult.edgeTimes[0] + mcFitResult.bestShift))
 					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
 					logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec (3 sigma)", fitDuration, 3*durationStd))
+					shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
+					if shadowSpeed > 0 {
+						chordKm := fitDuration * shadowSpeed
+						chordStdKm := 3 * durationStd * shadowSpeed
+						logAction(fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]", chordKm, chordStdKm, shadowSpeed))
+					}
 				}
 				logAction("--- End Report ---")
 
@@ -1149,6 +1171,38 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			logAction("NIE: using correlated AR noise")
 		}
 
+		// Read "Magn Drop (mag)" from the details file if present.
+		var detailsMagDrop float64
+		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
+			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
+			if dirEntries, derr := os.ReadDir(obsDir); derr == nil {
+				for _, entry := range dirEntries {
+					if !entry.IsDir() && strings.Contains(strings.ToLower(entry.Name()), "detail") {
+						if fileData, rerr := os.ReadFile(filepath.Join(obsDir, entry.Name())); rerr == nil {
+							fileData = bytes.ReplaceAll(fileData, []byte("\r\n"), []byte("\n"))
+							fileData = bytes.ReplaceAll(fileData, []byte("\r"), []byte("\n"))
+							reader := csv.NewReader(bytes.NewReader(fileData))
+							reader.FieldsPerRecord = -1
+							reader.TrimLeadingSpace = true
+							for {
+								record, rerr2 := reader.Read()
+								if rerr2 != nil {
+									break
+								}
+								if len(record) >= 2 && strings.TrimSpace(record[0]) == "Magn Drop (mag)" && strings.TrimSpace(record[1]) != "" {
+									if v, perr := strconv.ParseFloat(strings.TrimSpace(record[1]), 64); perr == nil {
+										detailsMagDrop = v
+									}
+									break
+								}
+							}
+						}
+						break
+					}
+				}
+			}
+		}
+
 		// launchNIE starts the goroutine given a known windowWidth, eventDrop, and selection source.
 		launchNIE := func(windowWidth int, eventDrop float64, manualSelection bool) {
 			logAction(fmt.Sprintf("NIE: starting %d trials, nPoints=%d, windowWidth=%d, noiseSigma=%.6f", numTrials, nPoints, windowWidth, noiseSigma))
@@ -1176,7 +1230,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					if len(nieArPhi) > 0 {
 						nieNoiseLabel = "correlated noise"
 					}
-					histImg, nieMean, nieSigma, err := createNIEHistogramImage(minMeans, windowWidth, eventDrop, lastDiffractionTitle, nieNoiseLabel, 800, 500)
+					niePercentDrop := (1.0 - eventDrop) * 100
+					if lastFitParams != nil && lastFitParams.PercentMagDrop > 0 {
+						niePercentDrop = niePercentDrop * float64(lastFitParams.PercentMagDrop) / 100
+					}
+					histImg, nieMean, nieSigma, err := createNIEHistogramImage(minMeans, windowWidth, eventDrop, niePercentDrop, detailsMagDrop, lastDiffractionTitle, nieNoiseLabel, 800, 500)
 					if err != nil {
 						dialog.ShowError(fmt.Errorf("failed to create NIE histogram: %v", err), w)
 						return
