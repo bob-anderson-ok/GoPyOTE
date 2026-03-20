@@ -366,6 +366,16 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 
 		logAction(fmt.Sprintf("Scale search: best scale=%.4f, percent drop=%.2f, MSE=%.6f", bestScale, bestScale*100, scaleMSE))
 
+		// If the occparams file specifies a non-zero percent_mag_drop, adjust the
+		// reported percent drop: effectiveDrop = calculatedDrop * PercentMagDrop / 100
+		calculatedDrop := bestScale * 100
+		effectiveDrop := calculatedDrop
+		logAction(fmt.Sprintf("PercentMagDrop from occparams: %d", params.PercentMagDrop))
+		if params.PercentMagDrop > 0 {
+			effectiveDrop = calculatedDrop * float64(params.PercentMagDrop) / 100
+			logAction(fmt.Sprintf("Adjusted percent drop: %.2f (calculatedDrop %.2f × PercentMagDrop %d / 100)", effectiveDrop, calculatedDrop, params.PercentMagDrop))
+		}
+
 		// Show scaled overlay plot; nil edgeStds saves it as fitPlot.png
 		overlayTitle := displayTitle
 		if overlayTitle != "" {
@@ -374,7 +384,7 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 		scaleOverlayImg, scaleErr := createOverlayPlotImage(scaledCurve, fr.bestShift, fr.edgeTimes, targetTimes, targetValues, fr.sampledTimes, scaledSampledVals, overlayTitle, 1200, 500, nil)
 		if scaleErr == nil {
 			dd.scaleOverlayImg = scaleOverlayImg
-			dd.scaleWindowTitle = fmt.Sprintf("Scaled Fit Result (percent drop = %.2f) — Theoretical vs Observed", bestScale*100)
+			dd.scaleWindowTitle = fmt.Sprintf("Scaled Fit Result (percent drop = %.2f) — Theoretical vs Observed", effectiveDrop)
 		}
 	}
 
@@ -832,7 +842,9 @@ func runNIETrials(numTrials, nPoints, windowWidth int, noiseSigma float64, arPhi
 
 // createNIEHistogramImage renders a histogram of NIE minimum window means with a
 // Gaussian fit overlay and a blue vertical line at eventDrop. Returns the image, mean, and sigma.
-func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop float64, occultationTitle string, noiseLabel string, plotWidth, plotHeight int) (image.Image, float64, float64, error) {
+// magDrop is the predicted magnitude drop from details.csv; when > 0, a vertical line is drawn
+// at the corresponding percent-drop position.
+func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop float64, adjustedPercentDrop float64, magDrop float64, occultationTitle string, noiseLabel string, plotWidth, plotHeight int) (image.Image, float64, float64, error) {
 	n := float64(len(minMeans))
 	var sum float64
 	for _, v := range minMeans {
@@ -923,15 +935,16 @@ func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop floa
 		plt.Legend.Add("Baseline", baseLine)
 	}
 
-	// Blue vertical line at the event drop (square wave approximation) — half the Gaussian peak height
-	vLinePts := plotter.XYs{{X: eventDrop, Y: 0}, {X: eventDrop, Y: halfPeak}}
+	// Blue vertical line at the adjusted event drop position — half the Gaussian peak height
+	adjustedEventDrop := 1.0 - adjustedPercentDrop/100
+	vLinePts := plotter.XYs{{X: adjustedEventDrop, Y: 0}, {X: adjustedEventDrop, Y: halfPeak}}
 	vLine, err2 := plotter.NewLine(vLinePts)
 	if err2 == nil {
 		vLine.Color = color.RGBA{R: 0, G: 0, B: 220, A: 255}
 		vLine.Width = vg.Points(2)
 		vLine.Dashes = []vg.Length{vg.Points(6), vg.Points(3)}
 		plt.Add(vLine)
-		plt.Legend.Add(fmt.Sprintf("Percent drop %.1f", (1.0-eventDrop)*100), vLine)
+		plt.Legend.Add(fmt.Sprintf("Percent drop %.1f", adjustedPercentDrop), vLine)
 	}
 
 	// Gray vertical line at x=0.0 (zero level) — half the height of the event line
@@ -943,6 +956,20 @@ func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop floa
 		zeroLine.Dashes = []vg.Length{vg.Points(6), vg.Points(3)}
 		plt.Add(zeroLine)
 		plt.Legend.Add("zero level", zeroLine)
+	}
+
+	// Red vertical line at the predicted magnitude drop position (if available)
+	if magDrop > 0 {
+		predictedDrop := math.Pow(10, -magDrop/2.5) // flux ratio at event
+		magLinePts := plotter.XYs{{X: predictedDrop, Y: 0}, {X: predictedDrop, Y: halfPeak}}
+		magLine, merr := plotter.NewLine(magLinePts)
+		if merr == nil {
+			magLine.Color = color.RGBA{R: 220, G: 0, B: 0, A: 255}
+			magLine.Width = vg.Points(2)
+			magLine.Dashes = []vg.Length{vg.Points(6), vg.Points(3)}
+			plt.Add(magLine)
+			plt.Legend.Add(fmt.Sprintf("Predicted drop %.1f%% (%.2f mag)", (1.0-predictedDrop)*100, magDrop), magLine)
+		}
 	}
 
 	// Reversed x-axis: 1.2 on the left, -0.2 (or eventDrop with margin) on the right
@@ -1047,10 +1074,10 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 		return nil, fmt.Errorf("all path offset fits failed")
 	}
 
-	// Find the best path offset by the minimum squared error
+	// Find the best path offset by peak NCC
 	bestIdx := 0
 	for i, r := range results {
-		if r.mse < results[bestIdx].mse {
+		if r.peakNCC > results[bestIdx].peakNCC {
 			bestIdx = i
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -13,12 +14,16 @@ import (
 var (
 	actionLogFile   *os.File
 	actionLogWriter *bufio.Writer
+	actionLogMu     sync.Mutex
 )
 
 // createActionLog creates a new log file based on the CSV file path
 func createActionLog(csvFilePath string) error {
+	actionLogMu.Lock()
+	defer actionLogMu.Unlock()
+
 	// Close any existing log file
-	closeActionLog()
+	closeActionLogLocked()
 
 	// Build log file path: same name as CSV but with .log extension, in the results folder
 	base := filepath.Base(csvFilePath)
@@ -39,15 +44,23 @@ func createActionLog(csvFilePath string) error {
 	actionLogFile = file
 	actionLogWriter = bufio.NewWriter(file)
 
-	// Write session start marker
-	logAction("=== New Session Started ===")
-	logAction("CSV file: " + csvFilePath)
+	// Write session start marker (call an unlocked version since we hold the lock)
+	logActionLocked("=== New Session Started ===")
+	logActionLocked("CSV file: " + csvFilePath)
 
 	return nil
 }
 
 // logAction writes a timestamped action to the log file
 func logAction(action string) {
+	actionLogMu.Lock()
+	defer actionLogMu.Unlock()
+	logActionLocked(action)
+}
+
+// logActionLocked writes a timestamped action to the log file.
+// Caller must hold actionLogMu.
+func logActionLocked(action string) {
 	if actionLogWriter == nil {
 		return
 	}
@@ -66,8 +79,16 @@ func logAction(action string) {
 
 // closeActionLog closes the current log file
 func closeActionLog() {
+	actionLogMu.Lock()
+	defer actionLogMu.Unlock()
+	closeActionLogLocked()
+}
+
+// closeActionLogLocked closes the current log file.
+// Caller must hold actionLogMu.
+func closeActionLogLocked() {
 	if actionLogWriter != nil {
-		logAction("=== Session Ended ===")
+		logActionLocked("=== Session Ended ===")
 		if err := actionLogWriter.Flush(); err != nil {
 			fmt.Printf("Warning: failed to flush log on close: %v\n", err)
 		}
