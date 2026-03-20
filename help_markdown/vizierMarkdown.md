@@ -66,7 +66,7 @@ Your name as it should appear in the database.
 
 ### Asteroid
 
-- **Number**: The asteroid's catalog number (max 6 digits). **Note: if the asteroid number is given as 0, a dash is substitued**
+- **Number**: The asteroid's catalog number (max 6 digits). **Note: if the asteroid number is given as 0, a dash is substituted**
 - **Name**: The asteroid's name (if available)
 
 ## 

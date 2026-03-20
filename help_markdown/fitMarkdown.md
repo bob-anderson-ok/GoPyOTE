@@ -64,7 +64,7 @@ After this step, the status bar shows the baseline mean, number of points used, 
 
 ## 
 
-**Intial offset** and **Final offset** are prefilled and set the observation path offset search to the maximum possible need to move the observation pathfrom the asteroid center to the edge of the asteroid.
+**Intial offset** and **Final offset** are prefilled and set the observation path offset search to the maximum possible need to move the observation path from the asteroid center to the edge of the asteroid.
 
 ## 
 
@@ -206,5 +206,3 @@ Click **Run Monte Carlo** to start. An **Abort** button appears to the right of 
 ## 
 
 ## 
-
- 

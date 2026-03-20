@@ -63,6 +63,7 @@ type nccResult struct {
 	ncc          float64
 	weightedNCC  float64
 	overlapCount int
+	mse          float64
 }
 
 // computeNCC computes the normalized cross-correlation between two equal-length slices.
@@ -108,6 +109,8 @@ type fitResult struct {
 	bestShift    float64
 	sampledTimes []float64
 	sampledVals  []float64
+	// minSE is the minimum mean squared error found across all time shifts.
+	minSE float64
 	// The bestScale is the amplitude scale factor (0–1) found by the post-fit drop search.
 	// scaledTLC = bestTLC * bestScale + (1 - bestScale).
 	// The NIE event drop is (1 - bestScale): how far the scaled curve falls from baseline.
@@ -123,6 +126,18 @@ type precomputedCurve struct {
 	curveTimes []float64
 	edgeTimes  []float64
 	duration   float64
+}
+
+// logDiffractionImageInfo logs modification times and sizes of the diffraction images
+// so the user can verify that fresh images from the latest IOTAdiffraction run are used.
+func logDiffractionImageInfo() {
+	for _, name := range []string{"targetImage16bit.png", "geometricShadow.png"} {
+		imgPath := filepath.Join(appDir, name)
+		if info, err := os.Stat(imgPath); err == nil {
+			logAction(fmt.Sprintf("Fit using %s (modified %s, %d bytes)",
+				name, info.ModTime().Format("2006-01-02 15:04:05"), info.Size()))
+		}
+	}
 }
 
 // buildPrecomputedCurve generates the theoretical light curve for the given params.
@@ -221,7 +236,16 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 		}
 
 		ncc := computeNCC(targetValues, sampled)
-		results = append(results, nccResult{offset: shift, ncc: ncc, overlapCount: overlapCount})
+
+		// Compute mean squared error at this shift
+		se := 0.0
+		for i := range targetValues {
+			diff := sampled[i] - targetValues[i]
+			se += diff * diff
+		}
+		se /= float64(len(targetValues))
+
+		results = append(results, nccResult{offset: shift, ncc: ncc, overlapCount: overlapCount, mse: se})
 	}
 
 	if len(results) == 0 {
@@ -252,6 +276,14 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 		}
 	}
 
+	// Find the minimum MSE across all shifts
+	minSEIdx := 0
+	for i, r := range results {
+		if r.mse < results[minSEIdx].mse {
+			minSEIdx = i
+		}
+	}
+
 	// Recompute the sampled theoretical values at the best shift
 	bestShift := results[bestIdx].offset
 	sampledVals := make([]float64, len(targetTimes))
@@ -270,6 +302,7 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 		nccCurve:     results,
 		bestNCC:      results[bestIdx].weightedNCC,
 		bestShift:    bestShift,
+		minSE:        results[minSEIdx].mse,
 		sampledTimes: append([]float64{}, targetTimes...),
 		sampledVals:  sampledVals,
 	}, nil
@@ -295,6 +328,7 @@ type fitDisplayData struct {
 	pathImg          image.Image // nil when an observation path could not be drawn
 	pathWindowTitle  string
 	edgeMsg          string // empty when there are no edges
+	edgeWarning      string // non-empty when a prominent warning should follow the edge dialog
 	showDiagnostics  bool
 }
 
@@ -435,10 +469,12 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 
 		// Warn if the path offset is very close to the asteroid center.
 		if params.MainBody.MajorAxisKm > 0 && math.Abs(params.PathPerpendicularOffsetKm) < 0.1*params.MainBody.MajorAxisKm {
-			msg += "\nWARNING: The observation path is very close to the asteroid center. " +
+			warningText := "WARNING: The observation path is very close to the asteroid center. " +
 				"There is a danger that the maximum width of available theoretical light curves " +
 				"was not enough to match the actual observation. In that case, use the " +
-				"Edit occultation parameters button and increase the size of the asteroid.\n"
+				"Edit occultation parameters button and increase the size of the asteroid."
+			msg += "\n" + warningText + "\n"
+			dd.edgeWarning = warningText
 		}
 		dd.edgeMsg = msg
 	}
@@ -505,7 +541,14 @@ func showFitDisplay(app fyne.App, w fyne.Window, dd *fitDisplayData) {
 		spacer := canvas.NewRectangle(color.Transparent)
 		spacer.SetMinSize(fyne.NewSize(750, 0))
 		edgeContainer := container.NewVBox(spacer, edgeLabel)
-		dialog.ShowCustom("Fit Edge Times", "OK", edgeContainer, w)
+		edgeDialog := dialog.NewCustom("Fit Edge Times", "OK", edgeContainer, w)
+		if dd.edgeWarning != "" {
+			warningText := dd.edgeWarning
+			edgeDialog.SetOnClosed(func() {
+				dialog.ShowError(fmt.Errorf("%s", warningText), w)
+			})
+		}
+		edgeDialog.Show()
 	}
 }
 
@@ -585,6 +628,7 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 // performFit runs the NCC sliding fit between the theoretical diffraction light curve
 // and the observed target curve, then displays the results in popup windows.
 func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64, showDiagnostics bool) (*fitResult, *precomputedCurve, error) {
+	logDiffractionImageInfo()
 	pc, err := buildPrecomputedCurve(params)
 	if err != nil {
 		return nil, nil, err
@@ -954,6 +998,7 @@ type fitSearchResult struct {
 // runFitSearch computes the NCC fit for a range of path perpendicular offsets.
 // It is safe to call from a goroutine. UI display is handled separately.
 func runFitSearch(params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int, abort *atomic.Bool, onProgress func(float64)) (*fitSearchResult, error) {
+	logDiffractionImageInfo()
 	results := make([]searchResult, 0, numSteps)
 	var firstErr error
 
@@ -988,7 +1033,7 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 			continue
 		}
 
-		results = append(results, searchResult{pathOffset: offset, peakNCC: fr.bestNCC, fr: fr, pc: pc})
+		results = append(results, searchResult{pathOffset: offset, peakNCC: fr.bestNCC, mse: fr.minSE, fr: fr, pc: pc})
 
 		if onProgress != nil {
 			onProgress(float64(step+1) / float64(numSteps))
@@ -1002,10 +1047,10 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 		return nil, fmt.Errorf("all path offset fits failed")
 	}
 
-	// Find the best path offset
+	// Find the best path offset by the minimum squared error
 	bestIdx := 0
 	for i, r := range results {
-		if r.peakNCC > results[bestIdx].peakNCC {
+		if r.mse < results[bestIdx].mse {
 			bestIdx = i
 		}
 	}
@@ -1017,6 +1062,7 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 // fitSearchDisplayData holds pre-computed data for showing fit search results.
 type fitSearchDisplayData struct {
 	searchPlotImg   image.Image // nil when diagnostics are off
+	msePlotImg      image.Image // nil when diagnostics are off
 	showDiagnostics bool
 	fitDD           *fitDisplayData
 	bestFr          *fitResult
@@ -1034,6 +1080,12 @@ func prepareFitSearchDisplay(params *OccultationParameters, fsr *fitSearchResult
 			return nil, fmt.Errorf("failed to create path offset plot: %w", err)
 		}
 		sd.searchPlotImg = searchPlotImg
+
+		msePlotImg, err := createMSEPlotImage(fsr.results, displayTitle, 1000, 500)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create MSE plot: %w", err)
+		}
+		sd.msePlotImg = msePlotImg
 	}
 
 	params.PathPerpendicularOffsetKm = fsr.bestPathOffset
@@ -1059,6 +1111,15 @@ func showFitSearchDisplay(app fyne.App, w fyne.Window, sd *fitSearchDisplayData)
 		searchWindow.CenterOnScreen()
 		safeShowWindow(searchWindow)
 	}
+	if sd.showDiagnostics && sd.msePlotImg != nil {
+		mseWindow := app.NewWindow("Minimum Squared Error vs Path Offset")
+		mseCanvas := canvas.NewImageFromImage(sd.msePlotImg)
+		mseCanvas.FillMode = canvas.ImageFillOriginal
+		mseWindow.SetContent(container.NewScroll(mseCanvas))
+		mseWindow.Resize(fyne.NewSize(1050, 550))
+		mseWindow.CenterOnScreen()
+		safeShowWindow(mseWindow)
+	}
 	showFitDisplay(app, w, sd.fitDD)
 }
 
@@ -1066,6 +1127,7 @@ func showFitSearchDisplay(app fyne.App, w fyne.Window, sd *fitSearchDisplayData)
 type searchResult struct {
 	pathOffset float64
 	peakNCC    float64
+	mse        float64
 	fr         *fitResult
 	pc         *precomputedCurve
 }
@@ -1197,6 +1259,121 @@ func createPathOffsetPlotImage(results []searchResult, occultationTitle string, 
 	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode plot PNG: %w", err)
+	}
+
+	return goImg, nil
+}
+
+// createMSEPlotImage renders MSE versus path offset.
+func createMSEPlotImage(results []searchResult, occultationTitle string, plotWidth, plotHeight int) (image.Image, error) {
+	plt := plot.New()
+	if grayPlotBackground {
+		plt.BackgroundColor = plotBackgroundGray
+	}
+
+	plt.Title.TextStyle.Font.Typeface = "Liberation"
+	plt.Title.TextStyle.Font.Variant = "Sans"
+	plt.Title.TextStyle.Font.Size = vg.Points(14)
+	plt.Title.TextStyle.Font.Weight = 2
+
+	plt.X.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.X.Label.TextStyle.Font.Variant = "Sans"
+	plt.X.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.X.Label.TextStyle.Font.Weight = 2
+
+	plt.Y.Label.TextStyle.Font.Typeface = "Liberation"
+	plt.Y.Label.TextStyle.Font.Variant = "Sans"
+	plt.Y.Label.TextStyle.Font.Size = vg.Points(12)
+	plt.Y.Label.TextStyle.Font.Weight = 2
+
+	plt.X.Tick.Label.Font.Typeface = "Liberation"
+	plt.X.Tick.Label.Font.Variant = "Sans"
+	plt.X.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Y.Tick.Label.Font.Typeface = "Liberation"
+	plt.Y.Tick.Label.Font.Variant = "Sans"
+	plt.Y.Tick.Label.Font.Size = vg.Points(10)
+
+	plt.Title.Text = "Minimum Squared Error vs Path Perpendicular Offset"
+	if occultationTitle != "" {
+		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
+	}
+	plt.X.Label.Text = "Path offset (km)"
+	plt.Y.Label.Text = "Minimum Squared Error"
+
+	xRange := math.Abs(results[len(results)-1].pathOffset - results[0].pathOffset)
+	if xRange > 0 {
+		xStep := xRange / 20
+		plt.X.Tick.Marker = lightcurve.StepTicks{Step: xStep, Format: "%.2f"}
+	}
+	plt.Add(plotter.NewGrid())
+
+	pts := make(plotter.XYs, len(results))
+	bestIdx := 0
+	for i, r := range results {
+		pts[i].X = r.pathOffset
+		pts[i].Y = r.mse
+		if r.mse < results[bestIdx].mse {
+			bestIdx = i
+		}
+	}
+
+	line, err := plotter.NewLine(pts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create MSE line plot: %w", err)
+	}
+	line.Color = color.RGBA{R: 0, G: 150, B: 0, A: 255}
+	line.Width = vg.Points(1.5)
+	plt.Add(line)
+
+	scatter, err := plotter.NewScatter(pts)
+	if err == nil {
+		scatter.Color = color.RGBA{R: 0, G: 150, B: 0, A: 255}
+		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		scatter.GlyphStyle.Radius = vg.Points(3)
+		plt.Add(scatter)
+	}
+
+	// Highlight the best (lowest MSE) with a red point
+	peakPt := make(plotter.XYs, 1)
+	peakPt[0].X = results[bestIdx].pathOffset
+	peakPt[0].Y = results[bestIdx].mse
+	peakScatter, err := plotter.NewScatter(peakPt)
+	if err == nil {
+		peakScatter.Color = color.RGBA{R: 255, G: 0, B: 0, A: 255}
+		peakScatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		peakScatter.GlyphStyle.Radius = vg.Points(6)
+		plt.Add(peakScatter)
+	}
+
+	plt.Legend.Add(fmt.Sprintf("Best: %.3f km, MinSE=%.6f", results[bestIdx].pathOffset, results[bestIdx].mse), line)
+	plt.Legend.Top = true
+	plt.Legend.Left = false
+
+	width := vg.Length(plotWidth) * vg.Inch / 96
+	height := vg.Length(plotHeight) * vg.Inch / 96
+
+	img := vgimg.New(width, height)
+	dc := draw.New(img)
+	plt.Draw(dc)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img.Image()); err != nil {
+		return nil, fmt.Errorf("failed to encode MSE plot PNG: %w", err)
+	}
+
+	// Save to the results folder
+	msePath := filepath.Join(appDir, "mseVsPathOffset.png")
+	if resultsFolder != "" {
+		msePath = filepath.Join(resultsFolder, "mseVsPathOffset.png")
+	}
+	if err := os.WriteFile(msePath, buf.Bytes(), 0644); err != nil {
+		fmt.Printf("Warning: could not save mseVsPathOffset.png: %v\n", err)
+	}
+
+	goImg, err := png.Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode MSE plot PNG: %w", err)
 	}
 
 	return goImg, nil

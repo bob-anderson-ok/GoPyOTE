@@ -6,7 +6,7 @@
 
 The primary motivating factors in the development of this app are:
 
-1. ... to fit light curves that include the effects of diffraction, filite star size (with limb darkening), and camera exposure time using the **IOTAdiffraction** app.
+1. ... to fit light curves that include the effects of diffraction, finite star size (with limb darkening), and camera exposure time using the **IOTAdiffraction** app.
 
 2. ... to use a programming language and GUI system that would result in an executable (Windows .exe) with zero dependencies. This makes distribution and installation very simple.
 
@@ -33,7 +33,7 @@ The rewrite of the Python/QT5 application preserves nearly all of the functional
 - **Normalization** - Correct for clouds, haze, lighting changes, etc
 - **Block integration** - Standard treatment for cameras like the **Watec 910**
 - **VizieR** curve export
-- **Determination of edge time uncertainties by Monte Carlo trials** using the actual noise from the observationincluding the important effects of correlated nosie.
+- **Determination of edge time uncertainties by Monte Carlo trials** using the actual noise from the observation including the important effects of correlated noise.
 
 ## 
 
@@ -46,3 +46,9 @@ Developed for the occultation astronomy community by Bob Anderson/IOTA
 (bob.anderson.ok@gmail.com)
 
 ## 
+
+Chief beta tester:  Deborah Smith
+
+## 
+
+(debjsmith@me.com)

@@ -12,7 +12,7 @@ The dialog contains the following sections from top to bottom:
 
 ### Paste Area
 
-A large multi-line text box where you paste the contents of an OWC occelmnt XML file using Ctrl+V. The text box is auto-focused when the dialog opens so you can paste immediately. When a paste is performed, the xml file is automatically saved to the **-RESULTS** folder and will be used the next this observation is opened for processing.
+A large multi-line text box where you paste the contents of an OWC occelmnt XML file using Ctrl+V. The text box is auto-focused when the dialog opens so you can paste immediately. When a paste is performed, the xml file is automatically saved to the **-RESULTS** folder and will be used the next time this observation is opened for processing.
 
 ## 
 
@@ -63,7 +63,7 @@ Use negative degrees for West longitude and South latitude.
      - `fundamental_plane_width_num_points` — defaulted to 2000
      - `observation_wavelength_nm` — defaulted to 550
      - `main_body.major_axis_km` and `main_body.minor_axis_km` — body diameter
-   - Thedialog closes and opens in a new dialog: **Edit/Enter Occultation Parameters** dialog with the `from_occelmnt` file loaded, so you can review, and adjust if needed., and after you click on **Write**, IOTAdiffraction will be called
+   - The dialog closes and opens in a new dialog: **Edit/Enter Occultation Parameters** dialog with the `from_occelmnt` file loaded, so you can review, and adjust if needed., and after you click on **Write**, IOTAdiffraction will be called
    - Display a **Fresnel Scale** popup showing:
      - The Fresnel scale in km and meters
      - The wavelength and distance used for the calculation
