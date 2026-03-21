@@ -562,15 +562,44 @@ func showFitDisplay(app fyne.App, w fyne.Window, dd *fitDisplayData) {
 	}
 }
 
-// displayFitResult shows the NCC plot, overlay plot, diffraction image, and edge times for a fit result.
-// showDiagnostics gates the NCC Fit Result window. Safe to call from the UI thread.
-func displayFitResult(app fyne.App, w fyne.Window, params *OccultationParameters, fr *fitResult, targetTimes, targetValues []float64, showDiagnostics bool) error {
-	dd, err := prepareFitDisplay(params, fr, targetTimes, targetValues, showDiagnostics)
-	if err != nil {
-		return err
+// showEdgeTimesDialog builds and shows the edge times dialog for a fit result.
+// Must be called on the UI thread.
+func showEdgeTimesDialog(app fyne.App, params *OccultationParameters, fr *fitResult) {
+	if len(fr.edgeTimes) == 0 {
+		return
 	}
-	showFitDisplay(app, w, dd)
-	return nil
+	msg := fmt.Sprintf("Best fit: NCC=%.4f, time offset=%.4f sec\n", fr.bestNCC, fr.bestShift)
+	msg += fmt.Sprintf("Path offset=%.3f km\n\n", params.PathPerpendicularOffsetKm)
+	msg += "Edge times:\n"
+	for i, et := range fr.edgeTimes {
+		edgeAbsTime := et + fr.bestShift
+		msg += fmt.Sprintf("  Edge %d: %s\n", i+1, formatSecondsAsTimestamp(edgeAbsTime))
+	}
+	if len(fr.edgeTimes) == 2 {
+		duration := math.Abs(fr.edgeTimes[1] - fr.edgeTimes[0])
+		msg += fmt.Sprintf("\nEvent duration: %.4f sec\n", duration)
+	}
+
+	logAction(fmt.Sprintf("Edge times (post auto-slide): NCC=%.4f, time offset=%.4f sec, path offset=%.3f km",
+		fr.bestNCC, fr.bestShift, params.PathPerpendicularOffsetKm))
+	for i, et := range fr.edgeTimes {
+		logAction(fmt.Sprintf("  Edge %d: %s", i+1, formatSecondsAsTimestamp(et+fr.bestShift)))
+	}
+
+	if params.MainBody.MajorAxisKm > 0 && math.Abs(params.PathPerpendicularOffsetKm) < 0.1*params.MainBody.MajorAxisKm {
+		msg += "\nWARNING: The observation path is very close to the asteroid center. " +
+			"There is a danger that the maximum width of available theoretical light curves " +
+			"was not enough to match the actual observation. In that case, use the " +
+			"Edit occultation parameters button and increase the size of the asteroid.\n"
+	}
+
+	edgeLabel := widget.NewLabel(msg)
+	edgeLabel.Wrapping = fyne.TextWrapWord
+	edgeWindow := app.NewWindow("Fit Edge Times")
+	edgeWindow.SetContent(container.NewScroll(container.NewPadded(edgeLabel)))
+	edgeWindow.Resize(fyne.NewSize(800, 300))
+	edgeWindow.CenterOnScreen()
+	safeShowWindow(edgeWindow)
 }
 
 // runMonteCarloRefit takes the sampled theoretical curve from the best fit,
@@ -637,18 +666,6 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 
 // performFit runs the NCC sliding fit between the theoretical diffraction light curve
 // and the observed target curve, then displays the results in popup windows.
-func performFit(app fyne.App, w fyne.Window, params *OccultationParameters, targetTimes, targetValues []float64, showDiagnostics bool) (*fitResult, *precomputedCurve, error) {
-	logDiffractionImageInfo()
-	pc, err := buildPrecomputedCurve(params)
-	if err != nil {
-		return nil, nil, err
-	}
-	fr, err := nccSlidingFit(pc, targetTimes, targetValues)
-	if err != nil {
-		return nil, nil, err
-	}
-	return fr, pc, displayFitResult(app, w, params, fr, targetTimes, targetValues, showDiagnostics)
-}
 
 // mcTrialsResult holds the accumulated edge time statistics from Monte Carlo trials.
 type mcTrialsResult struct {
@@ -1126,9 +1143,10 @@ func prepareFitSearchDisplay(params *OccultationParameters, fsr *fitSearchResult
 	return sd, nil
 }
 
-// showFitSearchDisplay creates and shows the fit search result windows.
-// Must be called on the UI thread.
-func showFitSearchDisplay(app fyne.App, w fyne.Window, sd *fitSearchDisplayData) {
+// showFitSearchDisplayPlots shows only the diagnostic plot windows (NCC, MSE)
+// without the edge dialog. Use this when the edge dialog is shown separately
+// after an auto-slide adjustment.
+func showFitSearchDisplayPlots(app fyne.App, sd *fitSearchDisplayData) {
 	if sd.showDiagnostics && sd.searchPlotImg != nil {
 		searchWindow := app.NewWindow("Peak NCC vs Path Offset")
 		searchCanvas := canvas.NewImageFromImage(sd.searchPlotImg)
@@ -1147,7 +1165,6 @@ func showFitSearchDisplay(app fyne.App, w fyne.Window, sd *fitSearchDisplayData)
 		mseWindow.CenterOnScreen()
 		safeShowWindow(mseWindow)
 	}
-	showFitDisplay(app, w, sd.fitDD)
 }
 
 // searchResult holds results for one path offset in a search.
