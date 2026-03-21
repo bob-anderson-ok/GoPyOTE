@@ -520,6 +520,8 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	fitAbortBtn.Importance = widget.DangerImportance
 	fitAbortBtn.Hide()
 
+	var runAutoSlide func() // forward declaration; assigned below after slide helpers are defined
+
 	// Fit button - checks preconditions and reports readiness
 	var fitBtn *widget.Button
 	fitBtn = widget.NewButton("Run fit search", func() {
@@ -675,7 +677,10 @@ func buildFitTab(ac *appContext) *container.TabItem {
 							if err != nil {
 								dialog.ShowError(err, w)
 							} else {
-								showFitSearchDisplay(a, w, sd)
+								// Show diagnostic and fit plots immediately (without an edge dialog)
+								showFitSearchDisplayPlots(a, sd)
+								sd.fitDD.edgeMsg = "" // suppress edge dialog
+								showFitDisplay(a, w, sd.fitDD)
 								lastFitResult = sd.bestFr
 								paramsCopy := *params
 								lastFitParams = &paramsCopy
@@ -693,25 +698,45 @@ func buildFitTab(ac *appContext) *container.TabItem {
 									ac.enablePostFitButtons()
 								}
 								ac.overlayTheoryCurve(sd.bestFr, nil)
+								runAutoSlide()
+								showEdgeTimesDialog(a, params, sd.bestFr)
 							}
 						})
 					}()
 				} else {
-					fr, pc, err := performFit(a, w, params, targetTimes, targetValues, ac.showDiagnostics)
-					if err != nil {
-						dialog.ShowError(err, w)
+					logDiffractionImageInfo()
+					pc, buildErr := buildPrecomputedCurve(params)
+					if buildErr != nil {
+						dialog.ShowError(buildErr, w)
 					} else {
-						lastFitResult = fr
-						paramsCopy := *params
-						lastFitParams = &paramsCopy
-						lastFitCandidates = []*precomputedCurve{pc}
-						lastFitTargetTimes = targetTimes
-						fitBtn.Importance = widget.WarningImportance
-						fitBtn.Refresh()
-						if ac.enablePostFitButtons != nil {
-							ac.enablePostFitButtons()
+						fr, fitErr := nccSlidingFit(pc, targetTimes, targetValues)
+						if fitErr != nil {
+							dialog.ShowError(fitErr, w)
+						} else {
+							lastFitResult = fr
+							paramsCopy := *params
+							lastFitParams = &paramsCopy
+							lastFitCandidates = []*precomputedCurve{pc}
+							lastFitTargetTimes = targetTimes
+							fitBtn.Importance = widget.WarningImportance
+							fitBtn.Refresh()
+							if ac.enablePostFitButtons != nil {
+								ac.enablePostFitButtons()
+							}
+							ac.overlayTheoryCurve(fr, nil)
+							// Show plots before the auto slide (edge dialog comes after)
+							fitDD, ddErr := prepareFitDisplay(params, fr, targetTimes, targetValues, ac.showDiagnostics)
+							if ddErr == nil {
+								savedEdgeMsg := fitDD.edgeMsg
+								savedEdgeWarning := fitDD.edgeWarning
+								fitDD.edgeMsg = "" // suppress edge dialog in showFitDisplay
+								showFitDisplay(a, w, fitDD)
+								fitDD.edgeMsg = savedEdgeMsg
+								fitDD.edgeWarning = savedEdgeWarning
+							}
+							runAutoSlide()
+							showEdgeTimesDialog(a, params, fr)
 						}
-						ac.overlayTheoryCurve(fr, nil)
 					}
 				}
 			}
@@ -734,6 +759,232 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		}
 	})
 	fitBtn.Importance = widget.HighImportance
+
+	// Slide spinner: shifts the best-fit theoretical curve by the spinner value (in time units)
+	var slideOffset float64
+	slideEntry := widget.NewEntry()
+	slideEntry.SetText("0.0")
+	slideEntryContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(100, slideEntry.MinSize().Height)), slideEntry)
+	slideMSELabel := widget.NewLabel("")
+
+	// computeSlideMSE computes MSE between the shifted/scaled theory curve and observation data.
+	computeSlideMSE := func() float64 {
+		if lastFitResult == nil || len(lastFitCandidates) == 0 || lastFitBestIdx >= len(lastFitCandidates) {
+			return -1
+		}
+		if loadedLightCurveData == nil {
+			return -1
+		}
+		pc := lastFitCandidates[lastFitBestIdx]
+		shift := lastFitResult.bestShift
+		scale := lastFitResult.bestScale
+		if scale == 0 {
+			scale = 1.0
+		}
+		var displayedColIdx int
+		for k := range ac.displayedCurves {
+			displayedColIdx = k
+			break
+		}
+		col := loadedLightCurveData.Columns[displayedColIdx]
+		var sumSq float64
+		var n int
+		for i, val := range col.Values {
+			frameNum := loadedLightCurveData.FrameNumbers[i]
+			if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
+				continue
+			}
+			if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
+				continue
+			}
+			t := loadedLightCurveData.TimeValues[i]
+			localT := t - shift
+			theory := interpolateAt(pc.curve, pc.curveTimes, localT)
+			scaled := theory*scale + (1.0 - scale)
+			diff := val - scaled
+			sumSq += diff * diff
+			n++
+		}
+		if n == 0 {
+			return -1
+		}
+		return sumSq / float64(n)
+	}
+
+	updateSlideMSE := func() {
+		mse := computeSlideMSE()
+		if mse < 0 {
+			slideMSELabel.SetText("")
+		} else {
+			slideMSELabel.SetText(fmt.Sprintf("MSE: %.6f", mse))
+		}
+	}
+
+	applySlide := func() {
+		if lastFitResult == nil {
+			return
+		}
+		lastFitResult.bestShift += slideOffset
+		slideOffset = 0
+		slideEntry.SetText("0.0")
+		ac.overlayTheoryCurve(lastFitResult, nil)
+		updateSlideMSE()
+		logAction(fmt.Sprintf("Slide applied: new bestShift=%.4f", lastFitResult.bestShift))
+	}
+
+	slideStep := func() float64 {
+		if lastCsvExposureSecs > 0 {
+			return lastCsvExposureSecs / 20.0
+		}
+		return 0.05
+	}
+
+	slideDown := widget.NewButton("-", func() {
+		if lastFitResult == nil {
+			return
+		}
+		step := slideStep()
+		slideOffset -= step
+		slideEntry.SetText(fmt.Sprintf("%.4f", slideOffset))
+		lastFitResult.bestShift -= step
+		ac.overlayTheoryCurve(lastFitResult, nil)
+		updateSlideMSE()
+	})
+	slideUp := widget.NewButton("+", func() {
+		if lastFitResult == nil {
+			return
+		}
+		step := slideStep()
+		slideOffset += step
+		slideEntry.SetText(fmt.Sprintf("%.4f", slideOffset))
+		lastFitResult.bestShift += step
+		ac.overlayTheoryCurve(lastFitResult, nil)
+		updateSlideMSE()
+	})
+	slideEntry.OnChanged = func(s string) {
+		val, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		if err != nil {
+			return
+		}
+		// Undo the previous offset, apply a new one
+		lastFitResult.bestShift -= slideOffset
+		slideOffset = val
+		lastFitResult.bestShift += slideOffset
+		ac.overlayTheoryCurve(lastFitResult, nil)
+		updateSlideMSE()
+	}
+	slideApplyBtn := widget.NewButton("Apply", func() {
+		applySlide()
+	})
+
+	// computeMSEatShift computes MSE at a given absolute bestShift without modifying state.
+	computeMSEatShift := func(shift float64) float64 {
+		if lastFitResult == nil || len(lastFitCandidates) == 0 || lastFitBestIdx >= len(lastFitCandidates) {
+			return -1
+		}
+		if loadedLightCurveData == nil {
+			return -1
+		}
+		pc := lastFitCandidates[lastFitBestIdx]
+		scale := lastFitResult.bestScale
+		if scale == 0 {
+			scale = 1.0
+		}
+		var displayedColIdx int
+		for k := range ac.displayedCurves {
+			displayedColIdx = k
+			break
+		}
+		col := loadedLightCurveData.Columns[displayedColIdx]
+		var sumSq float64
+		var n int
+		for i, val := range col.Values {
+			frameNum := loadedLightCurveData.FrameNumbers[i]
+			if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
+				continue
+			}
+			if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
+				continue
+			}
+			t := loadedLightCurveData.TimeValues[i]
+			localT := t - shift
+			theory := interpolateAt(pc.curve, pc.curveTimes, localT)
+			scaled := theory*scale + (1.0 - scale)
+			diff := val - scaled
+			sumSq += diff * diff
+			n++
+		}
+		if n == 0 {
+			return -1
+		}
+		return sumSq / float64(n)
+	}
+
+	runAutoSlide = func() {
+		if lastFitResult == nil {
+			return
+		}
+		step := slideStep()
+		origShift := lastFitResult.bestShift
+		currentMSE := computeMSEatShift(origShift)
+		if currentMSE < 0 {
+			return
+		}
+
+		// Try both directions, pick the one that reduces MSE
+		msePlus := computeMSEatShift(origShift + step)
+		mseMinus := computeMSEatShift(origShift - step)
+
+		var dir float64
+		var bestMSE float64
+		var bestShift float64
+		if mseMinus < currentMSE && mseMinus <= msePlus {
+			dir = -step
+			bestMSE = mseMinus
+			bestShift = origShift - step
+		} else if msePlus < currentMSE {
+			dir = step
+			bestMSE = msePlus
+			bestShift = origShift + step
+		} else {
+			// Already at minimum
+			updateSlideMSE()
+			return
+		}
+
+		// Walk in the chosen direction until MSE increases
+		for {
+			nextShift := bestShift + dir
+			nextMSE := computeMSEatShift(nextShift)
+			if nextMSE < 0 || nextMSE >= bestMSE {
+				break
+			}
+			bestMSE = nextMSE
+			bestShift = nextShift
+		}
+
+		// Apply the best shift found
+		totalSlide := bestShift - origShift + slideOffset
+		lastFitResult.bestShift = bestShift
+		slideOffset = totalSlide
+		slideEntry.SetText(fmt.Sprintf("%.4f", slideOffset))
+		ac.overlayTheoryCurve(lastFitResult, nil)
+		updateSlideMSE()
+		logAction(fmt.Sprintf("Slide auto: offset=%.4f, MSE=%.6f", totalSlide, bestMSE))
+	}
+
+	slideAutoBtn := widget.NewButton("Auto", func() {
+		runAutoSlide()
+	})
+
+	// slideBox — uncomment this and the layout line below to restore manual slide controls
+	_ = slideDown
+	_ = slideEntryContainer
+	_ = slideUp
+	_ = slideApplyBtn
+	_ = slideAutoBtn
+	_ = slideMSELabel
+	//slideBox := container.NewHBox(widget.NewLabel("Slide:"), slideDown, slideEntryContainer, slideUp, slideApplyBtn, slideAutoBtn, slideMSELabel)
 
 	// Monte Carlo UI elements
 	mcNumTrialsEntry := widget.NewEntry()
@@ -1547,6 +1798,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		widget.NewSeparator(),
 		searchRangeCard,
 		container.NewHBox(fitBtn, fitAbortBtn, widget.NewButton("Help", showSearchRangeHelp)),
+		//slideBox, // hidden — uncomment to restore manual slide controls
 		widget.NewSeparator(),
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
