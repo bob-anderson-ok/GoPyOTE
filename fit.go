@@ -645,6 +645,7 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 
 	// Search across precomputed path offset candidates
 	var bestFr *fitResult
+	var bestPC *precomputedCurve
 	bestNCC := -1.0
 	bestPathOffset := candidates[0].pathOffset
 	for _, pc := range candidates {
@@ -655,17 +656,85 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 		if mcFr.bestNCC > bestNCC {
 			bestNCC = mcFr.bestNCC
 			bestFr = mcFr
+			bestPC = pc
 			bestPathOffset = pc.pathOffset
 		}
 	}
 	if bestFr == nil {
 		return nil, fmt.Errorf("all path offset candidates failed in Monte Carlo refit")
 	}
+
+	// MSE refinement: walk bestShift in sub-frame steps to find the local MSE minimum.
+	refineMSEShift(bestFr, bestPC, fr.sampledTimes, noisyValues)
+
 	return &mcRefitResult{fr: bestFr, noisyValues: noisyValues, pathOffset: bestPathOffset}, nil
 }
 
-// performFit runs the NCC sliding fit between the theoretical diffraction light curve
-// and the observed target curve, then displays the results in popup windows.
+// refineMSEShift adjusts fr.bestShift by walking in sub-frame steps to minimize the
+// MSE between the theoretical curve (from pc) and targetValues. It also recomputes
+// fr.sampledVals at the refined shift. This mirrors the UI "auto-slide" logic.
+func refineMSEShift(fr *fitResult, pc *precomputedCurve, targetTimes, targetValues []float64) {
+	framePeriod := medianTimeDelta(targetTimes)
+	if framePeriod <= 0 {
+		return
+	}
+	step := framePeriod / 20.0
+
+	// mseAt computes MSE at the given shift without modifying fr.
+	mseAt := func(shift float64) float64 {
+		var sumSq float64
+		for i, t := range targetTimes {
+			localT := t - shift
+			theory := interpolateAt(pc.curve, pc.curveTimes, localT)
+			diff := targetValues[i] - theory
+			sumSq += diff * diff
+		}
+		return sumSq / float64(len(targetTimes))
+	}
+
+	origShift := fr.bestShift
+	currentMSE := mseAt(origShift)
+
+	msePlus := mseAt(origShift + step)
+	mseMinus := mseAt(origShift - step)
+
+	var dir float64
+	bestMSE := currentMSE
+	bestShift := origShift
+	if mseMinus < currentMSE && mseMinus <= msePlus {
+		dir = -step
+		bestMSE = mseMinus
+		bestShift = origShift - step
+	} else if msePlus < currentMSE {
+		dir = step
+		bestMSE = msePlus
+		bestShift = origShift + step
+	} else {
+		return // already at minimum
+	}
+
+	// Walk in the chosen direction until MSE increases.
+	for {
+		nextShift := bestShift + dir
+		nextMSE := mseAt(nextShift)
+		if nextMSE >= bestMSE {
+			break
+		}
+		bestMSE = nextMSE
+		bestShift = nextShift
+	}
+
+	// Apply the refined shift and recompute sampled values.
+	fr.bestShift = bestShift
+	for i, t := range targetTimes {
+		localT := t - bestShift
+		if localT < 0 || localT > pc.duration {
+			fr.sampledVals[i] = 1.0
+		} else {
+			fr.sampledVals[i] = interpolateAt(pc.curve, pc.curveTimes, localT)
+		}
+	}
+}
 
 // mcTrialsResult holds the accumulated edge time statistics from Monte Carlo trials.
 type mcTrialsResult struct {
