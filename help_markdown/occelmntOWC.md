@@ -1,10 +1,22 @@
 # Process OWC occelmnt file
 
+## 
+
 The **Process OWC occelmnt file** button, located at the bottom of the main window, opens a dialog for computing observer-relative shadow velocities from an OWC (Occult Watcher Cloud) occelmnt XML file.
 
 ## 
 
+## Source for the occelmnt.xml file
+
+## 
+
+The easiest source for the needed occelmnt file is **Occult Watcher Cloud**. When **OWC** is displaying an **Event Prediction** window, the occelmnt file for that event is at the bottom of the page. There is a convenient icon that can be clicked to copy the occelmnt file to the clipboard, ready to be pasted into the **Paste Area** (see below). 
+
+## 
+
 ## Dialog Layout
+
+## 
 
 The dialog contains the following sections from top to bottom:
 
@@ -48,23 +60,23 @@ Use negative degrees for West longitude and South latitude.
 
 3. Click **Create Occultation Parameter file (closes dialog)**. This will:
    
-   - Call `ShadowVelocityFromOWCEventKmPerSec` to compute the relative shadow velocity (vx, vy in km/s) for your observer location, accounting for Earth rotation via WGS-84 geodesy and Earth Rotation Angle.
-   - Parse the `<Object>` element from the XML to extract:
+   - activate a subroutine to compute the relative shadow velocity (vx, vy in km/s) for your observer location, accounting for Earth rotation via WGS-84 geodesy and Earth Rotation Angle.
+   - parse the `<Object>` element from the XML to extract:
      - **Index 0, 1:** asteroid number and name, used to set the `title` field as `(number) name`
      - **Index 3:** body diameter in km, used to set `major_axis_km` and `minor_axis_km`
      - **Index 4:** distance in AU, used to set `distance_au`
-   - Create a parameters file named `from_occelmnt` in the application directory with:
+   - create a parameters file named `from_occelmnt` in the application directory with:
      - `title` — from the asteroid number and name
      - `window_size` — defaulted to 600
      - `dX_km_per_sec` — computed vx
      - `dY_km_per_sec` — computed vy
      - `distance_au` — from the XML
-     - `fundamental_plane_width_km` — 3x the body diameter, rounded up
+     - `fundamental_plane_width_km` — 5x the body diameter, rounded up
      - `fundamental_plane_width_num_points` — defaulted to 2000
      - `observation_wavelength_nm` — defaulted to 550
      - `main_body.major_axis_km` and `main_body.minor_axis_km` — body diameter
-   - The dialog closes and opens in a new dialog: **Edit/Enter Occultation Parameters** dialog with the `from_occelmnt` file loaded, so you can review, and adjust if needed., and after you click on **Write**, IOTAdiffraction will be called
-   - Display a **Fresnel Scale** popup showing:
+   - The dialog closes and opens in a new dialog: **Edit/Enter Occultation Parameters** dialog with the `from_occelmnt` file loaded, so you can review, and adjust if needed., and after you click on **Write**, IOTAdiffraction will be called which will
+   - display a **Fresnel Scale** popup showing:
      - The Fresnel scale in km and meters
      - The wavelength and distance used for the calculation
      - Samples per Fresnel scale (calculated from the fundamental plane parameters)
@@ -74,6 +86,8 @@ Use negative degrees for West longitude and South latitude.
    ## 
 
 ## Notes
+
+## 
 
 - Both **Load site file** and **Write site file** always use the `SITE-FILES` directory relative to the application directory.
 

@@ -39,16 +39,20 @@ The rewrite of the Python/QT5 application preserves nearly all of the functional
 
 ## Credits
 
-Developed for the occultation astronomy community by Bob Anderson/IOTA
-
 ## 
+
+Developed for the occultation astronomy community by **Bob Anderson/IOTA**
+
+ 
 
 (bob.anderson.ok@gmail.com)
 
 ## 
 
-Chief beta tester:  Deborah Smith
+Chief beta tester:  **Deborah Smith**
 
-## 
+ 
 
 (debjsmith@me.com)
+
+## 

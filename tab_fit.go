@@ -1292,7 +1292,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					mcSpacer.SetMinSize(fyne.NewSize(750, 0))
 					mcContainer = container.NewVBox(mcSpacer, summaryLabel)
 				}
-				dialog.ShowCustom("Monte Carlo Edge Time Uncertainty", "OK", mcContainer, w)
+				mcResultWin := a.NewWindow("Monte Carlo Edge Time Uncertainty")
+				mcResultWin.SetContent(container.NewScroll(container.NewPadded(mcContainer)))
+				mcResultWin.Resize(fyne.NewSize(800, 400))
+				mcResultWin.CenterOnScreen()
+				safeShowWindow(mcResultWin)
 				// Create a fit overlay plot with ±3σ edge uncertainty lines, using the
 				// scale-adjusted theoretical curve (bestScale from the post-fit scale search).
 				if len(mcTargetTimes) > 0 && len(mcTargetValues) > 0 {
