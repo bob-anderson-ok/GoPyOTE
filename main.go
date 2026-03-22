@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.41"
+const Version = "1-2-42"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -319,7 +319,12 @@ func main() {
 			ShowMarkdownDialogWithImages("About GoPyOTE", string(content), &aboutMarkdown, w)
 		}),
 	)
-	mainMenu := fyne.NewMainMenu(helpMenu)
+	updateMenu := fyne.NewMenu("Check for updates",
+		fyne.NewMenuItem("Check for updates", func() {
+			dialog.ShowInformation("Check for updates", "Not yet implemented", w)
+		}),
+	)
+	mainMenu := fyne.NewMainMenu(helpMenu, updateMenu)
 	w.SetMainMenu(mainMenu)
 
 	// Tab 2: Settings
@@ -2719,7 +2724,73 @@ func main() {
 	btnShowIOTAPlots.Disable()
 	ac.enableShowIOTAPlots = func() { btnShowIOTAPlots.Enable() }
 
-	buttons := container.NewHBox(btnProcessOccelemnt, btnOccultParams, btnIOTA, btnShowDetails, btnShowIOTAPlots)
+	sessionStarRow := "" // persists within the session only, not across sessions
+	btnImageAcqTiming := widget.NewButton("Image Acquisition Timing", func() {
+		cameraNameEntry := widget.NewEntry()
+		cameraNameEntry.SetPlaceHolder("camera name")
+		cameraNameEntry.SetText(prefs.StringWithFallback("imageAcqCameraName", ""))
+
+		acqDelayEntry := widget.NewEntry()
+		acqDelayEntry.SetPlaceHolder("msecs")
+		acqDelayEntry.SetText(prefs.StringWithFallback("imageAcqDelay", ""))
+
+		starRowEntry := widget.NewEntry()
+		starRowEntry.SetPlaceHolder("row number")
+		starRowEntry.SetText(sessionStarRow)
+
+		rowDeltaEntry := widget.NewEntry()
+		rowDeltaEntry.SetPlaceHolder("ms")
+		rowDeltaEntry.SetText(prefs.StringWithFallback("imageAcqRowDelta", ""))
+
+		// updateCameraDelay recomputes the camera delay comment and pushes it
+		// to the open SODIS dialog (if any) whenever the entries change.
+		updateCameraDelay := func() {
+			acqDelayMs, err1 := strconv.ParseFloat(strings.TrimSpace(acqDelayEntry.Text), 64)
+			starRow, err2 := strconv.ParseFloat(strings.TrimSpace(starRowEntry.Text), 64)
+			rowDeltaMs, err3 := strconv.ParseFloat(strings.TrimSpace(rowDeltaEntry.Text), 64)
+			if err1 != nil || err2 != nil || err3 != nil {
+				return
+			}
+			cameraDelayMs := acqDelayMs + starRow*rowDeltaMs
+			comment := fmt.Sprintf(
+				"edge times reported with cameraDelay = %.2f ms subtracted\n"+
+					"(acquisitionDelay=%.3f ms + starRow=%.1f * rowDelta=%.6f ms)",
+				cameraDelayMs, acqDelayMs, starRow, rowDeltaMs)
+			cameraName := strings.TrimSpace(cameraNameEntry.Text)
+			if cameraName != "" {
+				comment += fmt.Sprintf(" [camera: %s]", cameraName)
+			}
+			if ac.updateSodisComment != nil {
+				ac.updateSodisComment(comment)
+			}
+		}
+		acqDelayEntry.OnChanged = func(_ string) { updateCameraDelay() }
+		starRowEntry.OnChanged = func(_ string) { updateCameraDelay() }
+		rowDeltaEntry.OnChanged = func(_ string) { updateCameraDelay() }
+		cameraNameEntry.OnChanged = func(_ string) { updateCameraDelay() }
+
+		formItems := []*widget.FormItem{
+			{Text: "Camera name (optional)", Widget: cameraNameEntry},
+			{Text: "Acquisition delay (msecs)", Widget: acqDelayEntry},
+			{Text: "star row position at occultation", Widget: starRowEntry},
+			{Text: "row-to-row time delta (ms)", Widget: rowDeltaEntry},
+		}
+		dlg := dialog.NewForm("Image Acquisition Timing", "OK", "Cancel", formItems, func(ok bool) {
+			if !ok {
+				return
+			}
+			prefs.SetString("imageAcqCameraName", cameraNameEntry.Text)
+			prefs.SetString("imageAcqDelay", acqDelayEntry.Text)
+			prefs.SetString("imageAcqRowDelta", rowDeltaEntry.Text)
+			sessionStarRow = starRowEntry.Text
+			prefs.SetString("imageAcqStarRow", starRowEntry.Text)
+		}, w)
+		dlg.Resize(fyne.NewSize(450, 250))
+		dlg.Show()
+	})
+	btnImageAcqTiming.Importance = widget.HighImportance
+
+	buttons := container.NewHBox(btnProcessOccelemnt, btnImageAcqTiming, btnOccultParams, btnIOTA, btnShowDetails, btnShowIOTAPlots)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)

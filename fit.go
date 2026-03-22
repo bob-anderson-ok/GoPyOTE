@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"GoPyOTE/lightcurve"
@@ -562,6 +564,51 @@ func showFitDisplay(app fyne.App, w fyne.Window, dd *fitDisplayData) {
 	}
 }
 
+// cameraDelayInfo holds the computed camera delay and formatted report lines.
+type cameraDelayInfo struct {
+	delaySecs float64
+	delayMs   float64
+	report    string // multi-line report: header + per-edge calculation lines
+}
+
+// computeCameraDelay reads Image Acquisition Timing preferences and, if all
+// required values are present, returns a cameraDelayInfo with the delay and a
+// formatted report showing the per-edge subtraction. edgeLabels and edgeTimes
+// are parallel slices (e.g. ["D","R"] or ["Edge 1","Edge 2"]).
+func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayInfo {
+	prefs := fyne.CurrentApp().Preferences()
+	acqDelayStr := prefs.String("imageAcqDelay")
+	starRowStr := prefs.String("imageAcqStarRow")
+	rowDeltaStr := prefs.String("imageAcqRowDelta")
+	if acqDelayStr == "" || starRowStr == "" || rowDeltaStr == "" {
+		return nil
+	}
+	acqDelayMs, err1 := strconv.ParseFloat(strings.TrimSpace(acqDelayStr), 64)
+	starRow, err2 := strconv.ParseFloat(strings.TrimSpace(starRowStr), 64)
+	rowDeltaMs, err3 := strconv.ParseFloat(strings.TrimSpace(rowDeltaStr), 64)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return nil
+	}
+	delayMs := acqDelayMs + starRow*rowDeltaMs
+	delaySecs := delayMs / 1000.0
+
+	report := fmt.Sprintf(
+		"edge times reported with cameraDelay = %.2f ms subtracted\n"+
+			"(acquisitionDelay=%.3f ms + starRow=%.1f * rowDelta=%.6f ms)",
+		delayMs, acqDelayMs, starRow, rowDeltaMs)
+	cameraName := prefs.String("imageAcqCameraName")
+	if cameraName != "" {
+		report += fmt.Sprintf(" [camera: %s]", cameraName)
+	}
+	for i, t := range edgeTimes {
+		orig := formatSecondsAsTimestamp(t)
+		corr := formatSecondsAsTimestamp(t - delaySecs)
+		label := edgeLabels[i]
+		report += fmt.Sprintf("\n%s: %s - %.2f ms = %s", label, orig, delayMs, corr)
+	}
+	return &cameraDelayInfo{delaySecs: delaySecs, delayMs: delayMs, report: report}
+}
+
 // showEdgeTimesDialog builds and shows the edge times dialog for a fit result.
 // Must be called on the UI thread.
 func showEdgeTimesDialog(app fyne.App, params *OccultationParameters, fr *fitResult) {
@@ -571,9 +618,24 @@ func showEdgeTimesDialog(app fyne.App, params *OccultationParameters, fr *fitRes
 	msg := fmt.Sprintf("Best fit: NCC=%.4f, time offset=%.4f sec\n", fr.bestNCC, fr.bestShift)
 	msg += fmt.Sprintf("Path offset=%.3f km\n\n", params.PathPerpendicularOffsetKm)
 	msg += "Edge times:\n"
+
+	// Compute edge absolute times and build labels
+	edgeAbsTimes := make([]float64, len(fr.edgeTimes))
+	edgeLabels := make([]string, len(fr.edgeTimes))
 	for i, et := range fr.edgeTimes {
-		edgeAbsTime := et + fr.bestShift
-		msg += fmt.Sprintf("  Edge %d: %s\n", i+1, formatSecondsAsTimestamp(edgeAbsTime))
+		edgeAbsTimes[i] = et + fr.bestShift
+		edgeLabels[i] = fmt.Sprintf("Edge %d", i+1)
+	}
+
+	cd := computeCameraDelay(edgeLabels, edgeAbsTimes)
+	for i, edgeAbsTime := range edgeAbsTimes {
+		ts := formatSecondsAsTimestamp(edgeAbsTime)
+		if cd != nil {
+			corrected := formatSecondsAsTimestamp(edgeAbsTime - cd.delaySecs)
+			msg += fmt.Sprintf("  Edge %d: %s - (cameraDelay=%.2f ms) = %s\n", i+1, ts, cd.delayMs, corrected)
+		} else {
+			msg += fmt.Sprintf("  Edge %d: %s\n", i+1, ts)
+		}
 	}
 	if len(fr.edgeTimes) == 2 {
 		duration := math.Abs(fr.edgeTimes[1] - fr.edgeTimes[0])

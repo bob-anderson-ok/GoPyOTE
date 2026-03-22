@@ -1388,6 +1388,13 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 	})
 	calcDxDyBtn.Importance = widget.HighImportance
 
+	cancelBtn := widget.NewButton("Cancel", func() {
+		if occelmntDialog != nil {
+			occelmntDialog.Hide()
+		}
+	})
+	cancelBtn.Importance = widget.HighImportance
+
 	// --- Assemble bottom sections ---
 	bottomSection := container.NewVBox(
 		widget.NewSeparator(),
@@ -1397,11 +1404,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 		widget.NewSeparator(),
 		container.NewHBox(writeSiteBtn),
 		widget.NewSeparator(),
-		widget.NewButton("Cancel", func() {
-			if occelmntDialog != nil {
-				occelmntDialog.Hide()
-			}
-		}),
+		container.NewHBox(cancelBtn),
 	)
 
 	loadOccelmntBtn.Importance = widget.HighImportance

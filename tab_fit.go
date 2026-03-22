@@ -1126,10 +1126,23 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				mcBtn.Importance = widget.WarningImportance
 				mcBtn.Refresh()
 				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
+				// Compute camera delay from Image Acquisition Timing preferences
+				mcEdgeAbsTimes := make([]float64, 0, result.numEdges)
+				mcEdgeLabels := make([]string, 0, result.numEdges)
 				for i := 0; i < result.numEdges && i < len(mcFitResult.edgeTimes); i++ {
-					absTime := mcFitResult.edgeTimes[i] + mcFitResult.bestShift
+					mcEdgeAbsTimes = append(mcEdgeAbsTimes, mcFitResult.edgeTimes[i]+mcFitResult.bestShift)
+					mcEdgeLabels = append(mcEdgeLabels, fmt.Sprintf("Edge %d", i+1))
+				}
+				mcCD := computeCameraDelay(mcEdgeLabels, mcEdgeAbsTimes)
+				for i := 0; i < result.numEdges && i < len(mcFitResult.edgeTimes); i++ {
+					absTime := mcEdgeAbsTimes[i]
 					ts := formatSecondsAsTimestamp(absTime)
-					msg += fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)\n", i+1, ts, 3*result.edgeStds[i])
+					if mcCD != nil {
+						corrected := formatSecondsAsTimestamp(absTime - mcCD.delaySecs)
+						msg += fmt.Sprintf("  Edge %d: %s - (cameraDelay=%.2f ms) = %s +/- %.4f sec (3 sigma)\n", i+1, ts, mcCD.delayMs, corrected, 3*result.edgeStds[i])
+					} else {
+						msg += fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)\n", i+1, ts, 3*result.edgeStds[i])
+					}
 				}
 				if result.numEdges == 2 {
 					fitDuration := math.Abs(mcFitResult.edgeTimes[1] - mcFitResult.edgeTimes[0])
@@ -1141,6 +1154,12 @@ func buildFitTab(ac *appContext) *container.TabItem {
 						chordStdKm := 3 * durationStd * shadowSpeed
 						msg += fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]\n", chordKm, chordStdKm, shadowSpeed)
 					}
+				}
+				if mcFitParams.MainBody.MajorAxisKm > 0 {
+					msg += fmt.Sprintf("\n  Main body major axis diameter: %.3f km\n", mcFitParams.MainBody.MajorAxisKm)
+				}
+				if mcFitParams.StarDiamOnPlaneMas > 0 {
+					msg += fmt.Sprintf("  Star diameter on plane: %.3f mas\n", mcFitParams.StarDiamOnPlaneMas)
 				}
 				fmt.Print(msg)
 
@@ -1672,6 +1691,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			detailsEventTimeUT:  detailsEventTimeUT,
 			vt:                  ac.vizierTab,
 			occultationOverride: occultationOverride,
+			ac:                  ac,
 		}, onSave)
 	}
 

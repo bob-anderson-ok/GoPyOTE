@@ -1303,15 +1303,16 @@ type sodisPreFill struct {
 	mcResult            *mcTrialsResult
 	fitParams           *OccultationParameters
 	lcData              *LightCurveData
-	occTitle            string     // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
-	sitePath            string     // path to the last-loaded .site file
-	occelmntXml         string     // raw occelmnt XML text — first <Star> CSV field used for #STAR
-	noiseSigma          float64    // baseline noise sigma — used for Signal/Noise (1/sigma)
-	csvExposureSecs     float64    // CSV-measured median exposure time — used for Exp_Time
-	observerT0          time.Time  // observer-corrected event time (zero = not available; use geocentric)
-	detailsEventTimeUT  string     // "Event Time (UT)" from the details file, e.g. "26 Feb 2026 20:27:55"; overrides calculated time when non-empty
-	vt                  *VizieRTab // VizieR tab — used to propagate the observer name when a site file loads
-	occultationOverride string     // if non-empty, pre-select this value for the Occultation dropdown instead of "POSITIVE"
+	occTitle            string      // e.g. "(2731) Cucula" — used for #ASTEROID and #Nr
+	sitePath            string      // path to the last-loaded .site file
+	occelmntXml         string      // raw occelmnt XML text — first <Star> CSV field used for #STAR
+	noiseSigma          float64     // baseline noise sigma — used for Signal/Noise (1/sigma)
+	csvExposureSecs     float64     // CSV-measured median exposure time — used for Exp_Time
+	observerT0          time.Time   // observer-corrected event time (zero = not available; use geocentric)
+	detailsEventTimeUT  string      // "Event Time (UT)" from the details file, e.g. "26 Feb 2026 20:27:55"; overrides calculated time when non-empty
+	vt                  *VizieRTab  // VizieR tab — used to propagate the observer name when a site file loads
+	occultationOverride string      // if non-empty, pre-select this value for the Occultation dropdown instead of "POSITIVE"
+	ac                  *appContext // app context — used to register the SODIS comment update callback
 }
 
 // formatSecondsForSODIS formats total seconds as HH:MM:SS.sss (3 decimal places),
@@ -1686,6 +1687,12 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 			if item.name == "Comments" {
 				e = widget.NewMultiLineEntry()
 				e.SetMinRowsVisible(3)
+				if fill != nil && fill.ac != nil {
+					commentsEntry := e
+					fill.ac.updateSodisComment = func(text string) {
+						commentsEntry.SetText(text)
+					}
+				}
 			} else {
 				e = widget.NewEntry()
 			}
@@ -1711,6 +1718,14 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 		if fill.fitResult != nil && len(fill.fitResult.edgeTimes) == 2 {
 			t0 := fill.fitResult.edgeTimes[0] + fill.fitResult.bestShift
 			t1 := fill.fitResult.edgeTimes[1] + fill.fitResult.bestShift
+
+			// Compute camera delay from Image Acquisition Timing preferences
+			sodisCD := computeCameraDelay([]string{"D", "R"}, []float64{t0, t1})
+			if sodisCD != nil {
+				t0 -= sodisCD.delaySecs
+				t1 -= sodisCD.delaySecs
+			}
+
 			// Ensure chronological order (D before R)
 			dIdx, rIdx := 0, 1
 			if t0 > t1 {
@@ -1726,6 +1741,10 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 				len(fill.mcResult.edgeStds) == 2 {
 				setEntry("Acc_D", fmt.Sprintf("%.3f", 3*fill.mcResult.edgeStds[dIdx]))
 				setEntry("Acc_R", fmt.Sprintf("%.3f", 3*fill.mcResult.edgeStds[rIdx]))
+			}
+
+			if sodisCD != nil {
+				setEntry("Comments", sodisCD.report)
 			}
 		}
 
@@ -2133,6 +2152,9 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 	})
 
 	cancelBtn := widget.NewButton("Cancel", func() {
+		if fill != nil && fill.ac != nil {
+			fill.ac.updateSodisComment = nil
+		}
 		dlg.Hide()
 	})
 
