@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1-2-42"
+const Version = "1-2-43"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -117,6 +117,10 @@ var vizierDatWrittenThisSession bool
 // sodisNegativeReportSaved is set to true when a NEGATIVE SODIS report is saved.
 // A negative report does not require a VizieR .dat file, so the close warning is skipped.
 var sodisNegativeReportSaved bool
+
+// sessionStarRow holds the star row value entered in the Image Acquisition Timing
+// dialog. It persists within the session only, not across sessions.
+var sessionStarRow string
 
 // occultationProcessedForCurrentCSV is set to true when prior diffraction results
 // are found in the -RESULTS folder or when IOTAdiffraction runs for the current CSV.
@@ -191,6 +195,9 @@ func main() {
 		prefs.SetInt("windowH", 600)
 		prefs.SetFloat("splitOffset", 0.6)
 	}
+
+	// Purge star row from preferences — it is session-only now.
+	prefs.RemoveValue("imageAcqStarRow")
 
 	// Load the last used parameters path from preferences for startup display
 	lastLoadedParamsPath = prefs.StringWithFallback("lastLoadedParamsPath", "")
@@ -2724,7 +2731,6 @@ func main() {
 	btnShowIOTAPlots.Disable()
 	ac.enableShowIOTAPlots = func() { btnShowIOTAPlots.Enable() }
 
-	sessionStarRow := "" // persists within the session only, not across sessions
 	btnImageAcqTiming := widget.NewButton("Image Acquisition Timing", func() {
 		cameraNameEntry := widget.NewEntry()
 		cameraNameEntry.SetPlaceHolder("camera name")
@@ -2742,16 +2748,21 @@ func main() {
 		rowDeltaEntry.SetPlaceHolder("ms")
 		rowDeltaEntry.SetText(prefs.StringWithFallback("imageAcqRowDelta", ""))
 
-		// updateCameraDelay recomputes the camera delay comment and pushes it
-		// to the open SODIS dialog (if any) whenever the entries change.
+		// updateCameraDelay persists current values and recomputes the camera
+		// delay comment, pushing it to the open SODIS dialog (if any).
 		updateCameraDelay := func() {
+			prefs.SetString("imageAcqCameraName", cameraNameEntry.Text)
+			prefs.SetString("imageAcqDelay", acqDelayEntry.Text)
+			prefs.SetString("imageAcqRowDelta", rowDeltaEntry.Text)
+			sessionStarRow = starRowEntry.Text
+
 			acqDelayMs, err1 := strconv.ParseFloat(strings.TrimSpace(acqDelayEntry.Text), 64)
 			starRow, err2 := strconv.ParseFloat(strings.TrimSpace(starRowEntry.Text), 64)
 			rowDeltaMs, err3 := strconv.ParseFloat(strings.TrimSpace(rowDeltaEntry.Text), 64)
-			if err1 != nil || err2 != nil || err3 != nil {
-				return
+			var cameraDelayMs float64
+			if err1 == nil && err3 == nil && err2 == nil {
+				cameraDelayMs = acqDelayMs + starRow*rowDeltaMs
 			}
-			cameraDelayMs := acqDelayMs + starRow*rowDeltaMs
 			comment := fmt.Sprintf(
 				"edge times reported with cameraDelay = %.2f ms subtracted\n"+
 					"(acquisitionDelay=%.3f ms + starRow=%.1f * rowDelta=%.6f ms)",
@@ -2773,7 +2784,7 @@ func main() {
 			{Text: "Camera name (optional)", Widget: cameraNameEntry},
 			{Text: "Acquisition delay (msecs)", Widget: acqDelayEntry},
 			{Text: "star row position at occultation", Widget: starRowEntry},
-			{Text: "row-to-row time delta (ms)", Widget: rowDeltaEntry},
+			{Text: "row-to-row time delta (msecs)", Widget: rowDeltaEntry},
 		}
 		dlg := dialog.NewForm("Image Acquisition Timing", "OK", "Cancel", formItems, func(ok bool) {
 			if !ok {
@@ -2783,7 +2794,6 @@ func main() {
 			prefs.SetString("imageAcqDelay", acqDelayEntry.Text)
 			prefs.SetString("imageAcqRowDelta", rowDeltaEntry.Text)
 			sessionStarRow = starRowEntry.Text
-			prefs.SetString("imageAcqStarRow", starRowEntry.Text)
 		}, w)
 		dlg.Resize(fyne.NewSize(450, 250))
 		dlg.Show()

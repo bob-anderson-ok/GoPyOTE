@@ -578,33 +578,46 @@ type cameraDelayInfo struct {
 func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayInfo {
 	prefs := fyne.CurrentApp().Preferences()
 	acqDelayStr := prefs.String("imageAcqDelay")
-	starRowStr := prefs.String("imageAcqStarRow")
+	starRowStr := sessionStarRow
 	rowDeltaStr := prefs.String("imageAcqRowDelta")
-	if acqDelayStr == "" || starRowStr == "" || rowDeltaStr == "" {
-		return nil
+	var acqDelayMs, starRow, rowDeltaMs float64
+	if acqDelayStr != "" {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(acqDelayStr), 64); err == nil {
+			acqDelayMs = v
+		}
 	}
-	acqDelayMs, err1 := strconv.ParseFloat(strings.TrimSpace(acqDelayStr), 64)
-	starRow, err2 := strconv.ParseFloat(strings.TrimSpace(starRowStr), 64)
-	rowDeltaMs, err3 := strconv.ParseFloat(strings.TrimSpace(rowDeltaStr), 64)
-	if err1 != nil || err2 != nil || err3 != nil {
-		return nil
+	if starRowStr != "" {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(starRowStr), 64); err == nil {
+			starRow = v
+		}
 	}
-	delayMs := acqDelayMs + starRow*rowDeltaMs
+	if rowDeltaStr != "" {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(rowDeltaStr), 64); err == nil {
+			rowDeltaMs = v
+		}
+	}
+	var delayMs float64
+	if starRowStr != "" {
+		delayMs = acqDelayMs + starRow*rowDeltaMs
+	}
 	delaySecs := delayMs / 1000.0
 
-	report := fmt.Sprintf(
-		"edge times reported with cameraDelay = %.2f ms subtracted\n"+
-			"(acquisitionDelay=%.3f ms + starRow=%.1f * rowDelta=%.6f ms)",
-		delayMs, acqDelayMs, starRow, rowDeltaMs)
-	cameraName := prefs.String("imageAcqCameraName")
-	if cameraName != "" {
-		report += fmt.Sprintf(" [camera: %s]", cameraName)
-	}
-	for i, t := range edgeTimes {
-		orig := formatSecondsAsTimestamp(t)
-		corr := formatSecondsAsTimestamp(t - delaySecs)
-		label := edgeLabels[i]
-		report += fmt.Sprintf("\n%s: %s - %.2f ms = %s", label, orig, delayMs, corr)
+	var report string
+	if starRowStr != "" {
+		report = fmt.Sprintf(
+			"edge times reported with cameraDelay = %.2f ms subtracted\n"+
+				"(acquisitionDelay=%.3f ms + starRow=%.1f * rowDelta=%.6f ms)",
+			delayMs, acqDelayMs, starRow, rowDeltaMs)
+		cameraName := prefs.String("imageAcqCameraName")
+		if cameraName != "" {
+			report += fmt.Sprintf(" [camera: %s]", cameraName)
+		}
+		for i, t := range edgeTimes {
+			orig := formatSecondsAsTimestamp(t)
+			corr := formatSecondsAsTimestamp(t - delaySecs)
+			label := edgeLabels[i]
+			report += fmt.Sprintf("\n%s: %s - %.2f ms = %s", label, orig, delayMs, corr)
+		}
 	}
 	return &cameraDelayInfo{delaySecs: delaySecs, delayMs: delayMs, report: report}
 }

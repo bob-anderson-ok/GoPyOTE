@@ -1158,9 +1158,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				if mcFitParams.MainBody.MajorAxisKm > 0 {
 					msg += fmt.Sprintf("\n  Main body major axis diameter: %.3f km\n", mcFitParams.MainBody.MajorAxisKm)
 				}
-				if mcFitParams.StarDiamOnPlaneMas > 0 {
-					msg += fmt.Sprintf("  Star diameter on plane: %.3f mas\n", mcFitParams.StarDiamOnPlaneMas)
-				}
+				msg += fmt.Sprintf("  Star diameter on plane: %.3f mas\n", mcFitParams.StarDiamOnPlaneMas)
 				fmt.Print(msg)
 
 				// Log Monte Carlo results
