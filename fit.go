@@ -658,7 +658,7 @@ func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayIn
 	}
 	var delayMs float64
 	if starRowStr != "" {
-		delayMs = acqDelayMs + starRow*rowDeltaMs
+		delayMs = acqDelayMs - starRow*rowDeltaMs
 	}
 	delaySecs := delayMs / 1000.0
 
@@ -666,7 +666,7 @@ func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayIn
 	if starRowStr != "" {
 		report = fmt.Sprintf(
 			"edge times reported with cameraDelay = %.2f ms subtracted\n"+
-				"(acquisitionDelay=%.3f ms + starRow=%.1f * rowDelta=%.6f ms)",
+				"(acquisitionDelay=%.3f ms - starRow=%.1f * rowDelta=%.6f ms)",
 			delayMs, acqDelayMs, starRow, rowDeltaMs)
 		cameraName := prefs.String("imageAcqCameraName")
 		if cameraName != "" {
