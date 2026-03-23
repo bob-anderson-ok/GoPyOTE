@@ -177,14 +177,14 @@ func ShowUpdateDialogTwoPane(parent fyne.Window) {
 		nil,
 		container.NewVScroll(
 			container.NewVBox(
+				widget.NewLabel("Release notes"),
+				notes,
+				widget.NewSeparator(),
 				widget.NewLabel("Metadata"),
 				meta,
 				widget.NewSeparator(),
 				widget.NewLabel("Assets"),
 				assetsBox,
-				widget.NewSeparator(),
-				widget.NewLabel("Release notes"),
-				notes,
 			),
 		),
 	)
@@ -251,7 +251,7 @@ func ShowUpdateDialogTwoPane(parent fyne.Window) {
 	refreshBtn.OnTapped = loadReleases
 
 	d := dialog.NewCustomConfirm(
-		"Install Version",
+		fmt.Sprintf("Install Version  (Currently installed version: %s)", CurrentVersion),
 		"Install Selected",
 		"Cancel",
 		split,

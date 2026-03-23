@@ -740,22 +740,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					}
 				}
 			}
-			if !trimPerformed {
-				noBtn := widget.NewButton("No", nil)
-				noBtn.Importance = widget.HighImportance
-				yesBtn := widget.NewButton("Yes, run anyway", nil)
-				trimDlg := dialog.NewCustom("Trim not set",
-					"",
-					container.NewVBox(
-						widget.NewLabel("A Set trim operation is recommended before running a fit search.\n\nDo you want to run anyway?"),
-						container.NewHBox(layout.NewSpacer(), noBtn, yesBtn),
-					), w)
-				noBtn.OnTapped = func() { trimDlg.Hide() }
-				yesBtn.OnTapped = func() { trimDlg.Hide(); runFitBody() }
-				trimDlg.Show()
-			} else {
-				runFitBody()
-			}
+			runFitBody()
 		}
 	})
 	fitBtn.Importance = widget.HighImportance
@@ -1021,281 +1006,260 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			dialog.ShowError(fmt.Errorf("number of Monte Carlo trials must be a positive integer"), w)
 			return
 		}
-		// Capture all fit state on the main thread before launching the goroutine.
-		// This ensures MC always uses the candidates and fit result that were in
-		// place when the user clicked Run Monte Carlo, regardless of any concurrent
-		// changes (e.g., a new fit started during the MC run).
-		mcCandidates := lastFitCandidates
-		if mcNarrowSearchCheck.Checked && len(mcCandidates) > 41 {
-			center := lastFitBestIdx
-			lo := center - 20
-			if lo < 0 {
-				lo = 0
-			}
-			hi := center + 20 + 1 // exclusive upper bound
-			if hi > len(mcCandidates) {
-				hi = len(mcCandidates)
-			}
-			mcCandidates = mcCandidates[lo:hi]
-			logAction(fmt.Sprintf("MC narrow search: using %d candidates (indices %d–%d) around best offset at index %d", len(mcCandidates), lo, hi-1, center))
-		}
-		mcFitParams := lastFitParams
-		// Re-extract target data from the current trim range so that the user can
-		// adjust the trim after the fit search and have MC honor it.
-		var displayedColIdx int
-		for k := range ac.displayedCurves {
-			displayedColIdx = k
-			break
-		}
-		col := loadedLightCurveData.Columns[displayedColIdx]
-		var mcTargetTimes, mcTargetValues []float64
-		for i, val := range col.Values {
-			frameNum := loadedLightCurveData.FrameNumbers[i]
-			if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
-				continue
-			}
-			if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
-				continue
-			}
-			mcTargetTimes = append(mcTargetTimes, loadedLightCurveData.TimeValues[i])
-			mcTargetValues = append(mcTargetValues, val)
-		}
-		if len(mcTargetTimes) < 2 {
-			dialog.ShowError(fmt.Errorf("not enough data points in current trim range for Monte Carlo"), w)
+		if len(lastFitResult.edgeTimes) != 2 {
+			dialog.ShowError(fmt.Errorf("a Monte Carlo run requires exactly 2 edges from the fit search, but %d were found", len(lastFitResult.edgeTimes)), w)
 			return
 		}
-		// Resample the best-fit theoretical curve at the current trim target times
-		// so that MC noise injection and refitting use only the trimmed range.
-		bestPC := lastFitCandidates[lastFitBestIdx]
-		trimmedSampledVals := make([]float64, len(mcTargetTimes))
-		for i, t := range mcTargetTimes {
-			localT := t - lastFitResult.bestShift
-			if localT < 0 || localT > bestPC.duration {
-				trimmedSampledVals[i] = 1.0
-			} else {
-				trimmedSampledVals[i] = interpolateAt(bestPC.curve, bestPC.curveTimes, localT)
+		runMCBody := func() {
+			// Capture all fit state on the main thread before launching the goroutine.
+			// This ensures MC always uses the candidates and fit result that were in
+			// place when the user clicked Run Monte Carlo, regardless of any concurrent
+			// changes (e.g., a new fit started during the MC run).
+			mcCandidates := lastFitCandidates
+			if mcNarrowSearchCheck.Checked && len(mcCandidates) > 41 {
+				center := lastFitBestIdx
+				lo := center - 20
+				if lo < 0 {
+					lo = 0
+				}
+				hi := center + 20 + 1 // exclusive upper bound
+				if hi > len(mcCandidates) {
+					hi = len(mcCandidates)
+				}
+				mcCandidates = mcCandidates[lo:hi]
+				logAction(fmt.Sprintf("MC narrow search: using %d candidates (indices %d–%d) around best offset at index %d", len(mcCandidates), lo, hi-1, center))
 			}
-		}
-		mcFitResult := &fitResult{
-			curve:        lastFitResult.curve,
-			edgeTimes:    lastFitResult.edgeTimes,
-			nccCurve:     lastFitResult.nccCurve,
-			bestNCC:      lastFitResult.bestNCC,
-			bestShift:    lastFitResult.bestShift,
-			sampledTimes: mcTargetTimes,
-			sampledVals:  trimmedSampledVals,
-			bestScale:    lastFitResult.bestScale,
-		}
-		mcNoiseSigma := noiseSigma
-		mcTitle := lastDiffractionTitle
-		logAction(fmt.Sprintf("Run Monte Carlo: %d candidate curves from fit search, noise sigma=%.6f, trim range %.0f–%.0f", len(mcCandidates), mcNoiseSigma, ac.frameRangeStart, ac.frameRangeEnd))
-		mcProgressBar.SetValue(0)
-		mcProgressBar.Show()
-		mcBtn.Disable()
-		mcAbortFlag.Store(false)
-		mcAbortBtn.Show()
-		mcAbortBtn.Enable()
-		go func() {
-			// Yield for two Fyne render frames (~32 ms at 60 fps) before starting trials.
-			// Without this, a fast MC run can post fyne.Do(Hide) to the event queue
-			// before the Show() calls above have been rendered, making the progress bar
-			// and Abort button appear to never show up (rare race condition).
-			time.Sleep(32 * time.Millisecond)
-			// Pass AR parameters when "Use correlated noise" is checked.
-			var mcArPhi []float64
-			var mcArSigma2 float64
-			if ac.useCorrelatedNoise && len(ac.arPhi) > 0 {
-				mcArPhi = ac.arPhi
-				mcArSigma2 = ac.arSigma2
-				logAction("Monte Carlo: using correlated AR noise")
+			mcFitParams := lastFitParams
+			// Re-extract target data from the current trim range so that the user can
+			// adjust the trim after the fit search and have MC honor it.
+			var displayedColIdx int
+			for k := range ac.displayedCurves {
+				displayedColIdx = k
+				break
 			}
-			result, err := runMonteCarloTrials(mcCandidates, mcFitResult, mcNoiseSigma, numTrials, mcArPhi, mcArSigma2, &mcAbortFlag, func(progress float64) {
-				fyne.Do(func() {
-					mcProgressBar.SetValue(progress)
-				})
-			})
-			fyne.Do(func() {
-				mcProgressBar.Hide()
-				mcAbortBtn.Hide()
-				mcBtn.Enable()
-				if err != nil {
-					dialog.ShowError(err, w)
-					return
+			col := loadedLightCurveData.Columns[displayedColIdx]
+			var mcTargetTimes, mcTargetValues []float64
+			for i, val := range col.Values {
+				frameNum := loadedLightCurveData.FrameNumbers[i]
+				if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
+					continue
 				}
-				lastMCResult = result
-				mcBtn.Importance = widget.WarningImportance
-				mcBtn.Refresh()
-				msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
-				// Compute camera delay from Image Acquisition Timing preferences
-				mcEdgeAbsTimes := make([]float64, 0, result.numEdges)
-				mcEdgeLabels := make([]string, 0, result.numEdges)
-				for i := 0; i < result.numEdges && i < len(mcFitResult.edgeTimes); i++ {
-					mcEdgeAbsTimes = append(mcEdgeAbsTimes, mcFitResult.edgeTimes[i]+mcFitResult.bestShift)
-					mcEdgeLabels = append(mcEdgeLabels, fmt.Sprintf("Edge %d", i+1))
+				if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
+					continue
 				}
-				mcCD := computeCameraDelay(mcEdgeLabels, mcEdgeAbsTimes)
-				for i := 0; i < result.numEdges && i < len(mcFitResult.edgeTimes); i++ {
-					absTime := mcEdgeAbsTimes[i]
-					ts := formatSecondsAsTimestamp(absTime)
-					if mcCD != nil {
-						corrected := formatSecondsAsTimestamp(absTime - mcCD.delaySecs)
-						msg += fmt.Sprintf("  Edge %d: %s - (cameraDelay=%.2f ms) = %s +/- %.4f sec (3 sigma)\n", i+1, ts, mcCD.delayMs, corrected, 3*result.edgeStds[i])
-					} else {
-						msg += fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)\n", i+1, ts, 3*result.edgeStds[i])
-					}
-				}
-				if result.numEdges == 2 {
-					fitDuration := math.Abs(mcFitResult.edgeTimes[1] - mcFitResult.edgeTimes[0])
-					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
-					msg += fmt.Sprintf("\n  Duration: %.4f +/- %.4f sec (3 sigma)\n", fitDuration, 3*durationStd)
-					shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
-					if shadowSpeed > 0 {
-						chordKm := fitDuration * shadowSpeed
-						chordStdKm := 3 * durationStd * shadowSpeed
-						msg += fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]\n", chordKm, chordStdKm, shadowSpeed)
-					}
-				}
-				if mcFitParams.MainBody.MajorAxisKm > 0 {
-					msg += fmt.Sprintf("\n  Main body major axis diameter: %.3f km\n", mcFitParams.MainBody.MajorAxisKm)
-				}
-				msg += fmt.Sprintf("  Star diameter on plane: %.3f mas\n", mcFitParams.StarDiamOnPlaneMas)
-				fmt.Print(msg)
-
-				// Log Monte Carlo results
-				logAction(fmt.Sprintf("Monte Carlo results (%d trials):", result.numTrials))
-				for i := 0; i < result.numEdges; i++ {
-					logAction(fmt.Sprintf("  Edge %d: mean=%.4f sec, 3 sigma=%.4f sec", i+1, result.edgeMeans[i], 3*result.edgeStds[i]))
-				}
-				if result.numEdges == 2 {
-					durationMean := math.Abs(result.edgeMeans[1] - result.edgeMeans[0])
-					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
-					logAction(fmt.Sprintf("  Duration: mean=%.4f sec, 3 sigma=%.4f sec", durationMean, 3*durationStd))
-					shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
-					if shadowSpeed > 0 {
-						chordKm := durationMean * shadowSpeed
-						chordStdKm := 3 * durationStd * shadowSpeed
-						logAction(fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]", chordKm, chordStdKm, shadowSpeed))
-					}
-				}
-
-				// Final report: fit edge times (as timestamps) with MC uncertainty
-				logAction("--- Final Report ---")
-				logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", mcFitResult.bestNCC, mcFitParams.PathPerpendicularOffsetKm))
-				if mcFitResult.bestScale > 0 {
-					effectiveDrop := mcFitResult.bestScale * 100.0
-					if mcFitParams.PercentMagDrop > 0 {
-						effectiveDrop = effectiveDrop * float64(mcFitParams.PercentMagDrop) / 100
-					}
-					logAction(fmt.Sprintf("  Percent drop: %.2f%%", effectiveDrop))
-				}
-				if lastCsvExposureSecs > 0 {
-					logAction(fmt.Sprintf("  Camera exposure time: %.6f seconds", lastCsvExposureSecs))
+				mcTargetTimes = append(mcTargetTimes, loadedLightCurveData.TimeValues[i])
+				mcTargetValues = append(mcTargetValues, val)
+			}
+			if len(mcTargetTimes) < 2 {
+				dialog.ShowError(fmt.Errorf("not enough data points in current trim range for Monte Carlo"), w)
+				return
+			}
+			// Resample the best-fit theoretical curve at the current trim target times
+			// so that MC noise injection and refitting use only the trimmed range.
+			bestPC := lastFitCandidates[lastFitBestIdx]
+			trimmedSampledVals := make([]float64, len(mcTargetTimes))
+			for i, t := range mcTargetTimes {
+				localT := t - lastFitResult.bestShift
+				if localT < 0 || localT > bestPC.duration {
+					trimmedSampledVals[i] = 1.0
 				} else {
-					logAction("  Camera exposure time: not set")
+					trimmedSampledVals[i] = interpolateAt(bestPC.curve, bestPC.curveTimes, localT)
 				}
-				for i, et := range mcFitResult.edgeTimes {
-					absTime := et + mcFitResult.bestShift
-					ts := formatSecondsAsTimestamp(absTime)
-					if i < result.numEdges {
-						logAction(fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)", i+1, ts, 3*result.edgeStds[i]))
-					} else {
-						logAction(fmt.Sprintf("  Edge %d: %s", i+1, ts))
-					}
+			}
+			mcFitResult := &fitResult{
+				curve:        lastFitResult.curve,
+				edgeTimes:    lastFitResult.edgeTimes,
+				nccCurve:     lastFitResult.nccCurve,
+				bestNCC:      lastFitResult.bestNCC,
+				bestShift:    lastFitResult.bestShift,
+				sampledTimes: mcTargetTimes,
+				sampledVals:  trimmedSampledVals,
+				bestScale:    lastFitResult.bestScale,
+			}
+			mcNoiseSigma := noiseSigma
+			mcTitle := lastDiffractionTitle
+			logAction(fmt.Sprintf("Run Monte Carlo: %d candidate curves from fit search, noise sigma=%.6f, trim range %.0f–%.0f", len(mcCandidates), mcNoiseSigma, ac.frameRangeStart, ac.frameRangeEnd))
+			mcProgressBar.SetValue(0)
+			mcProgressBar.Show()
+			mcBtn.Disable()
+			mcAbortFlag.Store(false)
+			mcAbortBtn.Show()
+			mcAbortBtn.Enable()
+			go func() {
+				// Yield for two Fyne render frames (~32 ms at 60 fps) before starting trials.
+				// Without this, a fast MC run can post fyne.Do(Hide) to the event queue
+				// before the Show() calls above have been rendered, making the progress bar
+				// and Abort button appear to never show up (rare race condition).
+				time.Sleep(32 * time.Millisecond)
+				// Pass AR parameters when "Use correlated noise" is checked.
+				var mcArPhi []float64
+				var mcArSigma2 float64
+				if ac.useCorrelatedNoise && len(ac.arPhi) > 0 {
+					mcArPhi = ac.arPhi
+					mcArSigma2 = ac.arSigma2
+					logAction("Monte Carlo: using correlated AR noise")
 				}
-				if len(mcFitResult.edgeTimes) == 2 && result.numEdges == 2 {
-					fitDuration := math.Abs((mcFitResult.edgeTimes[1] + mcFitResult.bestShift) - (mcFitResult.edgeTimes[0] + mcFitResult.bestShift))
-					durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
-					logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec (3 sigma)", fitDuration, 3*durationStd))
-					shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
-					if shadowSpeed > 0 {
-						chordKm := fitDuration * shadowSpeed
-						chordStdKm := 3 * durationStd * shadowSpeed
-						logAction(fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]", chordKm, chordStdKm, shadowSpeed))
+				result, err := runMonteCarloTrials(mcCandidates, mcFitResult, mcNoiseSigma, numTrials, mcArPhi, mcArSigma2, &mcAbortFlag, func(progress float64) {
+					fyne.Do(func() {
+						mcProgressBar.SetValue(progress)
+					})
+				})
+				fyne.Do(func() {
+					mcProgressBar.Hide()
+					mcAbortBtn.Hide()
+					mcBtn.Enable()
+					if err != nil {
+						dialog.ShowError(err, w)
+						return
 					}
-				}
-				logAction("--- End Report ---")
-
-				summaryLabel := widget.NewLabel(msg)
-				summaryLabel.Wrapping = fyne.TextWrapWord
-
-				var mcContainer *fyne.Container
-				if ac.showDiagnostics {
-					// Show individual trial edge times (max 100)
-					trialsMsg := "Individual trial edge times:\n"
-					numCompleted := 0
-					if result.numEdges > 0 {
-						numCompleted = len(result.edgeAll[0])
+					lastMCResult = result
+					mcBtn.Importance = widget.WarningImportance
+					mcBtn.Refresh()
+					msg := fmt.Sprintf("Monte Carlo results (%d trials):\n\n", result.numTrials)
+					// Compute camera delay from Image Acquisition Timing preferences
+					mcEdgeAbsTimes := make([]float64, 0, result.numEdges)
+					mcEdgeLabels := make([]string, 0, result.numEdges)
+					for i := 0; i < result.numEdges && i < len(mcFitResult.edgeTimes); i++ {
+						mcEdgeAbsTimes = append(mcEdgeAbsTimes, mcFitResult.edgeTimes[i]+mcFitResult.bestShift)
+						mcEdgeLabels = append(mcEdgeLabels, fmt.Sprintf("Edge %d", i+1))
 					}
-					maxDisplay := numCompleted
-					if maxDisplay > 100 {
-						maxDisplay = 100
-					}
-					for t := 0; t < maxDisplay; t++ {
-						trialsMsg += fmt.Sprintf("  Trial %3d:", t+1)
-						for i := 0; i < result.numEdges; i++ {
-							trialsMsg += fmt.Sprintf("  Edge %d=%.4f", i+1, result.edgeAll[i][t])
-						}
-						if result.numEdges == 2 {
-							trialsMsg += fmt.Sprintf("  Dur=%.4f", math.Abs(result.edgeAll[1][t]-result.edgeAll[0][t]))
-						}
-						if t < len(result.pathOffsets) {
-							trialsMsg += fmt.Sprintf("  Path=%.3f km", result.pathOffsets[t])
-						}
-						trialsMsg += "\n"
-					}
-					if numCompleted > 100 {
-						trialsMsg += fmt.Sprintf("  ... (%d more trials not shown)\n", numCompleted-100)
-					}
-					fmt.Print(trialsMsg)
-					trialsLabel := widget.NewLabel(trialsMsg)
-					trialsLabel.TextStyle.Monospace = true
-					trialsScroll := container.NewScroll(trialsLabel)
-					trialsScroll.SetMinSize(fyne.NewSize(750, 300))
-					mcContainer = container.NewVBox(summaryLabel, trialsScroll)
-
-					// Show edge and duration histograms
-					for i := 0; i < result.numEdges; i++ {
-						if len(result.edgeAll[i]) < 2 {
-							continue
-						}
-						histImg, err := createHistogramImage(
-							result.edgeAll[i],
-							fmt.Sprintf("Edge %d Times", i+1),
-							"Time (seconds)",
-							mcTitle,
-							900, 500,
-						)
-						if err != nil {
-							fmt.Printf("Failed to create Edge %d histogram: %v", i+1, err)
-							continue
-						}
-						histWin := a.NewWindow(fmt.Sprintf("Monte Carlo — Edge %d Histogram", i+1))
-						histCanvas := canvas.NewImageFromImage(histImg)
-						histCanvas.FillMode = canvas.ImageFillContain
-						histWin.SetContent(histCanvas)
-						histWin.Resize(fyne.NewSize(950, 550))
-						histWin.CenterOnScreen()
-						safeShowWindow(histWin)
-					}
-
-					// Show duration histogram if 2 edges
-					if result.numEdges == 2 && len(result.edgeAll[0]) >= 2 {
-						n := len(result.edgeAll[0])
-						durations := make([]float64, n)
-						for t := 0; t < n; t++ {
-							durations[t] = math.Abs(result.edgeAll[1][t] - result.edgeAll[0][t])
-						}
-						histImg, err := createHistogramImage(
-							durations,
-							"Event Duration",
-							"Duration (seconds)",
-							mcTitle,
-							900, 500,
-						)
-						if err != nil {
-							fmt.Printf("Failed to create duration histogram: %v", err)
+					mcCD := computeCameraDelay(mcEdgeLabels, mcEdgeAbsTimes)
+					for i := 0; i < result.numEdges && i < len(mcFitResult.edgeTimes); i++ {
+						absTime := mcEdgeAbsTimes[i]
+						ts := formatSecondsAsTimestamp(absTime)
+						if mcCD != nil {
+							corrected := formatSecondsAsTimestamp(absTime - mcCD.delaySecs)
+							msg += fmt.Sprintf("  Edge %d: %s - (cameraDelay=%.2f ms) = %s +/- %.4f sec (3 sigma)\n", i+1, ts, mcCD.delayMs, corrected, 3*result.edgeStds[i])
 						} else {
-							histWin := a.NewWindow("Monte Carlo — Duration Histogram")
+							msg += fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)\n", i+1, ts, 3*result.edgeStds[i])
+						}
+					}
+					if result.numEdges == 2 {
+						fitDuration := math.Abs(mcFitResult.edgeTimes[1] - mcFitResult.edgeTimes[0])
+						durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+						msg += fmt.Sprintf("\n  Duration: %.4f +/- %.4f sec (3 sigma)\n", fitDuration, 3*durationStd)
+						shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
+						if shadowSpeed > 0 {
+							chordKm := fitDuration * shadowSpeed
+							chordStdKm := 3 * durationStd * shadowSpeed
+							msg += fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]\n", chordKm, chordStdKm, shadowSpeed)
+						}
+					}
+					if mcFitParams.MainBody.MajorAxisKm > 0 {
+						msg += fmt.Sprintf("\n  Main body major axis diameter: %.3f km\n", mcFitParams.MainBody.MajorAxisKm)
+					}
+					msg += fmt.Sprintf("  Star diameter on plane: %.3f mas\n", mcFitParams.StarDiamOnPlaneMas)
+					fmt.Print(msg)
+
+					// Log Monte Carlo results
+					logAction(fmt.Sprintf("Monte Carlo results (%d trials):", result.numTrials))
+					for i := 0; i < result.numEdges; i++ {
+						logAction(fmt.Sprintf("  Edge %d: mean=%.4f sec, 3 sigma=%.4f sec", i+1, result.edgeMeans[i], 3*result.edgeStds[i]))
+					}
+					if result.numEdges == 2 {
+						durationMean := math.Abs(result.edgeMeans[1] - result.edgeMeans[0])
+						durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+						logAction(fmt.Sprintf("  Duration: mean=%.4f sec, 3 sigma=%.4f sec", durationMean, 3*durationStd))
+						shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
+						if shadowSpeed > 0 {
+							chordKm := durationMean * shadowSpeed
+							chordStdKm := 3 * durationStd * shadowSpeed
+							logAction(fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]", chordKm, chordStdKm, shadowSpeed))
+						}
+					}
+
+					// Final report: fit edge times (as timestamps) with MC uncertainty
+					logAction("--- Final Report ---")
+					logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", mcFitResult.bestNCC, mcFitParams.PathPerpendicularOffsetKm))
+					if mcFitResult.bestScale > 0 {
+						effectiveDrop := mcFitResult.bestScale * 100.0
+						if mcFitParams.PercentMagDrop > 0 {
+							effectiveDrop = effectiveDrop * float64(mcFitParams.PercentMagDrop) / 100
+						}
+						logAction(fmt.Sprintf("  Percent drop: %.2f%%", effectiveDrop))
+					}
+					if lastCsvExposureSecs > 0 {
+						logAction(fmt.Sprintf("  Camera exposure time: %.6f seconds", lastCsvExposureSecs))
+					} else {
+						logAction("  Camera exposure time: not set")
+					}
+					for i, et := range mcFitResult.edgeTimes {
+						absTime := et + mcFitResult.bestShift
+						ts := formatSecondsAsTimestamp(absTime)
+						if i < result.numEdges {
+							logAction(fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)", i+1, ts, 3*result.edgeStds[i]))
+						} else {
+							logAction(fmt.Sprintf("  Edge %d: %s", i+1, ts))
+						}
+					}
+					if len(mcFitResult.edgeTimes) == 2 && result.numEdges == 2 {
+						fitDuration := math.Abs((mcFitResult.edgeTimes[1] + mcFitResult.bestShift) - (mcFitResult.edgeTimes[0] + mcFitResult.bestShift))
+						durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+						logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec (3 sigma)", fitDuration, 3*durationStd))
+						shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
+						if shadowSpeed > 0 {
+							chordKm := fitDuration * shadowSpeed
+							chordStdKm := 3 * durationStd * shadowSpeed
+							logAction(fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]", chordKm, chordStdKm, shadowSpeed))
+						}
+					}
+					logAction("--- End Report ---")
+
+					summaryLabel := widget.NewLabel(msg)
+					summaryLabel.Wrapping = fyne.TextWrapWord
+
+					var mcContainer *fyne.Container
+					if ac.showDiagnostics {
+						// Show individual trial edge times (max 100)
+						trialsMsg := "Individual trial edge times:\n"
+						numCompleted := 0
+						if result.numEdges > 0 {
+							numCompleted = len(result.edgeAll[0])
+						}
+						maxDisplay := numCompleted
+						if maxDisplay > 100 {
+							maxDisplay = 100
+						}
+						for t := 0; t < maxDisplay; t++ {
+							trialsMsg += fmt.Sprintf("  Trial %3d:", t+1)
+							for i := 0; i < result.numEdges; i++ {
+								trialsMsg += fmt.Sprintf("  Edge %d=%.4f", i+1, result.edgeAll[i][t])
+							}
+							if result.numEdges == 2 {
+								trialsMsg += fmt.Sprintf("  Dur=%.4f", math.Abs(result.edgeAll[1][t]-result.edgeAll[0][t]))
+							}
+							if t < len(result.pathOffsets) {
+								trialsMsg += fmt.Sprintf("  Path=%.3f km", result.pathOffsets[t])
+							}
+							trialsMsg += "\n"
+						}
+						if numCompleted > 100 {
+							trialsMsg += fmt.Sprintf("  ... (%d more trials not shown)\n", numCompleted-100)
+						}
+						fmt.Print(trialsMsg)
+						trialsLabel := widget.NewLabel(trialsMsg)
+						trialsLabel.TextStyle.Monospace = true
+						trialsScroll := container.NewScroll(trialsLabel)
+						trialsScroll.SetMinSize(fyne.NewSize(750, 300))
+						mcContainer = container.NewVBox(summaryLabel, trialsScroll)
+
+						// Show edge and duration histograms
+						for i := 0; i < result.numEdges; i++ {
+							if len(result.edgeAll[i]) < 2 {
+								continue
+							}
+							histImg, err := createHistogramImage(
+								result.edgeAll[i],
+								fmt.Sprintf("Edge %d Times", i+1),
+								"Time (seconds)",
+								mcTitle,
+								900, 500,
+							)
+							if err != nil {
+								fmt.Printf("Failed to create Edge %d histogram: %v", i+1, err)
+								continue
+							}
+							histWin := a.NewWindow(fmt.Sprintf("Monte Carlo — Edge %d Histogram", i+1))
 							histCanvas := canvas.NewImageFromImage(histImg)
 							histCanvas.FillMode = canvas.ImageFillContain
 							histWin.SetContent(histCanvas)
@@ -1303,74 +1267,117 @@ func buildFitTab(ac *appContext) *container.TabItem {
 							histWin.CenterOnScreen()
 							safeShowWindow(histWin)
 						}
-					}
-				} else {
-					mcSpacer := canvas.NewRectangle(color.Transparent)
-					mcSpacer.SetMinSize(fyne.NewSize(750, 0))
-					mcContainer = container.NewVBox(mcSpacer, summaryLabel)
-				}
-				mcResultWin := a.NewWindow("Monte Carlo Edge Time Uncertainty")
-				mcResultWin.SetContent(container.NewScroll(container.NewPadded(mcContainer)))
-				mcResultWin.Resize(fyne.NewSize(800, 400))
-				mcResultWin.CenterOnScreen()
-				safeShowWindow(mcResultWin)
-				// Create a fit overlay plot with ±3σ edge uncertainty lines, using the
-				// scale-adjusted theoretical curve (bestScale from the post-fit scale search).
-				if len(mcTargetTimes) > 0 && len(mcTargetValues) > 0 {
-					mcScale := mcFitResult.bestScale
-					if mcScale == 0 {
-						mcScale = 1.0
-					}
-					mcScaledCurve := make([]timeIntensityPoint, len(mcFitResult.curve))
-					for i, pt := range mcFitResult.curve {
-						mcScaledCurve[i] = timeIntensityPoint{
-							time:      pt.time,
-							intensity: pt.intensity*mcScale + (1.0 - mcScale),
+
+						// Show duration histogram if 2 edges
+						if result.numEdges == 2 && len(result.edgeAll[0]) >= 2 {
+							n := len(result.edgeAll[0])
+							durations := make([]float64, n)
+							for t := 0; t < n; t++ {
+								durations[t] = math.Abs(result.edgeAll[1][t] - result.edgeAll[0][t])
+							}
+							histImg, err := createHistogramImage(
+								durations,
+								"Event Duration",
+								"Duration (seconds)",
+								mcTitle,
+								900, 500,
+							)
+							if err != nil {
+								fmt.Printf("Failed to create duration histogram: %v", err)
+							} else {
+								histWin := a.NewWindow("Monte Carlo — Duration Histogram")
+								histCanvas := canvas.NewImageFromImage(histImg)
+								histCanvas.FillMode = canvas.ImageFillContain
+								histWin.SetContent(histCanvas)
+								histWin.Resize(fyne.NewSize(950, 550))
+								histWin.CenterOnScreen()
+								safeShowWindow(histWin)
+							}
 						}
-					}
-					mcScaledSampledVals := make([]float64, len(mcFitResult.sampledVals))
-					for i, v := range mcFitResult.sampledVals {
-						mcScaledSampledVals[i] = v*mcScale + (1.0 - mcScale)
-					}
-					mcOverlayTitle := mcTitle
-					if mcOverlayTitle != "" {
-						mcOverlayTitle += fmt.Sprintf("  path offset=%.3f km", mcFitParams.PathPerpendicularOffsetKm)
-					}
-					if len(mcArPhi) > 0 {
-						mcOverlayTitle += "  (correlated noise)"
 					} else {
-						mcOverlayTitle += "  (uncorrelated noise)"
+						mcSpacer := canvas.NewRectangle(color.Transparent)
+						mcSpacer.SetMinSize(fyne.NewSize(750, 0))
+						mcContainer = container.NewVBox(mcSpacer, summaryLabel)
 					}
-					mcOverlayImg, err := createOverlayPlotImage(mcScaledCurve, mcFitResult.bestShift, mcFitResult.edgeTimes, mcTargetTimes, mcTargetValues, mcFitResult.sampledTimes, mcScaledSampledVals, mcOverlayTitle, 1200, 500, result.edgeStds)
-					if err != nil {
-						fmt.Printf("Failed to create MC overlay plot: %v\n", err)
-					} else {
-						// Save to the results folder
-						savePath := filepath.Join(appDir, "fitPlotMC.png")
-						if resultsFolder != "" {
-							savePath = filepath.Join(resultsFolder, "fitPlotMC.png")
+					mcResultWin := a.NewWindow("Monte Carlo Edge Time Uncertainty")
+					mcResultWin.SetContent(container.NewScroll(container.NewPadded(mcContainer)))
+					mcResultWin.Resize(fyne.NewSize(800, 400))
+					mcResultWin.CenterOnScreen()
+					safeShowWindow(mcResultWin)
+					// Create a fit overlay plot with ±3σ edge uncertainty lines, using the
+					// scale-adjusted theoretical curve (bestScale from the post-fit scale search).
+					if len(mcTargetTimes) > 0 && len(mcTargetValues) > 0 {
+						mcScale := mcFitResult.bestScale
+						if mcScale == 0 {
+							mcScale = 1.0
 						}
-						var buf bytes.Buffer
-						if err := png.Encode(&buf, mcOverlayImg); err != nil {
-							fmt.Printf("Warning: could not encode fitPlotMC.png: %v\n", err)
-						} else if err := os.WriteFile(savePath, buf.Bytes(), 0644); err != nil {
-							fmt.Printf("Warning: could not save fitPlotMC.png: %v\n", err)
+						mcScaledCurve := make([]timeIntensityPoint, len(mcFitResult.curve))
+						for i, pt := range mcFitResult.curve {
+							mcScaledCurve[i] = timeIntensityPoint{
+								time:      pt.time,
+								intensity: pt.intensity*mcScale + (1.0 - mcScale),
+							}
+						}
+						mcScaledSampledVals := make([]float64, len(mcFitResult.sampledVals))
+						for i, v := range mcFitResult.sampledVals {
+							mcScaledSampledVals[i] = v*mcScale + (1.0 - mcScale)
+						}
+						mcOverlayTitle := mcTitle
+						if mcOverlayTitle != "" {
+							mcOverlayTitle += fmt.Sprintf("  path offset=%.3f km", mcFitParams.PathPerpendicularOffsetKm)
+						}
+						if len(mcArPhi) > 0 {
+							mcOverlayTitle += "  (correlated noise)"
+						} else {
+							mcOverlayTitle += "  (uncorrelated noise)"
+						}
+						mcOverlayImg, err := createOverlayPlotImage(mcScaledCurve, mcFitResult.bestShift, mcFitResult.edgeTimes, mcTargetTimes, mcTargetValues, mcFitResult.sampledTimes, mcScaledSampledVals, mcOverlayTitle, 1200, 500, result.edgeStds)
+						if err != nil {
+							fmt.Printf("Failed to create MC overlay plot: %v\n", err)
+						} else {
+							// Save to the results folder
+							savePath := filepath.Join(appDir, "fitPlotMC.png")
+							if resultsFolder != "" {
+								savePath = filepath.Join(resultsFolder, "fitPlotMC.png")
+							}
+							var buf bytes.Buffer
+							if err := png.Encode(&buf, mcOverlayImg); err != nil {
+								fmt.Printf("Warning: could not encode fitPlotMC.png: %v\n", err)
+							} else if err := os.WriteFile(savePath, buf.Bytes(), 0644); err != nil {
+								fmt.Printf("Warning: could not save fitPlotMC.png: %v\n", err)
+							}
+
+							mcOverlayWin := a.NewWindow("Fit Result with Monte Carlo Edge Uncertainty (±3σ)")
+							mcOverlayCanvas := canvas.NewImageFromImage(mcOverlayImg)
+							mcOverlayCanvas.FillMode = canvas.ImageFillContain
+							mcOverlayWin.SetContent(mcOverlayCanvas)
+							mcOverlayWin.Resize(fyne.NewSize(1250, 550))
+							mcOverlayWin.CenterOnScreen()
+							safeShowWindow(mcOverlayWin)
 						}
 
-						mcOverlayWin := a.NewWindow("Fit Result with Monte Carlo Edge Uncertainty (±3σ)")
-						mcOverlayCanvas := canvas.NewImageFromImage(mcOverlayImg)
-						mcOverlayCanvas.FillMode = canvas.ImageFillContain
-						mcOverlayWin.SetContent(mcOverlayCanvas)
-						mcOverlayWin.Resize(fyne.NewSize(1250, 550))
-						mcOverlayWin.CenterOnScreen()
-						safeShowWindow(mcOverlayWin)
+						// Update main plot: overlay theoretical curve, edge lines, and ±3σ lines
+						ac.overlayTheoryCurve(mcFitResult, result.edgeStds)
 					}
-
-					// Update main plot: overlay theoretical curve, edge lines, and ±3σ lines
-					ac.overlayTheoryCurve(mcFitResult, result.edgeStds)
-				}
-			})
-		}()
+				})
+			}()
+		}
+		if !trimPerformed {
+			noBtn := widget.NewButton("No", nil)
+			noBtn.Importance = widget.HighImportance
+			yesBtn := widget.NewButton("Yes, run anyway", nil)
+			trimDlg := dialog.NewCustom("Trim not set",
+				"",
+				container.NewVBox(
+					widget.NewLabel("A Set trim operation is recommended before running Monte Carlo.\nA narrow trim does not affect the accuracy of the Monte Carlo estimates\nbut can greatly speed the process.\n\nA trim appropriate for a VizieR submission would be a good choice.\n\nDo you want to run anyway?"),
+					container.NewHBox(layout.NewSpacer(), noBtn, yesBtn),
+				), w)
+			noBtn.OnTapped = func() { trimDlg.Hide() }
+			yesBtn.OnTapped = func() { trimDlg.Hide(); runMCBody() }
+			trimDlg.Show()
+		} else {
+			runMCBody()
+		}
 	})
 	mcBtn.Importance = widget.HighImportance
 	mcBtn.Disable()
