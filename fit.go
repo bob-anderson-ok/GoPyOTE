@@ -143,7 +143,8 @@ func logDiffractionImageInfo() {
 }
 
 // buildPrecomputedCurve generates the theoretical light curve for the given params.
-func buildPrecomputedCurve(params *OccultationParameters) (*precomputedCurve, error) {
+// When skipEdges is true, geometric shadow edge detection is skipped and edgeTimes will be nil.
+func buildPrecomputedCurve(params *OccultationParameters, skipEdges ...bool) (*precomputedCurve, error) {
 	// When an external image is in use, the generated targetImage16bit.png and
 	// geometricShadow.png are at the external image's native pixel dimensions, not
 	// FundamentalPlaneWidthNumPoints. Read the actual width so that path sample
@@ -155,6 +156,7 @@ func buildPrecomputedCurve(params *OccultationParameters) (*precomputedCurve, er
 		}
 	}
 
+	skip := len(skipEdges) > 0 && skipEdges[0]
 	lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
 		nil,
 		params.DXKmPerSec,
@@ -165,6 +167,7 @@ func buildPrecomputedCurve(params *OccultationParameters) (*precomputedCurve, er
 		filepath.Join(appDir, "targetImage16bit.png"),
 		filepath.Join(appDir, "geometricShadow.png"),
 		"",
+		skip,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract diffraction light curve: %w", err)
@@ -208,6 +211,63 @@ func buildPrecomputedCurve(params *OccultationParameters) (*precomputedCurve, er
 		edgeTimes:  edgeTimes,
 		duration:   curve[len(curve)-1].time,
 	}, nil
+}
+
+// populateEdgeTimes loads the geometric shadow image once and computes edge times
+// for every precomputedCurve in the slice whose edgeTimes are nil. This is used
+// after a fit search was run with skipEdges=true to fill in the edge data
+// that Monte Carlo and display logic require.
+func populateEdgeTimes(candidates []*precomputedCurve, params *OccultationParameters) error {
+	fundPlaneWidthPts := params.FundamentalPlaneWidthNumPoints
+	if params.PathToExternalImage != "" {
+		if img, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "targetImage16bit.png")); err == nil {
+			fundPlaneWidthPts = img.Bounds().Dx()
+		}
+	}
+
+	geometricMatrix, err := lightcurve.LoadGray8PNG(filepath.Join(appDir, "geometricShadow.png"))
+	if err != nil {
+		return fmt.Errorf("failed to load geometric shadow for edge detection: %w", err)
+	}
+
+	shadowSpeed := math.Sqrt(params.DXKmPerSec*params.DXKmPerSec + params.DYKmPerSec*params.DYKmPerSec)
+	if shadowSpeed == 0 {
+		return fmt.Errorf("shadow speed is zero — check dX and dY parameters")
+	}
+	distancePerPoint := params.FundamentalPlaneWidthKm / float64(fundPlaneWidthPts)
+
+	for _, pc := range candidates {
+		if len(pc.edgeTimes) > 0 {
+			continue
+		}
+		path := &lightcurve.ObservationPath{
+			DxKmPerSec:               params.DXKmPerSec,
+			DyKmPerSec:               params.DYKmPerSec,
+			PathOffsetFromCenterKm:   pc.pathOffset,
+			FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
+			FundamentalPlaneWidthPts: fundPlaneWidthPts,
+		}
+		if err := path.ComputePathFromVelocity(); err != nil {
+			continue
+		}
+		path.ComputeSamplePoints()
+		edges := lightcurve.FindEdgesInGeometricShadow(geometricMatrix, path)
+
+		// kmStart = first sample point distance in km (matches lcData[0].Distance
+		// in buildPrecomputedCurve, since ExtractLightCurve uses the same path).
+		var kmStart float64
+		if len(path.SamplePoints) > 0 {
+			kmStart = path.SamplePoints[0].DistanceFromStart * distancePerPoint
+		}
+
+		edgeTimes := make([]float64, len(edges))
+		for i, edge := range edges {
+			edgeKm := edge * distancePerPoint
+			edgeTimes[i] = (edgeKm - kmStart) / shadowSpeed
+		}
+		pc.edgeTimes = edgeTimes
+	}
+	return nil
 }
 
 // nccSlidingFit runs the NCC sliding fit of a precomputed curve against target data.
@@ -1206,7 +1266,7 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 		// Set the path offset for this iteration
 		params.PathPerpendicularOffsetKm = offset
 
-		pc, err := buildPrecomputedCurve(params)
+		pc, err := buildPrecomputedCurve(params, true) // skip edge detection during search
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -1233,6 +1293,20 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 			return nil, fmt.Errorf("all path offset fits failed: %w", firstErr)
 		}
 		return nil, fmt.Errorf("all path offset fits failed")
+	}
+
+	// Compute edge times for all candidates (deferred from the search loop).
+	allPCs := make([]*precomputedCurve, len(results))
+	for i, r := range results {
+		allPCs[i] = r.pc
+	}
+	if err := populateEdgeTimes(allPCs, params); err != nil {
+		return nil, fmt.Errorf("edge detection after fit search failed: %w", err)
+	}
+	// Propagate computed edgeTimes into the fitResults (nccSlidingFit copied
+	// the nil edgeTimes from pc; now that they are populated, update fr).
+	for _, r := range results {
+		r.fr.edgeTimes = r.pc.edgeTimes
 	}
 
 	// Find the best path offset by peak NCC

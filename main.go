@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.47"
+const Version = "1.2.48"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string

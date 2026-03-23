@@ -39,6 +39,7 @@ func ExtractAndPlotLightCurve(
 	intensityImagePath string,
 	geometricImagePath string,
 	displayImagePath string,
+	skipEdges ...bool,
 ) ([]Point, []float64, error) {
 
 	// Create the observation path from parameters
@@ -83,19 +84,21 @@ func ExtractAndPlotLightCurve(
 		fmt.Printf("Extracted %d light curve points\n", len(lightCurveData))
 	}
 
-	// Load the geometric shadow image and detect edges
-	geometricMatrix, err := LoadGray8PNG(geometricImagePath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load geometric shadow %s: %w", geometricImagePath, err)
-	}
+	// Load the geometric shadow image and detect edges (unless the caller asked to skip)
+	var edges []float64
+	if len(skipEdges) == 0 || !skipEdges[0] {
+		geometricMatrix, err := LoadGray8PNG(geometricImagePath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load geometric shadow %s: %w", geometricImagePath, err)
+		}
 
-	// Find edges in the geometric shadow
-	edges := FindEdgesInGeometricShadow(geometricMatrix, path)
-	if verboseExtraction {
-		fmt.Printf("Found %d edges in the geometric shadow\n", len(edges))
-		for i, edge := range edges {
-			distanceKm := edge * path.FundamentalPlaneWidthKm / float64(path.FundamentalPlaneWidthPts)
-			fmt.Printf("  Edge %d at pixel distance %.1f (%.3f km)\n", i+1, edge, distanceKm)
+		edges = FindEdgesInGeometricShadow(geometricMatrix, path)
+		if verboseExtraction {
+			fmt.Printf("Found %d edges in the geometric shadow\n", len(edges))
+			for i, edge := range edges {
+				distanceKm := edge * path.FundamentalPlaneWidthKm / float64(path.FundamentalPlaneWidthPts)
+				fmt.Printf("  Edge %d at pixel distance %.1f (%.3f km)\n", i+1, edge, distanceKm)
+			}
 		}
 	}
 
