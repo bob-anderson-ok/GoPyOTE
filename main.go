@@ -69,9 +69,9 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.45"
+const Version = "1.2.46"
 
-// Track the last loaded parameters file path for use by Run IOTAdiffraction
+// Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string
 
 // Track the last loaded site file path for use by the Fill SODIS Report dialog
@@ -326,12 +326,7 @@ func main() {
 			ShowMarkdownDialogWithImages("About GoPyOTE", string(content), &aboutMarkdown, w)
 		}),
 	)
-	updateMenu := fyne.NewMenu("Check for updates",
-		fyne.NewMenuItem("Check for updates", func() {
-			ShowUpdateDialogTwoPane(w)
-		}),
-	)
-	mainMenu := fyne.NewMainMenu(helpMenu, updateMenu)
+	mainMenu := fyne.NewMainMenu(helpMenu)
 	w.SetMainMenu(mainMenu)
 
 	// Tab 2: Settings
@@ -1548,8 +1543,6 @@ func main() {
 
 	// ac.resetProcessOccelmntBtn restores the Process occelmnt file button to blue. Assigned after the button is created.
 
-	// ac.resetIOTABtn disables the Run IOTAdiffraction button. Assigned after the button is created.
-
 	// ac.enableShowIOTAPlots enables the Show IOTAdiffraction plots button. Assigned after the button is created.
 
 	// Function to open the CSV file dialog
@@ -1713,7 +1706,7 @@ func main() {
 			setTrimBtn.Importance = widget.HighImportance
 			setTrimBtn.Refresh()
 			if priorResultsFound {
-				// Prior results found: blue button (enabled, no blink), hide Run IOTAdiffraction.
+				// Prior results found: blue button (enabled, no blink).
 				if ac.stopProcessOccelmntBlink != nil {
 					ac.stopProcessOccelmntBlink()
 				}
@@ -1723,9 +1716,6 @@ func main() {
 				// Stop the blink that resetProcessOccelmntBtn just started.
 				if ac.stopProcessOccelmntBlink != nil {
 					ac.stopProcessOccelmntBlink()
-				}
-				if ac.hideIOTABtn != nil {
-					ac.hideIOTABtn()
 				}
 				priorDlg := dialog.NewInformation("Prior Results Found",
 					"This observation has been fully processed in the past.\n"+
@@ -1740,9 +1730,6 @@ func main() {
 			} else {
 				if ac.resetProcessOccelmntBtn != nil {
 					ac.resetProcessOccelmntBtn()
-				}
-				if ac.resetIOTABtn != nil {
-					ac.resetIOTABtn()
 				}
 			}
 			// Create an action log file for this CSV
@@ -2398,8 +2385,7 @@ func main() {
 	}
 
 	// useParamFile sets up a global state and runs IOTAdiffraction with the given .occparams file.
-	// Extracted here (rather than inside btnIOTA) so it can also be triggered automatically
-	// when the parameters dialog saves a new file.
+	// It can be triggered automatically when the parameters dialog saves a new file.
 	useParamFile := func(paramFilePath string) {
 		logOccparamsRead("useParamFile", paramFilePath)
 		iotaDiffractionRunning.Store(true)
@@ -2462,15 +2448,6 @@ func main() {
 	}
 	afterOccParamsSaved = useParamFile
 
-	btnIOTA := widget.NewButton("Run IOTAdiffraction", func() {
-		dialog.ShowInformation("Use the Process OWC button",
-			"To run IOTAdiffraction, use the \"Process OWC\" button to create or edit\n"+
-				"an occultation parameters file. IOTAdiffraction will run automatically\n"+
-				"when you save the file.", w)
-	})
-	btnIOTA.Disable()
-	ac.resetIOTABtn = func() { btnIOTA.Disable(); btnIOTA.Show() }
-	ac.hideIOTABtn = func() { btnIOTA.Hide() }
 	btnOccultParams := widget.NewButton("Edit Occultation Parameters", func() {
 		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
 			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
@@ -2514,7 +2491,6 @@ func main() {
 				}
 			}
 		}
-		btnIOTA.Enable()
 		showProcessOccelemntDialog(w, vizierTab, autoXml)
 	})
 	btnProcessOccelemnt.Importance = widget.HighImportance
@@ -2800,7 +2776,11 @@ func main() {
 	})
 	btnImageAcqTiming.Importance = widget.HighImportance
 
-	buttons := container.NewHBox(btnProcessOccelemnt, btnImageAcqTiming, btnOccultParams, btnIOTA, btnShowDetails, btnShowIOTAPlots)
+	btnCheckForUpdates := widget.NewButton("Check for updates", func() {
+		ShowUpdateDialogTwoPane(w)
+	})
+
+	buttons := container.NewHBox(btnCheckForUpdates, btnProcessOccelemnt, btnImageAcqTiming, btnOccultParams, btnShowDetails, btnShowIOTAPlots)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)

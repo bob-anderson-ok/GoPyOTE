@@ -53,11 +53,9 @@ type appContext struct {
 	resetNormalizeBtn        func()
 	enablePostFitButtons     func()
 	resetProcessOccelmntBtn  func()
-	resetIOTABtn             func()
 	enableShowIOTAPlots      func()
 	autoFillSearchRange      func()
 	stopProcessOccelmntBlink func()
-	hideIOTABtn              func()
 	selectFitTab             func()
 
 	// NIE manual selection mode flag — true when the checkbox is checked.

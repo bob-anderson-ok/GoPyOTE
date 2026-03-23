@@ -326,7 +326,7 @@ func showOccultationParametersDialog(w fyne.Window, clearAll bool, preload *Occu
 
 			// Store the loaded file name for use as default in the save dialog
 			loadedFileName = reader.URI().Name()
-			// Store the full path for use by Run IOTAdiffraction
+			// Store the full path for use by IOTAdiffraction
 			lastLoadedParamsPath = reader.URI().Path()
 			// Persist to preferences so it autoloads next time
 			prefs.SetString("lastLoadedParamsPath", lastLoadedParamsPath)
