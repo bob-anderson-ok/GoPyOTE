@@ -28,7 +28,7 @@ const (
 	UserAgent = "GoPyOTE-updater/1.0"
 )
 
-var CurrentVersion = "v1.2.3" // better: inject with -ldflags
+var CurrentVersion = Version // better: inject with -ldflags
 
 type Release struct {
 	TagName     string    `json:"tag_name"`
@@ -102,20 +102,14 @@ func ShowUpdateDialogTwoPane(parent fyne.Window) {
 	header := widget.NewLabel("Release details")
 	header.TextStyle = fyne.TextStyle{Bold: true}
 
-	meta := widget.NewMultiLineEntry()
-	meta.Disable()
+	meta := widget.NewLabel("")
 	meta.Wrapping = fyne.TextWrapWord
-	meta.SetMinRowsVisible(7)
 
-	assetsBox := widget.NewMultiLineEntry()
-	assetsBox.Disable()
+	assetsBox := widget.NewLabel("")
 	assetsBox.Wrapping = fyne.TextWrapWord
-	assetsBox.SetMinRowsVisible(6)
 
-	notes := widget.NewMultiLineEntry()
-	notes.Disable()
+	notes := widget.NewLabel("")
 	notes.Wrapping = fyne.TextWrapWord
-	notes.SetMinRowsVisible(16)
 
 	status := widget.NewLabel("Loading releases...")
 	status.Wrapping = fyne.TextWrapWord
@@ -136,18 +130,18 @@ func ShowUpdateDialogTwoPane(parent fyne.Window) {
 		r := selectable[selectedIndex]
 
 		var mb strings.Builder
-		fmt.Fprintf(&mb, "Version: %s\n", r.TagName)
+		_, _ = fmt.Fprintf(&mb, "Version: %s\n", r.TagName)
 		if r.Name != "" {
-			fmt.Fprintf(&mb, "Title: %s\n", r.Name)
+			_, _ = fmt.Fprintf(&mb, "Title: %s\n", r.Name)
 		}
-		fmt.Fprintf(&mb, "Published: %s\n", r.PublishedAt.Format(time.RFC3339))
-		fmt.Fprintf(&mb, "Pre-release: %v\n", r.Prerelease)
-		fmt.Fprintf(&mb, "Current installed: %s\n", CurrentVersion)
+		_, _ = fmt.Fprintf(&mb, "Published: %s\n", r.PublishedAt.Format(time.RFC3339))
+		_, _ = fmt.Fprintf(&mb, "Pre-release: %v\n", r.Prerelease)
+		_, _ = fmt.Fprintf(&mb, "Current installed: %s\n", CurrentVersion)
 		meta.SetText(mb.String())
 
 		var ab strings.Builder
 		for _, a := range r.Assets {
-			fmt.Fprintf(&ab, "%s  (%d bytes)\n", a.Name, a.Size)
+			_, _ = fmt.Fprintf(&ab, "%s  (%d bytes)\n", a.Name, a.Size)
 		}
 		assetsBox.SetText(strings.TrimSpace(ab.String()))
 
@@ -322,13 +316,13 @@ func getAllReleases(owner, repo, token string) ([]Release, error) {
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("github api status %s: %s", resp.Status, strings.TrimSpace(string(body)))
 		}
 
 		var batch []Release
 		err = json.NewDecoder(resp.Body).Decode(&batch)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +356,7 @@ func getReleaseByTag(owner, repo, tag, token string) (*Release, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -482,7 +476,7 @@ func downloadFile(url, outPath, token string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -493,7 +487,7 @@ func downloadFile(url, outPath, token string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	_, err = io.Copy(out, resp.Body)
 	return err
@@ -504,7 +498,7 @@ func fileSHA256(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
@@ -518,7 +512,7 @@ func hashFromSHA256SUMS(sumsPath, targetFile string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
