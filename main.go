@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1-2-43"
+const Version = "1.2.44"
 
 // Track the last loaded parameters file path for use by Run IOTAdiffraction
 var lastLoadedParamsPath string
@@ -328,7 +328,7 @@ func main() {
 	)
 	updateMenu := fyne.NewMenu("Check for updates",
 		fyne.NewMenuItem("Check for updates", func() {
-			dialog.ShowInformation("Check for updates", "Not yet implemented", w)
+			ShowUpdateDialogTwoPane(w)
 		}),
 	)
 	mainMenu := fyne.NewMainMenu(helpMenu, updateMenu)
