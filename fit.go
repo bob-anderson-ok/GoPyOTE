@@ -647,52 +647,67 @@ type cameraDelayInfo struct {
 	report    string // multi-line report: header + per-edge calculation lines
 }
 
-// computeCameraDelay reads Image Acquisition Timing preferences and, if all
-// required values are present, returns a cameraDelayInfo with the delay and a
-// formatted report showing the per-edge subtraction. edgeLabels and edgeTimes
-// are parallel slices (e.g. ["D","R"] or ["Edge 1","Edge 2"]).
+// computeCameraDelay reads Image Acquisition Timing preferences and computes
+// edge time corrections. acqCorr = acquisition delay, rsCorr = starRow * rowDelta.
+// The corrected edge time = edge - acqCorr + rsCorr.
+// edgeLabels and edgeTimes are parallel slices (e.g. ["D","R"] or ["Edge 1","Edge 2"]).
 func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayInfo {
 	prefs := fyne.CurrentApp().Preferences()
 	acqDelayStr := prefs.String("imageAcqDelay")
 	starRowStr := sessionStarRow
 	rowDeltaStr := prefs.String("imageAcqRowDelta")
-	var acqDelayMs, starRow, rowDeltaMs float64
-	if acqDelayStr != "" {
-		if v, err := strconv.ParseFloat(strings.TrimSpace(acqDelayStr), 64); err == nil {
-			acqDelayMs = v
-		}
+
+	if acqDelayStr == "" {
+		return nil
 	}
-	if starRowStr != "" {
+
+	var acqDelayMs, starRow, rowDeltaMs float64
+	if v, err := strconv.ParseFloat(strings.TrimSpace(acqDelayStr), 64); err == nil {
+		acqDelayMs = v
+	}
+
+	acqCorrSecs := acqDelayMs / 1000.0
+
+	// rsCorr is only computed when both star row and row delta are provided
+	hasRS := starRowStr != "" && rowDeltaStr != ""
+	var rsCorrSecs float64
+	if hasRS {
 		if v, err := strconv.ParseFloat(strings.TrimSpace(starRowStr), 64); err == nil {
 			starRow = v
 		}
-	}
-	if rowDeltaStr != "" {
 		if v, err := strconv.ParseFloat(strings.TrimSpace(rowDeltaStr), 64); err == nil {
 			rowDeltaMs = v
 		}
+		rsCorrSecs = starRow * rowDeltaMs / 1000.0
 	}
-	var delayMs float64
-	if starRowStr != "" {
-		delayMs = acqDelayMs - starRow*rowDeltaMs
-	}
-	delaySecs := delayMs / 1000.0
+
+	// Net correction: subtract acqCorr, add rsCorr
+	delaySecs := acqCorrSecs - rsCorrSecs
+	delayMs := delaySecs * 1000.0
 
 	var report string
-	if starRowStr != "" {
+	cameraName := prefs.String("imageAcqCameraName")
+	if hasRS {
 		report = fmt.Sprintf(
-			"edge times reported with cameraDelay = %.2f ms subtracted\n"+
-				"(acquisitionDelay=%.3f ms - starRow=%.1f * rowDelta=%.6f ms)",
-			delayMs, acqDelayMs, starRow, rowDeltaMs)
-		cameraName := prefs.String("imageAcqCameraName")
-		if cameraName != "" {
-			report += fmt.Sprintf(" [camera: %s]", cameraName)
-		}
-		for i, t := range edgeTimes {
-			orig := formatSecondsAsTimestamp(t)
-			corr := formatSecondsAsTimestamp(t - delaySecs)
-			label := edgeLabels[i]
-			report += fmt.Sprintf("\n%s: %s - %.2f ms = %s", label, orig, delayMs, corr)
+			"acqCorr = %.4f sec (Acquisition Delay)\nrsCorr = %.4f sec (starRow=%.1f * rowDelta=%.6f ms)",
+			acqCorrSecs, rsCorrSecs, starRow, rowDeltaMs)
+	} else {
+		report = fmt.Sprintf("acqCorr = %.4f sec (Acquisition Delay)", acqCorrSecs)
+	}
+	if cameraName != "" {
+		report += fmt.Sprintf(" [camera: %s]", cameraName)
+	}
+
+	for i, t := range edgeTimes {
+		orig := formatSecondsAsTimestamp(t)
+		corr := formatSecondsAsTimestamp(t - delaySecs)
+		label := edgeLabels[i]
+		if hasRS {
+			report += fmt.Sprintf("\n%s: %s - %.4f(acqCorr) + %.4f(rsCorr) = %s",
+				label, orig, acqCorrSecs, rsCorrSecs, corr)
+		} else {
+			report += fmt.Sprintf("\n%s: %s - %.4f(acqCorr) = %s",
+				label, orig, acqCorrSecs, corr)
 		}
 	}
 	return &cameraDelayInfo{delaySecs: delaySecs, delayMs: delayMs, report: report}
@@ -721,10 +736,13 @@ func showEdgeTimesDialog(app fyne.App, params *OccultationParameters, fr *fitRes
 		ts := formatSecondsAsTimestamp(edgeAbsTime)
 		if cd != nil {
 			corrected := formatSecondsAsTimestamp(edgeAbsTime - cd.delaySecs)
-			msg += fmt.Sprintf("  Edge %d: %s - (cameraDelay=%.2f ms) = %s\n", i+1, ts, cd.delayMs, corrected)
+			msg += fmt.Sprintf("  Edge %d: %s = %s (corrected)\n", i+1, ts, corrected)
 		} else {
 			msg += fmt.Sprintf("  Edge %d: %s\n", i+1, ts)
 		}
+	}
+	if cd != nil {
+		msg += fmt.Sprintf("\n%s\n", cd.report)
 	}
 	if len(fr.edgeTimes) == 2 {
 		duration := math.Abs(fr.edgeTimes[1] - fr.edgeTimes[0])
@@ -1334,25 +1352,27 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 	}
 	bestPathOffset := results[bestIdx].pathOffset
 
-	// Re-run edge detection for the best candidate with plot data stored
-	// so that showEdgePlots() can display them on the UI thread.
-	bestPC := results[bestIdx].pc
-	fundPlaneWidthPts := params.FundamentalPlaneWidthNumPoints
-	if params.PathToExternalImage != "" {
-		if img, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "targetImage16bit.png")); err == nil {
-			fundPlaneWidthPts = img.Bounds().Dx()
+	// When the search range is a single offset, re-run edge detection for the
+	// best candidate with plot data stored so showEdgePlots() can display them.
+	if initialOffset == finalOffset {
+		bestPC := results[bestIdx].pc
+		fundPlaneWidthPts := params.FundamentalPlaneWidthNumPoints
+		if params.PathToExternalImage != "" {
+			if img, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "targetImage16bit.png")); err == nil {
+				fundPlaneWidthPts = img.Bounds().Dx()
+			}
 		}
-	}
-	bestPath := &lightcurve.ObservationPath{
-		DxKmPerSec:               params.DXKmPerSec,
-		DyKmPerSec:               params.DYKmPerSec,
-		PathOffsetFromCenterKm:   bestPC.pathOffset,
-		FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
-		FundamentalPlaneWidthPts: fundPlaneWidthPts,
-	}
-	if err := bestPath.ComputePathFromVelocity(); err == nil {
-		bestPath.ComputeSamplePoints()
-		_, _ = findEdgesRobust(filepath.Join(appDir, "geometricShadow.png"), bestPath, true)
+		bestPath := &lightcurve.ObservationPath{
+			DxKmPerSec:               params.DXKmPerSec,
+			DyKmPerSec:               params.DYKmPerSec,
+			PathOffsetFromCenterKm:   bestPC.pathOffset,
+			FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
+			FundamentalPlaneWidthPts: fundPlaneWidthPts,
+		}
+		if err := bestPath.ComputePathFromVelocity(); err == nil {
+			bestPath.ComputeSamplePoints()
+			_, _ = findEdgesRobust(filepath.Join(appDir, "geometricShadow.png"), bestPath, true)
+		}
 	}
 
 	return &fitSearchResult{results: results, bestIdx: bestIdx, bestPathOffset: bestPathOffset}, nil

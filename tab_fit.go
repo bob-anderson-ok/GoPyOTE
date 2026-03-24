@@ -700,7 +700,9 @@ func buildFitTab(ac *appContext) *container.TabItem {
 								ac.overlayTheoryCurve(sd.bestFr, nil)
 								runAutoSlide()
 								showEdgeTimesDialog(a, params, sd.bestFr)
-								showEdgePlots()
+								if initVal == finalVal {
+									showEdgePlots()
+								}
 							}
 						})
 					}()
@@ -1131,10 +1133,13 @@ func buildFitTab(ac *appContext) *container.TabItem {
 						ts := formatSecondsAsTimestamp(absTime)
 						if mcCD != nil {
 							corrected := formatSecondsAsTimestamp(absTime - mcCD.delaySecs)
-							msg += fmt.Sprintf("  Edge %d: %s - (cameraDelay=%.2f ms) = %s +/- %.4f sec (3 sigma)\n", i+1, ts, mcCD.delayMs, corrected, 3*result.edgeStds[i])
+							msg += fmt.Sprintf("  Edge %d: %s = %s (corrected) +/- %.4f sec (3 sigma)\n", i+1, ts, corrected, 3*result.edgeStds[i])
 						} else {
 							msg += fmt.Sprintf("  Edge %d: %s +/- %.4f sec (3 sigma)\n", i+1, ts, 3*result.edgeStds[i])
 						}
+					}
+					if mcCD != nil {
+						msg += fmt.Sprintf("\n%s\n", mcCD.report)
 					}
 					if result.numEdges == 2 {
 						fitDuration := math.Abs(mcFitResult.edgeTimes[1] - mcFitResult.edgeTimes[0])

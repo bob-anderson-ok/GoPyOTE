@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.50"
+const Version = "1.2.51"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2735,14 +2735,22 @@ func main() {
 			acqDelayMs, err1 := strconv.ParseFloat(strings.TrimSpace(acqDelayEntry.Text), 64)
 			starRow, err2 := strconv.ParseFloat(strings.TrimSpace(starRowEntry.Text), 64)
 			rowDeltaMs, err3 := strconv.ParseFloat(strings.TrimSpace(rowDeltaEntry.Text), 64)
-			var cameraDelayMs float64
-			if err1 == nil && err3 == nil && err2 == nil {
-				cameraDelayMs = acqDelayMs + starRow*rowDeltaMs
+
+			acqCorrSecs := acqDelayMs / 1000.0
+			hasRS := err2 == nil && err3 == nil && strings.TrimSpace(starRowEntry.Text) != "" && strings.TrimSpace(rowDeltaEntry.Text) != ""
+			var rsCorrSecs float64
+			if hasRS {
+				rsCorrSecs = starRow * rowDeltaMs / 1000.0
 			}
-			comment := fmt.Sprintf(
-				"edge times reported with cameraDelay = %.2f ms subtracted\n"+
-					"(acquisitionDelay=%.3f ms + starRow=%.1f * rowDelta=%.6f ms)",
-				cameraDelayMs, acqDelayMs, starRow, rowDeltaMs)
+
+			var comment string
+			if err1 == nil && hasRS {
+				comment = fmt.Sprintf(
+					"acqCorr = %.4f sec (Acquisition Delay)\nrsCorr = %.4f sec (starRow=%.1f * rowDelta=%.6f ms)",
+					acqCorrSecs, rsCorrSecs, starRow, rowDeltaMs)
+			} else if err1 == nil {
+				comment = fmt.Sprintf("acqCorr = %.4f sec (Acquisition Delay)", acqCorrSecs)
+			}
 			cameraName := strings.TrimSpace(cameraNameEntry.Text)
 			if cameraName != "" {
 				comment += fmt.Sprintf(" [camera: %s]", cameraName)
