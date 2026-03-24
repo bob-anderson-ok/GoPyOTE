@@ -755,7 +755,8 @@ func showEdgeTimesDialog(app fyne.App, params *OccultationParameters, fr *fitRes
 		logAction(fmt.Sprintf("  Edge %d: %s", i+1, formatSecondsAsTimestamp(et+fr.bestShift)))
 	}
 
-	if params.MainBody.MajorAxisKm > 0 && math.Abs(params.PathPerpendicularOffsetKm) < 0.1*params.MainBody.MajorAxisKm {
+	centerWarning := params.MainBody.MajorAxisKm > 0 && math.Abs(params.PathPerpendicularOffsetKm) < 0.1*params.MainBody.MajorAxisKm
+	if centerWarning {
 		msg += "\nWARNING: The observation path is very close to the asteroid center. " +
 			"There is a danger that the maximum width of available theoretical light curves " +
 			"was not enough to match the actual observation. In that case, use the " +
@@ -766,8 +767,25 @@ func showEdgeTimesDialog(app fyne.App, params *OccultationParameters, fr *fitRes
 	edgeLabel.Wrapping = fyne.TextWrapWord
 	edgeWindow := app.NewWindow("Fit Edge Times")
 	edgeWindow.SetContent(container.NewScroll(container.NewPadded(edgeLabel)))
-	edgeWindow.Resize(fyne.NewSize(800, 300))
+	edgeWindow.Resize(fyne.NewSize(1040, 390))
 	edgeWindow.CenterOnScreen()
+	if centerWarning {
+		edgeWindow.SetOnClosed(func() {
+			warnWin := app.NewWindow("Path Offset Warning")
+			warnLabel := widget.NewLabel(
+				"WARNING: The best-fit observation path is very close to the asteroid center.\n\n" +
+					"The maximum width of the available theoretical light curves may not have been " +
+					"enough to match the actual observation.\n\n" +
+					"Consider using the Edit occultation parameters button to increase the size of the asteroid " +
+					"and re-running the fit search.")
+			warnLabel.Wrapping = fyne.TextWrapWord
+			warnWin.SetContent(container.NewScroll(container.NewPadded(warnLabel)))
+			warnWin.Resize(fyne.NewSize(500, 200))
+			warnWin.SetFixedSize(true)
+			warnWin.CenterOnScreen()
+			warnWin.Show()
+		})
+	}
 	safeShowWindow(edgeWindow)
 }
 

@@ -340,9 +340,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 	// Register callback so main.go's tabs.OnSelected can autofill search range
 	ac.autoFillSearchRange = func() {
-		if lastDiffractionParamsPath == "" ||
-			strings.TrimSpace(searchInitialOffsetEntry.Text) != "" ||
-			strings.TrimSpace(searchFinalOffsetEntry.Text) != "" {
+		if lastDiffractionParamsPath == "" {
 			return
 		}
 		go func() {
@@ -1821,6 +1819,30 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		ac.lightCurvePlot.SelectedPoint2Frame = 0
 		ac.lightCurvePlot.SelectedPoint2Value = 0
 		ac.lightCurvePlot.MultiPairSelectMode = true
+	}
+
+	// invalidateFitCurves clears cached fit results and precomputed curves
+	// (which depend on diffraction images) but preserves baseline normalization,
+	// noise sigma, AR model, button colors, and search range entries.
+	ac.invalidateFitCurves = func() {
+		lastFitResult = nil
+		lastFitParams = nil
+		lastFitCandidates = nil
+		lastFitBestIdx = 0
+		lastFitTargetTimes = nil
+		lastMCResult = nil
+
+		// Clear plot overlays that depended on the old fit
+		ac.theorySeries = nil
+		ac.trendSeries = nil
+		ac.lightCurvePlot.SetVerticalLines(nil, false)
+		ac.lightCurvePlot.SetSigmaLines(nil, false)
+
+		// Reset fit and MC buttons to ready state (keep them enabled)
+		fitBtn.Importance = widget.HighImportance
+		fitBtn.Refresh()
+		mcBtn.Importance = widget.HighImportance
+		mcBtn.Refresh()
 	}
 
 	tab10Content := container.NewStack(tab10Bg, container.NewPadded(container.NewVBox(

@@ -49,6 +49,7 @@ type appContext struct {
 
 	// Callbacks set during tab construction
 	resetFitTab              func() // full reset of Fit tab state when light curve changes
+	invalidateFitCurves      func() // clear cached fit results (diffraction images changed) but keep baseline state
 	resetFitButtons          func()
 	resetNormalizeBtn        func()
 	enablePostFitButtons     func()

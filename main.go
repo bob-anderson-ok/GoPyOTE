@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.51"
+const Version = "1.2.52"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2544,8 +2544,8 @@ func main() {
 		}
 		btnProcessOccelemnt.Importance = widget.WarningImportance
 		btnProcessOccelemnt.Refresh()
-		if ac.resetFitTab != nil {
-			ac.resetFitTab()
+		if ac.invalidateFitCurves != nil {
+			ac.invalidateFitCurves()
 		}
 		tabs.Select(tab10)
 		if ac.autoFillSearchRange != nil {
