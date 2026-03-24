@@ -561,6 +561,9 @@ func generateVizieRFile(w fyne.Window, data *LightCurveData, year, month, day in
 	dialog.ShowInformation("VizieR Export Complete",
 		fmt.Sprintf("Your VizieR lightcurve file was written to:\n\n%s", vizierFilePath), w)
 	vizierDatWrittenThisSession = true
+	if onVizierDatWritten != nil {
+		onVizierDatWritten()
+	}
 
 	// Log VizieR page entries
 	logAction(fmt.Sprintf("Generated VizieR file: %s", vizierFilePath))
@@ -1134,7 +1137,7 @@ func (vt *VizieRTab) FillFromSodisForm(w fyne.Window) {
 	// No SODIS report saved this session — inform the user.
 	dialog.ShowInformation("SODIS Report Not Found",
 		"A SODIS-REPORT.txt has not yet been generated.\n\n"+
-			"Please use the Fill SODIS Report button on the Fit tab to create one first.", w)
+			"Please use the SODIS positive button on the Fit tab to create one first.", w)
 }
 
 // parseSodisFile reads a SODIS form text file and fills VizieR tab fields

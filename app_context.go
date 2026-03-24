@@ -48,8 +48,8 @@ type appContext struct {
 	toggleLightCurve func(columnIndex int)
 
 	// Callbacks set during tab construction
-	resetFitTab              func() // full reset of Fit tab state when light curve changes
-	invalidateFitCurves      func() // clear cached fit results (diffraction images changed) but keep baseline state
+	resetFitTab              func() // full reset of the Fit tab state when a light curve changes
+	invalidateFitCurves      func() // clear cached fit results (diffraction images changed) but keep the baseline state
 	resetFitButtons          func()
 	resetNormalizeBtn        func()
 	enablePostFitButtons     func()
@@ -57,7 +57,12 @@ type appContext struct {
 	enableShowIOTAPlots      func()
 	autoFillSearchRange      func()
 	stopProcessOccelmntBlink func()
+	startAcqTimingBlink      func()
+	stopAcqTimingBlink       func()
+	confirmAcqTiming         func() // mark Image Acq Timing as confirmed (button orange, no blink)
 	selectFitTab             func()
+	selectVizierTab          func()
+	markVizierWritten        func() // turn VizieR button orange after .dat export
 
 	// NIE manual selection mode flag — true when the checkbox is checked.
 	nieManualSelectMode bool
@@ -79,7 +84,7 @@ type appContext struct {
 	suppressBusyDialog bool
 
 	// updateSodisComment is set by the SODIS dialog to allow external callers
-	// (e.g. Image Acquisition Timing) to update the Comments field.
+	// (e.g., Image Acquisition Timing) to update the Comments field.
 	updateSodisComment func(string)
 }
 

@@ -652,10 +652,9 @@ type cameraDelayInfo struct {
 // The corrected edge time = edge - acqCorr + rsCorr.
 // edgeLabels and edgeTimes are parallel slices (e.g. ["D","R"] or ["Edge 1","Edge 2"]).
 func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayInfo {
-	prefs := fyne.CurrentApp().Preferences()
-	acqDelayStr := prefs.String("imageAcqDelay")
+	acqDelayStr := sessionAcqDelay
 	starRowStr := sessionStarRow
-	rowDeltaStr := prefs.String("imageAcqRowDelta")
+	rowDeltaStr := sessionRowDelta
 
 	if acqDelayStr == "" {
 		return nil
@@ -686,7 +685,7 @@ func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayIn
 	delayMs := delaySecs * 1000.0
 
 	var report string
-	cameraName := prefs.String("imageAcqCameraName")
+	cameraName := sessionCameraName
 	if hasRS {
 		report = fmt.Sprintf(
 			"acqCorr = %.4f sec (Acquisition Delay)\nrsCorr = %.4f sec (starRow=%.1f * rowDelta=%.6f ms)",

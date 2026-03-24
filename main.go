@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.52"
+const Version = "1.2.53"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string
@@ -118,9 +118,17 @@ var vizierDatWrittenThisSession bool
 // A negative report does not require a VizieR .dat file, so the close warning is skipped.
 var sodisNegativeReportSaved bool
 
-// sessionStarRow holds the star row value entered in the Image Acquisition Timing
-// dialog. It persists within the session only, not across sessions.
+// Session-only variables for Image Acquisition Timing dialog values.
+// These are populated from camera-timing.txt when an observation folder is loaded,
+// or set when the user clicks OK in the dialog.
 var sessionStarRow string
+var sessionAcqDelay string
+var sessionRowDelta string
+var sessionCameraName string
+
+// onVizierDatWritten is called after a VizieR .dat file is successfully written.
+// Set by buildFitTab to turn the VizieR button orange.
+var onVizierDatWritten func()
 
 // occultationProcessedForCurrentCSV is set to true when prior diffraction results
 // are found in the -RESULTS folder or when IOTAdiffraction runs for the current CSV.
@@ -1732,6 +1740,29 @@ func main() {
 					ac.resetProcessOccelmntBtn()
 				}
 			}
+			// Check for camera-timing.txt in the observation directory
+			cameraTimingPath := filepath.Join(filepath.Dir(filePath), "camera-timing.txt")
+			if ctData, err := os.ReadFile(cameraTimingPath); err == nil {
+				for _, line := range strings.Split(string(ctData), "\n") {
+					line = strings.TrimSpace(line)
+					if k, v, ok := strings.Cut(line, "="); ok {
+						switch k {
+						case "cameraName":
+							sessionCameraName = v
+						case "acqDelay":
+							sessionAcqDelay = v
+						case "starRow":
+							sessionStarRow = v
+						case "rowDelta":
+							sessionRowDelta = v
+						}
+					}
+				}
+				if ac.confirmAcqTiming != nil {
+					ac.confirmAcqTiming()
+				}
+			}
+
 			// Create an action log file for this CSV
 			if err := createActionLog(filePath); err != nil {
 				fmt.Printf("Warning: could not create log file: %v\n", err)
@@ -2120,6 +2151,9 @@ func main() {
 	ac.selectFitTab = func() {
 		tabs.Select(tab10)
 	}
+	ac.selectVizierTab = func() {
+		tabs.Select(vizierTab.TabItem)
+	}
 
 	// Apply dark tab backgrounds if dark mode was persisted
 	if prefs.BoolWithFallback("darkMode", false) {
@@ -2137,6 +2171,10 @@ func main() {
 			ac.lightCurvePlot.SelectedPairs = nil
 			ac.lightCurvePlot.ShowBaselineLine = false
 			ac.lightCurvePlot.Refresh()
+			// Stop Image Acquisition Timing blink and reset the button color
+			if ac.stopAcqTimingBlink != nil {
+				ac.stopAcqTimingBlink()
+			}
 		}
 
 		// Set selection modes based on the current tab
@@ -2183,6 +2221,12 @@ func main() {
 			// the entries are still empty (first visit).
 			if ac.autoFillSearchRange != nil {
 				ac.autoFillSearchRange()
+			}
+
+			// Flash the Image Acquisition Timing button if the user has
+			// previously set values but hasn't confirmed them this session.
+			if ac.startAcqTimingBlink != nil {
+				ac.startAcqTimingBlink()
 			}
 		} else {
 			ac.lightCurvePlot.SingleSelectMode = false
@@ -2707,14 +2751,69 @@ func main() {
 	btnShowIOTAPlots.Disable()
 	ac.enableShowIOTAPlots = func() { btnShowIOTAPlots.Enable() }
 
-	btnImageAcqTiming := widget.NewButton("Image Acquisition Timing", func() {
+	var btnImageAcqTiming *widget.Button
+	var stopAcqTimingBlink func()
+	startAcqTimingBlink := func() {
+		if stopAcqTimingBlink != nil {
+			return // already blinking
+		}
+		blinkStop := make(chan struct{})
+		stopAcqTimingBlink = func() { close(blinkStop) }
+		go func() {
+			on := true
+			for {
+				select {
+				case <-blinkStop:
+					return
+				case <-time.After(600 * time.Millisecond):
+					on = !on
+					fyne.Do(func() {
+						if on {
+							btnImageAcqTiming.Importance = widget.HighImportance
+						} else {
+							btnImageAcqTiming.Importance = widget.MediumImportance
+						}
+						btnImageAcqTiming.Refresh()
+					})
+				}
+			}
+		}()
+	}
+	acqTimingConfirmed := false
+	ac.startAcqTimingBlink = func() {
+		if !acqTimingConfirmed {
+			startAcqTimingBlink()
+		}
+	}
+	ac.stopAcqTimingBlink = func() {
+		if stopAcqTimingBlink != nil {
+			stopAcqTimingBlink()
+			stopAcqTimingBlink = nil
+		}
+		if !acqTimingConfirmed {
+			btnImageAcqTiming.Importance = widget.HighImportance
+			btnImageAcqTiming.Refresh()
+		}
+	}
+	ac.confirmAcqTiming = func() {
+		if stopAcqTimingBlink != nil {
+			stopAcqTimingBlink()
+			stopAcqTimingBlink = nil
+		}
+		acqTimingConfirmed = true
+		btnImageAcqTiming.Importance = widget.WarningImportance
+		btnImageAcqTiming.Refresh()
+	}
+
+	btnImageAcqTiming = widget.NewButton("Image Acquisition Timing", func() {
+		acqTimingConfirmed = false // reset so blink can start if the user cancels
 		cameraNameEntry := widget.NewEntry()
 		cameraNameEntry.SetPlaceHolder("camera name")
-		cameraNameEntry.SetText(prefs.StringWithFallback("imageAcqCameraName", ""))
+		cameraNameEntry.SetText(sessionCameraName)
 
 		acqDelayEntry := widget.NewEntry()
 		acqDelayEntry.SetPlaceHolder("msecs")
-		acqDelayEntry.SetText(prefs.StringWithFallback("imageAcqDelay", ""))
+		acqDelayEntry.SetText(sessionAcqDelay)
 
 		starRowEntry := widget.NewEntry()
 		starRowEntry.SetPlaceHolder("row number")
@@ -2722,14 +2821,14 @@ func main() {
 
 		rowDeltaEntry := widget.NewEntry()
 		rowDeltaEntry.SetPlaceHolder("ms")
-		rowDeltaEntry.SetText(prefs.StringWithFallback("imageAcqRowDelta", ""))
+		rowDeltaEntry.SetText(sessionRowDelta)
 
-		// updateCameraDelay persists current values and recomputes the camera
+		// updateCameraDelay updates session variables and recomputes the camera
 		// delay comment, pushing it to the open SODIS dialog (if any).
 		updateCameraDelay := func() {
-			prefs.SetString("imageAcqCameraName", cameraNameEntry.Text)
-			prefs.SetString("imageAcqDelay", acqDelayEntry.Text)
-			prefs.SetString("imageAcqRowDelta", rowDeltaEntry.Text)
+			sessionCameraName = cameraNameEntry.Text
+			sessionAcqDelay = acqDelayEntry.Text
+			sessionRowDelta = rowDeltaEntry.Text
 			sessionStarRow = starRowEntry.Text
 
 			acqDelayMs, err1 := strconv.ParseFloat(strings.TrimSpace(acqDelayEntry.Text), 64)
@@ -2772,12 +2871,26 @@ func main() {
 		}
 		dlg := dialog.NewForm("Image Acquisition Timing", "OK", "Cancel", formItems, func(ok bool) {
 			if !ok {
+				// Canceled: start blinking as a reminder if on the Fit tab
+				if onFitTab {
+					startAcqTimingBlink()
+				}
 				return
 			}
-			prefs.SetString("imageAcqCameraName", cameraNameEntry.Text)
-			prefs.SetString("imageAcqDelay", acqDelayEntry.Text)
-			prefs.SetString("imageAcqRowDelta", rowDeltaEntry.Text)
+			sessionCameraName = cameraNameEntry.Text
+			sessionAcqDelay = acqDelayEntry.Text
+			sessionRowDelta = rowDeltaEntry.Text
 			sessionStarRow = starRowEntry.Text
+			// Write camera-timing.txt to the observation directory
+			if resultsFolder != "" {
+				obsDir := filepath.Dir(resultsFolder)
+				content := fmt.Sprintf("cameraName=%s\nacqDelay=%s\nstarRow=%s\nrowDelta=%s\n",
+					sessionCameraName, sessionAcqDelay, sessionStarRow, sessionRowDelta)
+				if err := os.WriteFile(filepath.Join(obsDir, "camera-timing.txt"), []byte(content), 0644); err != nil {
+					fmt.Printf("Warning: could not write camera-timing.txt: %v\n", err)
+				}
+			}
+			ac.confirmAcqTiming()
 		}, w)
 		dlg.Resize(fyne.NewSize(450, 250))
 		dlg.Show()

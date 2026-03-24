@@ -1706,7 +1706,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	}
 
 	var fillSodisBtn *widget.Button
-	fillSodisBtn = widget.NewButton("Fill SODIS report", func() {
+	fillSodisBtn = widget.NewButton("SODIS positive", func() {
 		buildSodisFill("", func() {
 			fillSodisBtn.Importance = widget.WarningImportance
 			fillSodisBtn.Refresh()
@@ -1715,8 +1715,20 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	fillSodisBtn.Importance = widget.HighImportance
 	fillSodisBtn.Disable()
 
+	vizierBtn := widget.NewButton("VizieR", func() {
+		if ac.selectVizierTab != nil {
+			ac.selectVizierTab()
+		}
+	})
+	vizierBtn.Importance = widget.HighImportance
+	vizierBtn.Disable()
+	onVizierDatWritten = func() {
+		vizierBtn.Importance = widget.WarningImportance
+		vizierBtn.Refresh()
+	}
+
 	var fillSodisNegBtn *widget.Button
-	fillSodisNegBtn = widget.NewButton("Fill SODIS Negative", func() {
+	fillSodisNegBtn = widget.NewButton("SODIS negative", func() {
 		buildSodisFill("NEGATIVE", func() {
 			sodisNegativeReportSaved = true
 			fillSodisNegBtn.Importance = widget.WarningImportance
@@ -1729,6 +1741,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		mcBtn.Enable()
 		runNieBtn.Enable()
 		fillSodisBtn.Enable()
+		vizierBtn.Enable()
 	}
 
 	ac.resetFitButtons = func() {
@@ -1740,6 +1753,8 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		runNieBtn.Disable()
 		fillSodisBtn.Importance = widget.HighImportance
 		fillSodisBtn.Disable()
+		vizierBtn.Importance = widget.HighImportance
+		vizierBtn.Disable()
 	}
 
 	// resetFitTab clears all Fit tab state so analysis starts fresh when the
@@ -1861,7 +1876,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
 		container.NewHBox(mcNarrowSearchCheck, nieSinglePointCheck),
-		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, fillSodisNegBtn),
+		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, vizierBtn, fillSodisNegBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
 		fitStatusLabel,
