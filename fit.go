@@ -157,7 +157,8 @@ func buildPrecomputedCurve(params *OccultationParameters, skipEdges ...bool) (*p
 	}
 
 	skip := len(skipEdges) > 0 && skipEdges[0]
-	lcData, edges, err := lightcurve.ExtractAndPlotLightCurve(
+	// Always skip edges in ExtractAndPlotLightCurve; use findEdgesRobust instead.
+	lcData, _, err := lightcurve.ExtractAndPlotLightCurve(
 		nil,
 		params.DXKmPerSec,
 		params.DYKmPerSec,
@@ -167,7 +168,7 @@ func buildPrecomputedCurve(params *OccultationParameters, skipEdges ...bool) (*p
 		filepath.Join(appDir, "targetImage16bit.png"),
 		filepath.Join(appDir, "geometricShadow.png"),
 		"",
-		skip,
+		true,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract diffraction light curve: %w", err)
@@ -193,10 +194,26 @@ func buildPrecomputedCurve(params *OccultationParameters, skipEdges ...bool) (*p
 	curve = applyCameraExposure(curve, params.ExposureTimeSecs)
 
 	distancePerPoint := params.FundamentalPlaneWidthKm / float64(fundPlaneWidthPts)
-	edgeTimes := make([]float64, len(edges))
-	for i, edge := range edges {
-		edgeKm := edge * distancePerPoint
-		edgeTimes[i] = (edgeKm - kmStart) / shadowSpeed
+	var edgeTimes []float64
+	if !skip {
+		path := &lightcurve.ObservationPath{
+			DxKmPerSec:               params.DXKmPerSec,
+			DyKmPerSec:               params.DYKmPerSec,
+			PathOffsetFromCenterKm:   params.PathPerpendicularOffsetKm,
+			FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
+			FundamentalPlaneWidthPts: fundPlaneWidthPts,
+		}
+		if err := path.ComputePathFromVelocity(); err == nil {
+			path.ComputeSamplePoints()
+			edges, err := findEdgesRobust(filepath.Join(appDir, "geometricShadow.png"), path, true)
+			if err == nil {
+				edgeTimes = make([]float64, len(edges))
+				for i, edge := range edges {
+					edgeKm := edge * distancePerPoint
+					edgeTimes[i] = (edgeKm - kmStart) / shadowSpeed
+				}
+			}
+		}
 	}
 
 	curveTimes := make([]float64, len(curve))
@@ -225,16 +242,12 @@ func populateEdgeTimes(candidates []*precomputedCurve, params *OccultationParame
 		}
 	}
 
-	geometricMatrix, err := lightcurve.LoadGray8PNG(filepath.Join(appDir, "geometricShadow.png"))
-	if err != nil {
-		return fmt.Errorf("failed to load geometric shadow for edge detection: %w", err)
-	}
-
 	shadowSpeed := math.Sqrt(params.DXKmPerSec*params.DXKmPerSec + params.DYKmPerSec*params.DYKmPerSec)
 	if shadowSpeed == 0 {
 		return fmt.Errorf("shadow speed is zero — check dX and dY parameters")
 	}
 	distancePerPoint := params.FundamentalPlaneWidthKm / float64(fundPlaneWidthPts)
+	geoPath := filepath.Join(appDir, "geometricShadow.png")
 
 	for _, pc := range candidates {
 		if len(pc.edgeTimes) > 0 {
@@ -251,7 +264,10 @@ func populateEdgeTimes(candidates []*precomputedCurve, params *OccultationParame
 			continue
 		}
 		path.ComputeSamplePoints()
-		edges := lightcurve.FindEdgesInGeometricShadow(geometricMatrix, path)
+		edges, err := findEdgesRobust(geoPath, path)
+		if err != nil {
+			continue
+		}
 
 		// kmStart = first sample point distance in km (matches lcData[0].Distance
 		// in buildPrecomputedCurve, since ExtractLightCurve uses the same path).
@@ -1317,6 +1333,27 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 		}
 	}
 	bestPathOffset := results[bestIdx].pathOffset
+
+	// Re-run edge detection for the best candidate with plot data stored
+	// so that showEdgePlots() can display them on the UI thread.
+	bestPC := results[bestIdx].pc
+	fundPlaneWidthPts := params.FundamentalPlaneWidthNumPoints
+	if params.PathToExternalImage != "" {
+		if img, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "targetImage16bit.png")); err == nil {
+			fundPlaneWidthPts = img.Bounds().Dx()
+		}
+	}
+	bestPath := &lightcurve.ObservationPath{
+		DxKmPerSec:               params.DXKmPerSec,
+		DyKmPerSec:               params.DYKmPerSec,
+		PathOffsetFromCenterKm:   bestPC.pathOffset,
+		FundamentalPlaneWidthKm:  params.FundamentalPlaneWidthKm,
+		FundamentalPlaneWidthPts: fundPlaneWidthPts,
+	}
+	if err := bestPath.ComputePathFromVelocity(); err == nil {
+		bestPath.ComputeSamplePoints()
+		_, _ = findEdgesRobust(filepath.Join(appDir, "geometricShadow.png"), bestPath, true)
+	}
 
 	return &fitSearchResult{results: results, bestIdx: bestIdx, bestPathOffset: bestPathOffset}, nil
 }

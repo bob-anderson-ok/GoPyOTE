@@ -700,6 +700,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 								ac.overlayTheoryCurve(sd.bestFr, nil)
 								runAutoSlide()
 								showEdgeTimesDialog(a, params, sd.bestFr)
+								showEdgePlots()
 							}
 						})
 					}()
@@ -736,6 +737,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 							}
 							runAutoSlide()
 							showEdgeTimesDialog(a, params, fr)
+							showEdgePlots()
 						}
 					}
 				}

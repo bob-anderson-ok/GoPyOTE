@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.49"
+const Version = "1.2.50"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string
@@ -2780,7 +2780,11 @@ func main() {
 		ShowUpdateDialogTwoPane(w)
 	})
 
-	buttons := container.NewHBox(btnCheckForUpdates, btnProcessOccelemnt, btnImageAcqTiming, btnOccultParams, btnShowDetails, btnShowIOTAPlots)
+	btnTestEdgeDetection := widget.NewButton("Test edge detection", func() {
+		edgeDemo()
+	})
+
+	buttons := container.NewHBox(btnCheckForUpdates, btnProcessOccelemnt, btnImageAcqTiming, btnOccultParams, btnShowDetails, btnShowIOTAPlots, btnTestEdgeDetection)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
