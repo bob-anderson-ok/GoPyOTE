@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"io"
 	"math"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,7 +70,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.54"
+const Version = "1.2.55"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string
@@ -244,6 +245,12 @@ func main() {
 
 	// Create a menu
 	helpMenu := fyne.NewMenu("Help Topics",
+		fyne.NewMenuItem("Video library link", func() {
+			u, _ := url.Parse("https://github.com/bob-anderson-ok/GoPyOTE-Videos/releases")
+			if err := a.OpenURL(u); err != nil {
+				dialog.ShowError(fmt.Errorf("failed to open Video library link: %w", err), w)
+			}
+		}),
 		fyne.NewMenuItem("Block Integration", func() {
 			content, err := blockIntegrationMarkdown.ReadFile("help_markdown/blockIntegration.md")
 			if err != nil {
