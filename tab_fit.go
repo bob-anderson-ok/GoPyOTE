@@ -564,6 +564,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				lastFitCandidates = nil
 				lastFitTargetTimes = nil
 				ac.theorySeries = nil
+				ac.theorySampledSeries = nil
 				ac.trendSeries = nil
 				ac.lightCurvePlot.SetVerticalLines(nil, false)
 				ac.lightCurvePlot.SetSigmaLines(nil, false)
@@ -1352,13 +1353,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 								fmt.Printf("Warning: could not save fitPlotMC.png: %v\n", err)
 							}
 
-							mcOverlayWin := a.NewWindow("Fit Result with Monte Carlo Edge Uncertainty (±3σ)")
-							mcOverlayCanvas := canvas.NewImageFromImage(mcOverlayImg)
-							mcOverlayCanvas.FillMode = canvas.ImageFillContain
-							mcOverlayWin.SetContent(mcOverlayCanvas)
-							mcOverlayWin.Resize(fyne.NewSize(1250, 550))
-							mcOverlayWin.CenterOnScreen()
-							safeShowWindow(mcOverlayWin)
+							// Image saved above; not displayed
 						}
 
 						// Update main plot: overlay theoretical curve, edge lines, and ±3σ lines
@@ -1812,6 +1807,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 		// Clear plot overlays (theory curve, edge lines, sigma lines, baseline line)
 		ac.theorySeries = nil
+		ac.theorySampledSeries = nil
 		ac.trendSeries = nil
 		ac.lightCurvePlot.SetVerticalLines(nil, false)
 		ac.lightCurvePlot.SetSigmaLines(nil, false)
@@ -1849,6 +1845,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 		// Clear plot overlays that depended on the old fit
 		ac.theorySeries = nil
+		ac.theorySampledSeries = nil
 		ac.trendSeries = nil
 		ac.lightCurvePlot.SetVerticalLines(nil, false)
 		ac.lightCurvePlot.SetSigmaLines(nil, false)

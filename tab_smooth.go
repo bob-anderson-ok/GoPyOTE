@@ -260,6 +260,7 @@ func buildSmoothTab(ac *appContext) *container.TabItem {
 		normalizationApplied = false
 		ac.smoothedSeries = nil
 		ac.theorySeries = nil
+		ac.theorySampledSeries = nil
 		ac.lightCurvePlot.SetVerticalLines(nil, false)
 		ac.lightCurvePlot.SetSigmaLines(nil, false)
 		ac.lightCurvePlot.ShowBaselineLine = false

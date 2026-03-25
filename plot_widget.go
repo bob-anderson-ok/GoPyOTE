@@ -933,7 +933,11 @@ func (r *lightCurvePlotRenderer) Refresh() {
 			} else {
 				scatter.Color = series.Color
 				scatter.GlyphStyle.Shape = draw.CircleGlyph{}
-				scatter.GlyphStyle.Radius = vg.Points(4)
+				radius := series.ScatterRadius
+				if radius == 0 {
+					radius = 4
+				}
+				scatter.GlyphStyle.Radius = vg.Points(radius)
 				plt.Add(scatter)
 			}
 		}

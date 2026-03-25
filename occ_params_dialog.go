@@ -1180,6 +1180,32 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 				dialog.ShowError(fmt.Errorf("failed to write site file: %w", werr), w)
 				return
 			}
+			lastLoadedSitePath = filePath
+
+			// Populate SODIS/VizieR fields the same way Load site does
+			if value := strings.TrimSpace(latDecimalEntry.Text); value != "" {
+				if lat, perr := strconv.ParseFloat(value, 64); perr == nil {
+					deg, minutes, sec := decimalToDMS(lat)
+					vt.SiteLatDegEntry.SetText(deg)
+					vt.SiteLatMinEntry.SetText(minutes)
+					vt.SiteLatSecsEntry.SetText(sec)
+				}
+			}
+			if value := strings.TrimSpace(longDecimalEntry.Text); value != "" {
+				if lon, perr := strconv.ParseFloat(value, 64); perr == nil {
+					deg, minutes, sec := decimalToDMS(lon)
+					vt.SiteLongDegEntry.SetText(deg)
+					vt.SiteLongMinEntry.SetText(minutes)
+					vt.SiteLongSecsEntry.SetText(sec)
+				}
+			}
+			if value := strings.TrimSpace(altitudeEntry.Text); value != "" {
+				vt.SiteAltitudeEntry.SetText(value)
+			}
+			if value := strings.TrimSpace(observer1Entry.Text); value != "" {
+				vt.ObserverNameEntry.SetText(value)
+			}
+
 			logAction(fmt.Sprintf("Site file written: %s", filePath))
 		}, w)
 

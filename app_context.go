@@ -29,16 +29,17 @@ type appContext struct {
 	endFrameEntry   *FocusLossEntry
 
 	// Mutable plot state shared across tabs
-	smoothedSeries    *PlotSeries
-	theorySeries      *PlotSeries
-	trendSeries       *PlotSeries // DEBUG: Savitzky-Golay trend from correlated noise analysis
-	frameRangeStart   float64
-	frameRangeEnd     float64
-	minFrameNum       float64
-	maxFrameNum       float64
-	displayedCurves   map[int]bool
-	curveColors       []color.RGBA
-	currentXAxisLabel string
+	smoothedSeries      *PlotSeries
+	theorySeries        *PlotSeries
+	theorySampledSeries *PlotSeries // sampled points on the theoretical curve (red dots)
+	trendSeries         *PlotSeries // DEBUG: Savitzky-Golay trend from correlated noise analysis
+	frameRangeStart     float64
+	frameRangeEnd       float64
+	minFrameNum         float64
+	maxFrameNum         float64
+	displayedCurves     map[int]bool
+	curveColors         []color.RGBA
+	currentXAxisLabel   string
 
 	// Tab background management
 	tabBgs []tabBgEntry
@@ -115,6 +116,26 @@ func (ac *appContext) overlayTheoryCurve(fr *fitResult, edgeStds []float64) {
 		Color:    color.RGBA{R: 255, G: 170, B: 170, A: 255},
 		Name:     "Theoretical (fit)",
 		LineOnly: true,
+	}
+	// Build sampled points on the theoretical curve (small red circles)
+	if len(fr.sampledTimes) > 0 && len(fr.sampledVals) == len(fr.sampledTimes) {
+		sampledPts := make([]PlotPoint, len(fr.sampledTimes))
+		for i, t := range fr.sampledTimes {
+			sampledPts[i] = PlotPoint{
+				X:     t,
+				Y:     fr.sampledVals[i]*scale + (1.0 - scale),
+				Index: -1,
+			}
+		}
+		ac.theorySampledSeries = &PlotSeries{
+			Points:        sampledPts,
+			Color:         color.RGBA{R: 255, G: 0, B: 0, A: 255},
+			Name:          "Sampled points",
+			ScatterOnly:   true,
+			ScatterRadius: 2.5,
+		}
+	} else {
+		ac.theorySampledSeries = nil
 	}
 	edgeXVals := make([]float64, len(fr.edgeTimes))
 	for i, et := range fr.edgeTimes {

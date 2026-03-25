@@ -604,13 +604,16 @@ func showFitDisplay(app fyne.App, w fyne.Window, dd *fitDisplayData) {
 	}
 
 	if dd.scaleOverlayImg != nil {
-		scaleOverlayWindow := app.NewWindow(dd.scaleWindowTitle)
-		scaleOverlayCanvas := canvas.NewImageFromImage(dd.scaleOverlayImg)
-		scaleOverlayCanvas.FillMode = canvas.ImageFillContain
-		scaleOverlayWindow.SetContent(scaleOverlayCanvas)
-		scaleOverlayWindow.Resize(fyne.NewSize(1250, 550))
-		scaleOverlayWindow.CenterOnScreen()
-		safeShowWindow(scaleOverlayWindow)
+		savePath := filepath.Join(appDir, "scaledFitResult.png")
+		if resultsFolder != "" {
+			savePath = filepath.Join(resultsFolder, "scaledFitResult.png")
+		}
+		var scaleBuf bytes.Buffer
+		if err := png.Encode(&scaleBuf, dd.scaleOverlayImg); err != nil {
+			fmt.Printf("Warning: could not encode scaledFitResult.png: %v\n", err)
+		} else if err := os.WriteFile(savePath, scaleBuf.Bytes(), 0644); err != nil {
+			fmt.Printf("Warning: could not save scaledFitResult.png: %v\n", err)
+		}
 	}
 
 	if dd.pathImg != nil {

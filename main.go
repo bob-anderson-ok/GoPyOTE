@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.53"
+const Version = "1.2.54"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string
@@ -589,12 +589,8 @@ func main() {
 	})
 
 	// Create X and Y axis range spinners (start empty, filled when the first curve selected)
-	xMinEntry := NewFocusLossEntry()
-	xMaxEntry := NewFocusLossEntry()
 	yMinEntry := NewFocusLossEntry()
 	yMaxEntry := NewFocusLossEntry()
-	xMinEntry.SetPlaceHolder("X Min")
-	xMaxEntry.SetPlaceHolder("X Max")
 	yMinEntry.SetPlaceHolder("Y Min")
 	yMaxEntry.SetPlaceHolder("Y Max")
 
@@ -603,66 +599,11 @@ func main() {
 
 	// Update entries when plot bounds change
 	updateRangeEntries := func() {
-		minX, maxX := ac.lightCurvePlot.GetXBounds()
 		minY, maxY := ac.lightCurvePlot.GetYBounds()
-		// Format X entries as timestamps if timestamp ticks are enabled
-		if ac.lightCurvePlot.GetUseTimestampTicks() {
-			xMinEntry.SetText(formatSecondsAsTimestamp(minX))
-			xMaxEntry.SetText(formatSecondsAsTimestamp(maxX))
-		} else {
-			xMinEntry.SetText(fmt.Sprintf("%.4f", minX))
-			xMaxEntry.SetText(fmt.Sprintf("%.4f", maxX))
-		}
 		yMinEntry.SetText(fmt.Sprintf("%.4f", minY))
 		yMaxEntry.SetText(fmt.Sprintf("%.4f", maxY))
 	}
 	// Don't call updateRangeEntries() here - wait until the first curve is selected
-
-	// Handle X Min entry changes
-	xMinEntry.OnSubmitted = func(text string) {
-		var val float64
-		var ok bool
-		// Try the timestamp format first if timestamp ticks are enabled
-		if ac.lightCurvePlot.GetUseTimestampTicks() {
-			val, ok = parseTimestampInput(text)
-		}
-		// Fall back to float parsing
-		if !ok {
-			var err error
-			val, err = strconv.ParseFloat(text, 64)
-			ok = err == nil
-		}
-		if ok {
-			_, maxX := ac.lightCurvePlot.GetXBounds()
-			ac.lightCurvePlot.SetXBounds(val, maxX)
-			userSetBounds = true
-			logAction(fmt.Sprintf("Set X Min to %.4f", val))
-		}
-		updateRangeEntries()
-	}
-
-	// Handle X Max entry changes
-	xMaxEntry.OnSubmitted = func(text string) {
-		var val float64
-		var ok bool
-		// Try the timestamp format first if timestamp ticks are enabled
-		if ac.lightCurvePlot.GetUseTimestampTicks() {
-			val, ok = parseTimestampInput(text)
-		}
-		// Fall back to float parsing
-		if !ok {
-			var err error
-			val, err = strconv.ParseFloat(text, 64)
-			ok = err == nil
-		}
-		if ok {
-			minX, _ := ac.lightCurvePlot.GetXBounds()
-			ac.lightCurvePlot.SetXBounds(minX, val)
-			userSetBounds = true
-			logAction(fmt.Sprintf("Set X Max to %.4f", val))
-		}
-		updateRangeEntries()
-	}
 
 	// Handle Y Min entry changes
 	yMinEntry.OnSubmitted = func(text string) {
@@ -689,8 +630,6 @@ func main() {
 	}
 
 	// Wrap entries in containers (150px width)
-	xMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), xMinEntry)
-	xMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), xMaxEntry)
 	yMinContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMinEntry)
 	yMaxContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(150, 36)), yMaxEntry)
 
@@ -709,12 +648,8 @@ func main() {
 	}
 	ac.lightCurvePlot.SetUseTimestampTicks(true)
 
-	// Create a toolbar with X and Y range controls
+	// Create a toolbar with Y range controls
 	rangeControls := container.NewHBox(
-		widget.NewLabel("X Min:"),
-		xMinContainer,
-		widget.NewLabel("X Max:"),
-		xMaxContainer,
 		widget.NewLabel("Y Min:"),
 		yMinContainer,
 		widget.NewLabel("Y Max:"),
@@ -942,6 +877,40 @@ func main() {
 			}
 		}
 
+		// Add sampled points on the theoretical curve (red dots), filtered to the visible X range
+		if ac.theorySampledSeries != nil && len(allSeries) > 0 {
+			xMin := math.Inf(1)
+			xMax := math.Inf(-1)
+			for _, s := range allSeries {
+				if s.Name == "Theoretical (fit)" {
+					continue // skip the theory line — use observation data bounds only
+				}
+				for _, pt := range s.Points {
+					if pt.X < xMin {
+						xMin = pt.X
+					}
+					if pt.X > xMax {
+						xMax = pt.X
+					}
+				}
+			}
+			var filteredPts []PlotPoint
+			for _, pt := range ac.theorySampledSeries.Points {
+				if pt.X >= xMin && pt.X <= xMax {
+					filteredPts = append(filteredPts, pt)
+				}
+			}
+			if len(filteredPts) > 0 {
+				allSeries = append(allSeries, PlotSeries{
+					Points:        filteredPts,
+					Color:         ac.theorySampledSeries.Color,
+					Name:          ac.theorySampledSeries.Name,
+					ScatterOnly:   ac.theorySampledSeries.ScatterOnly,
+					ScatterRadius: ac.theorySampledSeries.ScatterRadius,
+				})
+			}
+		}
+
 		// DEBUG: Add correlated-noise trend series if available (gated by showDiagnostics).
 		if ac.trendSeries != nil {
 			var trendPoints []PlotPoint
@@ -994,6 +963,7 @@ func main() {
 					fn()
 				}
 			}
+			updateRangeEntries()
 		}
 
 		// Count total points to decide whether to show a busy dialog.
@@ -1833,6 +1803,7 @@ func main() {
 			normalizationApplied = false                                 // Reset normalization flag
 			baselineScaledToUnity = false
 			ac.theorySeries = nil
+			ac.theorySampledSeries = nil
 			ac.trendSeries = nil
 			ac.lightCurvePlot.SetVerticalLines(nil, false)
 			ac.lightCurvePlot.SetSigmaLines(nil, false)
@@ -1840,8 +1811,6 @@ func main() {
 
 			// Clear range entries and reset the user bounds flag
 			userSetBounds = false
-			xMinEntry.SetText("")
-			xMaxEntry.SetText("")
 			yMinEntry.SetText("")
 			yMaxEntry.SetText("")
 
@@ -2805,7 +2774,7 @@ func main() {
 		btnImageAcqTiming.Refresh()
 	}
 
-	btnImageAcqTiming = widget.NewButton("Image Acquisition Timing", func() {
+	btnImageAcqTiming = widget.NewButton("Camera timing adjustments", func() {
 		acqTimingConfirmed = false // reset so blink can start if the user cancels
 		cameraNameEntry := widget.NewEntry()
 		cameraNameEntry.SetPlaceHolder("camera name")
@@ -2820,7 +2789,7 @@ func main() {
 		starRowEntry.SetText(sessionStarRow)
 
 		rowDeltaEntry := widget.NewEntry()
-		rowDeltaEntry.SetPlaceHolder("ms")
+		rowDeltaEntry.SetPlaceHolder("msecs")
 		rowDeltaEntry.SetText(sessionRowDelta)
 
 		// updateCameraDelay updates session variables and recomputes the camera
@@ -2869,7 +2838,7 @@ func main() {
 			{Text: "star row position at occultation", Widget: starRowEntry},
 			{Text: "row-to-row time delta (msecs)", Widget: rowDeltaEntry},
 		}
-		dlg := dialog.NewForm("Image Acquisition Timing", "OK", "Cancel", formItems, func(ok bool) {
+		dlg := dialog.NewForm("Camera Timing Adjustments", "OK", "Cancel", formItems, func(ok bool) {
 			if !ok {
 				// Canceled: start blinking as a reminder if on the Fit tab
 				if onFitTab {
@@ -2901,11 +2870,7 @@ func main() {
 		ShowUpdateDialogTwoPane(w)
 	})
 
-	btnTestEdgeDetection := widget.NewButton("Test edge detection", func() {
-		edgeDemo()
-	})
-
-	buttons := container.NewHBox(btnCheckForUpdates, btnProcessOccelemnt, btnImageAcqTiming, btnOccultParams, btnShowDetails, btnShowIOTAPlots, btnTestEdgeDetection)
+	buttons := container.NewHBox(btnCheckForUpdates, btnProcessOccelemnt, btnImageAcqTiming, btnOccultParams, btnShowDetails, btnShowIOTAPlots)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
