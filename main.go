@@ -10,7 +10,6 @@ import (
 	"image/png"
 	"io"
 	"math"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.55"
+const Version = "1.2.56"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string
@@ -245,11 +244,8 @@ func main() {
 
 	// Create a menu
 	helpMenu := fyne.NewMenu("Help Topics",
-		fyne.NewMenuItem("Video library link", func() {
-			u, _ := url.Parse("https://github.com/bob-anderson-ok/GoPyOTE-Videos/releases")
-			if err := a.OpenURL(u); err != nil {
-				dialog.ShowError(fmt.Errorf("failed to open Video library link: %w", err), w)
-			}
+		fyne.NewMenuItem("Video library", func() {
+			showVideoLibraryDialog(w)
 		}),
 		fyne.NewMenuItem("Block Integration", func() {
 			content, err := blockIntegrationMarkdown.ReadFile("help_markdown/blockIntegration.md")
@@ -2225,8 +2221,19 @@ func main() {
 		}
 	}
 
-	// Select the OBS select tab on startup
-	tabs.Select(tab3)
+	// On the first run of a new version, open the Settings tab and suggest setting the Observation home directory.
+	// On later runs, go straight to the OBS select tab as before.
+	versionFirstRun := prefs.String("lastRunVersion") != Version
+	if versionFirstRun {
+		prefs.SetString("lastRunVersion", Version)
+		tabs.Select(tab2)
+		dialog.ShowInformation("Welcome to GoPyOTE "+Version,
+			"Please use the Browse button at the bottom of this Settings tab to set your Observation home directory.\n\n"+
+				"This makes it quicker to navigate to your observation files when opening a CSV.",
+			w)
+	} else {
+		tabs.Select(tab3)
+	}
 
 	// Shared widgets for the IOTAdiffraction output window.
 	// A fresh OS window is created each time to let Fyne center it automatically.
