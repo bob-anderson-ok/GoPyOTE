@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.57"
+const Version = "1.2.58"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction
 var lastLoadedParamsPath string
@@ -118,8 +118,9 @@ var vizierDatWrittenThisSession bool
 // A negative report does not require a VizieR .dat file, so the close warning is skipped.
 var sodisNegativeReportSaved bool
 
-// Session-only variables for Image Acquisition Timing dialog values.
-// These are populated from camera-timing.txt when an observation folder is loaded,
+// Session variables for Image Acquisition Timing dialog values.
+// These are populated from preferences on startup, overridden by
+// camera-timing.txt when an observation folder is loaded,
 // or set when the user clicks OK in the dialog.
 var sessionStarRow string
 var sessionAcqDelay string
@@ -182,6 +183,12 @@ func main() {
 		prefs:           prefs,
 		displayedCurves: make(map[int]bool),
 	}
+
+	// Load camera timing preferences into session variables
+	sessionCameraName = prefs.StringWithFallback("cameraTiming.cameraName", "")
+	sessionAcqDelay = prefs.StringWithFallback("cameraTiming.acqDelay", "")
+	sessionStarRow = prefs.StringWithFallback("cameraTiming.starRow", "")
+	sessionRowDelta = prefs.StringWithFallback("cameraTiming.rowDelta", "")
 
 	// Apply persisted dark mode preference
 	if prefs.BoolWithFallback("darkMode", false) {
@@ -2762,7 +2769,8 @@ func main() {
 			}
 		}()
 	}
-	acqTimingConfirmed := false
+	// If camera timing preferences exist, treat as already confirmed (no blink needed)
+	acqTimingConfirmed := sessionAcqDelay != "" || sessionStarRow != "" || sessionRowDelta != ""
 	ac.startAcqTimingBlink = func() {
 		if !acqTimingConfirmed {
 			startAcqTimingBlink()
@@ -2864,6 +2872,11 @@ func main() {
 			sessionAcqDelay = acqDelayEntry.Text
 			sessionRowDelta = rowDeltaEntry.Text
 			sessionStarRow = starRowEntry.Text
+			// Persist camera timing values as preferences
+			ac.prefs.SetString("cameraTiming.cameraName", sessionCameraName)
+			ac.prefs.SetString("cameraTiming.acqDelay", sessionAcqDelay)
+			ac.prefs.SetString("cameraTiming.starRow", sessionStarRow)
+			ac.prefs.SetString("cameraTiming.rowDelta", sessionRowDelta)
 			// Write camera-timing.txt to the observation directory
 			if resultsFolder != "" {
 				obsDir := filepath.Dir(resultsFolder)
@@ -2878,7 +2891,11 @@ func main() {
 		dlg.Resize(fyne.NewSize(450, 250))
 		dlg.Show()
 	})
-	btnImageAcqTiming.Importance = widget.HighImportance
+	if acqTimingConfirmed {
+		btnImageAcqTiming.Importance = widget.WarningImportance
+	} else {
+		btnImageAcqTiming.Importance = widget.HighImportance
+	}
 
 	btnCheckForUpdates := widget.NewButton("Check for updates", func() {
 		ShowUpdateDialogTwoPane(w)

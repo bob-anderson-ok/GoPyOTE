@@ -22,7 +22,20 @@ type VideoAsset struct {
 	Size        int64
 }
 
+// cleanupPreviousVideoDownloads removes any gopyote-video-* temp directories
+// left over from earlier downloads.
+func cleanupPreviousVideoDownloads() {
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "gopyote-video-*"))
+	if err != nil {
+		return
+	}
+	for _, dir := range matches {
+		_ = os.RemoveAll(dir)
+	}
+}
+
 func showVideoLibraryDialog(parent fyne.Window) {
+	cleanupPreviousVideoDownloads()
 	var videos []VideoAsset
 	selectedIndex := -1
 
