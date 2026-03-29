@@ -1,0 +1,31 @@
+# IDE settings
+.idea/
+.claude/
+
+# VSCode (optional - commit if you want shared debug configs)
+.vscode/
+
+# Compiled binaries
+*.exe
+*.exe~
+
+# Generated images (re-created at runtime)
+*.png
+
+# Temp files
+*.tmp.*
+nul
+fit_prompt.txt
+
+# Zip archives
+*.zip
+
+*.csv
+*.qe
+*.site
+*.txt
+*.log
+*.xlsx
+
+# Go (go.sum should usually BE tracked - remove this if so)
+# go.sum
