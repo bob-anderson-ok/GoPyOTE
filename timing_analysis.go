@@ -6,6 +6,17 @@ import (
 	"sort"
 )
 
+const (
+	// droppedFrameRatioThreshold is the minimum ratio of observed/expected time step
+	// that indicates one or more frames were dropped.
+	droppedFrameRatioThreshold = 1.8
+
+	// cadenceErrorUpperRatio and cadenceErrorLowerRatio define the band outside
+	// which a time step is flagged as a cadence error.
+	cadenceErrorUpperRatio = 1.3
+	cadenceErrorLowerRatio = 0.7
+)
+
 // TimingError represents a timing anomaly in the light curve data
 type TimingError struct {
 	Index        int     // Index in the data where the error occurs (after the time step)
@@ -88,8 +99,8 @@ func analyzeTimingErrors(timeValues []float64) *TimingAnalysisResult {
 			continue
 		}
 		ratio := step / result.MedianTimeStep
-		if ratio >= 1.8 {
-			// Dropped frame error: ratio >= 1.8 (could be multiple dropped frames)
+		if ratio >= droppedFrameRatioThreshold {
+			// Dropped frame error (could be multiple dropped frames)
 			droppedCount := int(math.Round(ratio)) - 1 // Number of frames that were dropped
 			result.DroppedFrameErrors = append(result.DroppedFrameErrors, TimingError{
 				Index:        i + 1, // Index after the gap
@@ -133,8 +144,8 @@ func analyzeTimingErrors(timeValues []float64) *TimingAnalysisResult {
 		}
 		ratio := step / result.AverageTimeStep
 
-		if ratio >= 1.3 || ratio <= 0.7 {
-			// Cadence error: ratio is 1.3x or 0.7x normal
+		if ratio >= cadenceErrorUpperRatio || ratio <= cadenceErrorLowerRatio {
+			// Cadence error: ratio outside normal band
 			result.CadenceErrors = append(result.CadenceErrors, TimingError{
 				Index:        i + 1,
 				ErrorType:    "cadence",

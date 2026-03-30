@@ -21,6 +21,19 @@ import (
 	"GoPyOTE/lightcurve"
 )
 
+const (
+	// Edge detection parameters for diffraction image shadow boundary detection.
+	edgeDetectStepSize       = 0.25 // sub-pixel sampling step along the path
+	edgeDetectFilterSigma    = 1.0  // Gaussian smoothing sigma
+	edgeDetectThresholdLow   = 0.3  // hysteresis lower threshold (outside → inside)
+	edgeDetectThresholdHigh  = 0.7  // hysteresis upper threshold (inside → outside)
+	edgeDetectGrazeThreshold = 0.2  // minimum edge strength for grazing events
+
+	// crossingInterpolationTolerance prevents division by near-zero in edge
+	// crossing interpolation.
+	crossingInterpolationTolerance = 1e-12
+)
+
 type Point struct {
 	X, Y float64
 }
@@ -282,7 +295,7 @@ func DetectRobustCrossingsGrayFast(
 					if crossIdx >= 0 {
 						den := filt[crossIdx+1] - filt[crossIdx]
 						alpha := 0.0
-						if math.Abs(den) > 1e-12 {
+						if math.Abs(den) > crossingInterpolationTolerance {
 							alpha = (midThreshold - filt[crossIdx]) / den
 						}
 						s := svals[crossIdx] + alpha*(svals[crossIdx+1]-svals[crossIdx])
@@ -315,7 +328,7 @@ func DetectRobustCrossingsGrayFast(
 					if crossIdx >= 0 {
 						den := filt[crossIdx+1] - filt[crossIdx]
 						alpha := 0.0
-						if math.Abs(den) > 1e-12 {
+						if math.Abs(den) > crossingInterpolationTolerance {
 							alpha = (midThreshold - filt[crossIdx]) / den
 						}
 						s := svals[crossIdx] + alpha*(svals[crossIdx+1]-svals[crossIdx])
@@ -438,70 +451,19 @@ func findEdgesRobust(geometricShadowPath string, path *lightcurve.ObservationPat
 	crossings := DetectRobustCrossingsGrayFast(
 		img,
 		p0, p1,
-		0.25, // ds: sub-pixel step size
-		1.0,  // sigma: Gaussian filter width
-		0.3,  // thresholdLow
-		0.7,  // thresholdHigh
-		0.2,  // grazeThreshold
+		edgeDetectStepSize,
+		edgeDetectFilterSigma,
+		edgeDetectThresholdLow,
+		edgeDetectThresholdHigh,
+		edgeDetectGrazeThreshold,
 		show,
 	)
 
 	edges := make([]float64, len(crossings))
 	for i, c := range crossings {
 		edges[i] = c.S
-		fmt.Printf("Edge %d: %s at s=%.3f (%.2f, %.2f) strength=%.3f\n",
-			i+1, c.Kind, c.S, c.X, c.Y, c.Strength)
 	}
 	return edges, nil
-}
-
-//
-// ===== DEMO =====
-//
-
-func edgeDemo() {
-	rect := image.Rect(0, 0, 1000, 1000)
-	img := image.NewGray(rect)
-
-	// fill white
-	for i := range img.Pix {
-		img.Pix[i] = 255
-	}
-
-	// draw a black circle
-	cx, cy, r := 500.0, 500.0, 220.0
-	for y := 0; y < 1000; y++ {
-		for x := 0; x < 1000; x++ {
-			dx := float64(x) - cx
-			dy := float64(y) - cy
-			if dx*dx+dy*dy <= r*r {
-				i := y*img.Stride + x
-				img.Pix[i] = 0
-			}
-		}
-	}
-
-	// Path grazes the top of the circle at a shallow angle, so the
-	// stair stepped pixel boundary produces multiple dips in the signal.
-	p0 := Point{400, 285}
-	p1 := Point{600, 275}
-
-	c := DetectRobustCrossingsGrayFast(
-		img,
-		p0, p1,
-		0.25, // 0.25
-		0.7,
-		0.5,
-		1.0, // 1.0
-		0.2,
-	)
-
-	for _, v := range c {
-		fmt.Printf("%s at s=%.3f, (%.2f, %.2f)\n",
-			v.Kind, v.S, v.X, v.Y)
-	}
-
-	showEdgePlots()
 }
 
 // showRawFiltPlotZoomed creates a plot of raw and filtered signals zoomed to a

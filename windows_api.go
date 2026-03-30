@@ -11,8 +11,6 @@ var (
 	procGetForegroundWindow = user32.NewProc("GetForegroundWindow")
 	procGetWindowRect       = user32.NewProc("GetWindowRect")
 	procSetWindowPos        = user32.NewProc("SetWindowPos")
-	procFindWindowW         = user32.NewProc("FindWindowW")
-	procShowWindow          = user32.NewProc("ShowWindow")
 )
 
 type winRect struct {
@@ -40,16 +38,3 @@ func setWindowPos(hwnd uintptr, x, y, w, h int32) bool {
 	return ret != 0
 }
 
-func findWindowByTitle(title string) uintptr {
-	titlePtr, _ := syscall.UTF16PtrFromString(title)
-	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
-	return hwnd
-}
-
-const swHide = 0
-const swShow = 5
-
-func showWindow(hwnd uintptr, cmd int) bool {
-	ret, _, _ := procShowWindow.Call(hwnd, uintptr(cmd))
-	return ret != 0
-}

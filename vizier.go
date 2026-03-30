@@ -231,8 +231,9 @@ func (vt *VizieRTab) SetAsteroidNumber(num string) {
 }
 
 // FillStarFromOccelmntXml parses the first <Event>'s <Star> element from the
-// supplied occelmnt XML. If the first comma-separated field starts with "UCAC4"
-// (case-insensitive), the UCAC4 identifier that follows is written to StarUCAC4Entry.
+// supplied occelmnt XML. The first comma-separated field is the star identifier
+// (e.g. "UCAC4 523-052466", "TYC 1234-5678-1", "HIP 12345"). The catalog prefix
+// determines which entry field is populated.
 func (vt *VizieRTab) FillStarFromOccelmntXml(xmlText string) {
 	if xmlText == "" {
 		return
@@ -242,11 +243,18 @@ func (vt *VizieRTab) FillStarFromOccelmntXml(xmlText string) {
 		return
 	}
 	star := strings.TrimSpace(strings.SplitN(occ.Events[0].Star, ",", 2)[0])
-	if strings.HasPrefix(strings.ToUpper(star), "UCAC4") {
-		fields := strings.Fields(star)
-		if len(fields) >= 2 {
-			vt.StarUCAC4Entry.SetText(fields[1])
-		}
+	fields := strings.Fields(star)
+	if len(fields) < 2 {
+		return
+	}
+	catalog := strings.ToUpper(fields[0])
+	starID := fields[1]
+	if strings.HasPrefix(catalog, "UCAC") {
+		vt.StarUCAC4Entry.SetText(starID)
+	} else if strings.HasPrefix(catalog, "TYC") {
+		vt.StarTycho2Entry.SetText(starID)
+	} else if strings.HasPrefix(catalog, "HIP") {
+		vt.StarHipparcosEntry.SetText(starID)
 	}
 }
 
@@ -1803,7 +1811,7 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 			if xmlErr := xml.Unmarshal([]byte(fill.occelmntXml), &occ); xmlErr == nil && len(occ.Events) > 0 {
 				ev := occ.Events[0]
 
-				// STAR: first CSV field of the <Star> element
+				// STAR: first comma-separated field of the <Star> element
 				if ev.Star != "" {
 					starParts := strings.SplitN(ev.Star, ",", 2)
 					if starName := strings.TrimSpace(starParts[0]); starName != "" {

@@ -46,19 +46,6 @@ type Asset struct {
 	Size               int64  `json:"size"`
 }
 
-//func CheckForNewVersion() {
-//	a := app.New()
-//	w := a.NewWindow("Two-Pane Updater Demo")
-//	w.Resize(fyne.NewSize(900, 600))
-//
-//	btn := widget.NewButton("Check for Updates", func() {
-//		ShowUpdateDialogTwoPane(w)
-//	})
-//
-//	w.SetContent(container.NewCenter(btn))
-//	w.ShowAndRun()
-//}
-
 func ShowUpdateDialogTwoPane(parent fyne.Window) {
 	var selectable []Release
 	selectedIndex := -1

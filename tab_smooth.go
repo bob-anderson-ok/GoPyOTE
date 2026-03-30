@@ -33,8 +33,7 @@ func buildSmoothTab(ac *appContext) *container.TabItem {
 	// Smooth button
 	smoothButton := widget.NewButton("Smooth", func() {
 		// Check if we have loaded data
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		if noDataLoaded(w) {
 			return
 		}
 
@@ -158,8 +157,7 @@ func buildSmoothTab(ac *appContext) *container.TabItem {
 	// Normalize button - uses the smoothed reference curve to normalize all light curves
 	normalizeButton := widget.NewButton("Normalize", func() {
 		// Check if we have loaded data
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		if noDataLoaded(w) {
 			return
 		}
 
@@ -231,8 +229,7 @@ func buildSmoothTab(ac *appContext) *container.TabItem {
 
 	// Undo button - reloads the original CSV file to restore original data
 	undoNormalizeButton := widget.NewButton("Undo", func() {
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		if noDataLoaded(w) {
 			return
 		}
 

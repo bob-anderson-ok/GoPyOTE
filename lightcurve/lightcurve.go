@@ -72,7 +72,7 @@ var ErrNoIntersection = errors.New("line does not intersect square")
 // This matches the calculation used in the main IOTAdiffraction application.
 func (p *ObservationPath) ComputePathFromVelocity() error {
 	// Compute shadow speed
-	p.ShadowSpeedKmPerSec = math.Sqrt(p.DxKmPerSec*p.DxKmPerSec + p.DyKmPerSec*p.DyKmPerSec)
+	p.ShadowSpeedKmPerSec = math.Hypot(p.DxKmPerSec, p.DyKmPerSec)
 
 	if p.ShadowSpeedKmPerSec == 0 {
 		return errors.New("shadow speed is zero (both Dx and Dy are zero)")
@@ -243,7 +243,7 @@ func removeDuplicatePoints(pts []annotatedPoint, tol float64) []annotatedPoint {
 func (p *ObservationPath) ComputeSamplePoints() {
 	xLength := p.EndX - p.StartX
 	yLength := p.EndY - p.StartY
-	pathLength := math.Sqrt(xLength*xLength + yLength*yLength)
+	pathLength := math.Hypot(xLength, yLength)
 
 	dYPerStep := yLength / pathLength
 	dXPerStep := xLength / pathLength
@@ -253,7 +253,7 @@ func (p *ObservationPath) ComputeSamplePoints() {
 		k := float64(i)
 		xVal := p.StartX + k*dXPerStep
 		yVal := p.StartY + k*dYPerStep
-		distanceFromStart := math.Sqrt(k*k*dXPerStep*dXPerStep + k*k*dYPerStep*dYPerStep)
+		distanceFromStart := k * math.Hypot(dXPerStep, dYPerStep)
 		p.SamplePoints = append(p.SamplePoints, PathPoint{
 			X:                 xVal,
 			Y:                 yVal,

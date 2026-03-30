@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"image/color"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/dialog"
 )
 
 // tabBgEntry tracks a tab background rectangle with its light/dark mode colors.
@@ -87,6 +89,16 @@ type appContext struct {
 	// updateSodisComment is set by the SODIS dialog to allow external callers
 	// (e.g., Image Acquisition Timing) to update the Comments field.
 	updateSodisComment func(string)
+}
+
+// noDataLoaded checks whether light curve data is loaded. If not, it shows
+// an error dialog and returns true so the caller can return early.
+func noDataLoaded(w fyne.Window) bool {
+	if loadedLightCurveData == nil {
+		dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		return true
+	}
+	return false
 }
 
 // makeTabBg creates a colored background rectangle and registers it for dark-mode toggling.

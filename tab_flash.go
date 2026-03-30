@@ -12,6 +12,10 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+// flashBaselineWindow is the number of points averaged on each side of the
+// selected point to compute the A-level and B-level baselines.
+const flashBaselineWindow = 10
+
 // buildFlashTagsTab constructs the Flash Tags tab.
 func buildFlashTagsTab(ac *appContext) *container.TabItem {
 	w := ac.window
@@ -55,10 +59,10 @@ func buildFlashTagsTab(ac *appContext) *container.TabItem {
 		}
 		logAction(fmt.Sprintf("Flash tag: Computing levels for selected point at frame %.0f, value %.4f", selectedFrameNum, selectedPointValue))
 
-		// Compute Alevel: average of 10 points to the left (before selected point)
+		// Compute Alevel: average of points to the left (before selected point)
 		aCount := 0
 		aSum := 0.0
-		for i := selectedIdx - 1; i >= 0 && aCount < 10; i-- {
+		for i := selectedIdx - 1; i >= 0 && aCount < flashBaselineWindow; i-- {
 			aSum += series.Points[i].Y
 			aCount++
 		}
@@ -75,10 +79,10 @@ func buildFlashTagsTab(ac *appContext) *container.TabItem {
 			logAction(fmt.Sprintf("Flash tag: Alevel = %.4f (average of %d points)", alevel, aCount))
 		}
 
-		// Compute Blevel: average of 10 points to the right (after the selected point)
+		// Compute Blevel: average of points to the right (after the selected point)
 		bCount := 0
 		bSum := 0.0
-		for i := selectedIdx + 1; i < len(series.Points) && bCount < 10; i++ {
+		for i := selectedIdx + 1; i < len(series.Points) && bCount < flashBaselineWindow; i++ {
 			bSum += series.Points[i].Y
 			bCount++
 		}

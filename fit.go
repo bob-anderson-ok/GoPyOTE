@@ -33,6 +33,14 @@ import (
 	"gonum.org/v1/plot/vg/vgimg"
 )
 
+const (
+	// pathOffsetCenterWarningRatio triggers a warning when the observation path
+	// perpendicular offset is within this fraction of the body's major axis,
+	// meaning the path passes very close to the asteroid center.
+	pathOffsetCenterWarningRatio = 0.1
+
+)
+
 // safeShowWindow works around a Fyne/GLFW race condition where closing a
 // secondary window while the mouse cursor is still over it can panic
 // (nil dereference in processMouseMoved → SetInputMode). The intercept
@@ -177,7 +185,7 @@ func buildPrecomputedCurve(params *OccultationParameters, skipEdges ...bool) (*p
 		return nil, fmt.Errorf("no diffraction light curve data extracted")
 	}
 
-	shadowSpeed := math.Sqrt(params.DXKmPerSec*params.DXKmPerSec + params.DYKmPerSec*params.DYKmPerSec)
+	shadowSpeed := math.Hypot(params.DXKmPerSec, params.DYKmPerSec)
 	if shadowSpeed == 0 {
 		return nil, fmt.Errorf("shadow speed is zero — check dX and dY parameters")
 	}
@@ -242,7 +250,7 @@ func populateEdgeTimes(candidates []*precomputedCurve, params *OccultationParame
 		}
 	}
 
-	shadowSpeed := math.Sqrt(params.DXKmPerSec*params.DXKmPerSec + params.DYKmPerSec*params.DYKmPerSec)
+	shadowSpeed := math.Hypot(params.DXKmPerSec, params.DYKmPerSec)
 	if shadowSpeed == 0 {
 		return fmt.Errorf("shadow speed is zero — check dX and dY parameters")
 	}
@@ -385,17 +393,6 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 		sampledVals:  sampledVals,
 	}, nil
 }
-
-// runSingleFit generates the theoretical curve for the given params and runs
-// the NCC sliding fit against the target data. It returns the results without
-// displaying anything.
-//func runSingleFit(params *OccultationParameters, targetTimes, targetValues []float64) (*fitResult, error) {
-//	pc, err := buildPrecomputedCurve(params)
-//	if err != nil {
-//		return nil, err
-//	}
-//	return nccSlidingFit(pc, targetTimes, targetValues)
-//}
 
 // fitDisplayData holds pre-computed images, messages, and metadata produced by
 // prepareFitDisplay so that the UI-thread work in showFitDisplay is minimal.
@@ -556,7 +553,7 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 		}
 
 		// Warn if the path offset is very close to the asteroid center.
-		if params.MainBody.MajorAxisKm > 0 && math.Abs(params.PathPerpendicularOffsetKm) < 0.1*params.MainBody.MajorAxisKm {
+		if params.MainBody.MajorAxisKm > 0 && math.Abs(params.PathPerpendicularOffsetKm) < pathOffsetCenterWarningRatio*params.MainBody.MajorAxisKm {
 			warningText := "WARNING: The observation path is very close to the asteroid center. " +
 				"There is a danger that the maximum width of available theoretical light curves " +
 				"was not enough to match the actual observation. In that case, use the " +
@@ -757,7 +754,7 @@ func showEdgeTimesDialog(app fyne.App, params *OccultationParameters, fr *fitRes
 		logAction(fmt.Sprintf("  Edge %d: %s", i+1, formatSecondsAsTimestamp(et+fr.bestShift)))
 	}
 
-	centerWarning := params.MainBody.MajorAxisKm > 0 && math.Abs(params.PathPerpendicularOffsetKm) < 0.1*params.MainBody.MajorAxisKm
+	centerWarning := params.MainBody.MajorAxisKm > 0 && math.Abs(params.PathPerpendicularOffsetKm) < pathOffsetCenterWarningRatio*params.MainBody.MajorAxisKm
 	if centerWarning {
 		msg += "\nWARNING: The observation path is very close to the asteroid center. " +
 			"There is a danger that the maximum width of available theoretical light curves " +

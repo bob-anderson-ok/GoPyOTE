@@ -98,8 +98,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			dialog.ShowError(fmt.Errorf("no point pairs selected - click on points to select baseline regions"), w)
 			return
 		}
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		if noDataLoaded(w) {
 			return
 		}
 
@@ -1142,9 +1141,9 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					}
 					if result.numEdges == 2 {
 						fitDuration := math.Abs(mcFitResult.edgeTimes[1] - mcFitResult.edgeTimes[0])
-						durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+						durationStd := math.Hypot(result.edgeStds[0], result.edgeStds[1])
 						msg += fmt.Sprintf("\n  Duration: %.4f +/- %.4f sec (3 sigma)\n", fitDuration, 3*durationStd)
-						shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
+						shadowSpeed := math.Hypot(mcFitParams.DXKmPerSec, mcFitParams.DYKmPerSec)
 						if shadowSpeed > 0 {
 							chordKm := fitDuration * shadowSpeed
 							chordStdKm := 3 * durationStd * shadowSpeed
@@ -1164,9 +1163,9 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					}
 					if result.numEdges == 2 {
 						durationMean := math.Abs(result.edgeMeans[1] - result.edgeMeans[0])
-						durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+						durationStd := math.Hypot(result.edgeStds[0], result.edgeStds[1])
 						logAction(fmt.Sprintf("  Duration: mean=%.4f sec, 3 sigma=%.4f sec", durationMean, 3*durationStd))
-						shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
+						shadowSpeed := math.Hypot(mcFitParams.DXKmPerSec, mcFitParams.DYKmPerSec)
 						if shadowSpeed > 0 {
 							chordKm := durationMean * shadowSpeed
 							chordStdKm := 3 * durationStd * shadowSpeed
@@ -1200,9 +1199,9 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					}
 					if len(mcFitResult.edgeTimes) == 2 && result.numEdges == 2 {
 						fitDuration := math.Abs((mcFitResult.edgeTimes[1] + mcFitResult.bestShift) - (mcFitResult.edgeTimes[0] + mcFitResult.bestShift))
-						durationStd := math.Sqrt(result.edgeStds[0]*result.edgeStds[0] + result.edgeStds[1]*result.edgeStds[1])
+						durationStd := math.Hypot(result.edgeStds[0], result.edgeStds[1])
 						logAction(fmt.Sprintf("  Duration: %.4f +/- %.4f sec (3 sigma)", fitDuration, 3*durationStd))
-						shadowSpeed := math.Sqrt(mcFitParams.DXKmPerSec*mcFitParams.DXKmPerSec + mcFitParams.DYKmPerSec*mcFitParams.DYKmPerSec)
+						shadowSpeed := math.Hypot(mcFitParams.DXKmPerSec, mcFitParams.DYKmPerSec)
 						if shadowSpeed > 0 {
 							chordKm := fitDuration * shadowSpeed
 							chordStdKm := 3 * durationStd * shadowSpeed
@@ -1641,11 +1640,33 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		if lastFitParams != nil && lastFitParams.Title != "" {
 			occTitle = normalizeAsteroidTitle(lastFitParams.Title)
 		}
+
+		// Read the occelmnt.xml file directly from the observation directory.
+		// This ensures we always use the actual file rather than a stale copy
+		// that may have been embedded in an older .occparams file.
+		occelmntXml := ""
+		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
+			obsDir := filepath.Dir(loadedLightCurveData.SourceFilePath)
+			if dirEntries, derr := os.ReadDir(obsDir); derr == nil {
+				for _, entry := range dirEntries {
+					if !entry.IsDir() && strings.Contains(strings.ToLower(entry.Name()), "occel") {
+						if data, rerr := os.ReadFile(filepath.Join(obsDir, entry.Name())); rerr == nil {
+							occelmntXml = strings.TrimPrefix(string(data), "\xef\xbb\xbf")
+						}
+						break
+					}
+				}
+			}
+		}
+		if occelmntXml == "" {
+			occelmntXml = lastLoadedOccelmntXml
+		}
+
 		// Compute observer-corrected t0 using the persisted observer GPS location.
 		var computedObserverT0 time.Time
-		if lastLoadedOccelmntXml != "" && lastObserverLocationSet {
+		if occelmntXml != "" && lastObserverLocationSet {
 			_, obsT0, _, t0Err := ObserverT0CorrectionFromOWC(
-				lastLoadedOccelmntXml,
+				occelmntXml,
 				lastObserverLatDeg, lastObserverLonDeg, lastObserverAltMeters,
 				0, 0, 0)
 			if t0Err == nil {
@@ -1689,7 +1710,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			lcData:              loadedLightCurveData,
 			occTitle:            occTitle,
 			sitePath:            lastLoadedSitePath,
-			occelmntXml:         lastLoadedOccelmntXml,
+			occelmntXml:         occelmntXml,
 			noiseSigma:          noiseSigma,
 			csvExposureSecs:     lastCsvExposureSecs,
 			observerT0:          computedObserverT0,

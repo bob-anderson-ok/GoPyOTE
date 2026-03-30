@@ -20,8 +20,7 @@ func buildBlockIntTab(ac *appContext) *container.TabItem {
 	// Block integrate button
 	blockIntegrateButton := widget.NewButton("Block Integrate", func() {
 		// Check if we have loaded data
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		if noDataLoaded(w) {
 			return
 		}
 
@@ -165,8 +164,7 @@ func buildBlockIntTab(ac *appContext) *container.TabItem {
 
 	// Undo button - reloads the original CSV file to restore original data
 	undoBlockIntButton := widget.NewButton("Undo", func() {
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		if noDataLoaded(w) {
 			return
 		}
 

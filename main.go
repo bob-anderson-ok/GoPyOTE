@@ -250,99 +250,30 @@ func main() {
 	firstRun := savedX == -1 && savedY == -1
 
 	// Create a menu
+	makeHelpItem := func(title, fileName string, fs *embed.FS) *fyne.MenuItem {
+		return fyne.NewMenuItem(title, func() {
+			content, err := fs.ReadFile("help_markdown/" + fileName)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to load %s: %w", fileName, err), w)
+				return
+			}
+			ShowMarkdownDialogWithImages(title, string(content), fs, w)
+		})
+	}
 	helpMenu := fyne.NewMenu("Help Topics",
-		fyne.NewMenuItem("Video library", func() {
-			showVideoLibraryDialog(w)
-		}),
-		fyne.NewMenuItem("Block Integration", func() {
-			content, err := blockIntegrationMarkdown.ReadFile("help_markdown/blockIntegration.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load blockIntegration.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Block Integration", string(content), &blockIntegrationMarkdown, w)
-		}),
-		fyne.NewMenuItem("Smoothing and Normalization", func() {
-			content, err := smoothingMarkdown.ReadFile("help_markdown/smoothingAndNormalization.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load smoothingAndNormalization.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Smoothing and Normalization", string(content), &smoothingMarkdown, w)
-		}),
-		fyne.NewMenuItem("Dropped frames and OCR issues", func() {
-			content, err := timestampAnalysisMarkdown.ReadFile("help_markdown/timestampAnalysis.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load timestampAnalysis_old.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Dropped frames and OCR issues", string(content), &timestampAnalysisMarkdown, w)
-		}),
-		fyne.NewMenuItem("VizieR export", func() {
-			content, err := vizierExportMarkdown.ReadFile("help_markdown/vizierMarkdown.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load vizierMarkdown.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("VizieR export", string(content), &vizierExportMarkdown, w)
-		}),
-		fyne.NewMenuItem("Fit explanation", func() {
-			content, err := fitExplanationMarkdown.ReadFile("help_markdown/fitMarkdown.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load fitMarkdown.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Fit explanation", string(content), &fitExplanationMarkdown, w)
-		}),
-		fyne.NewMenuItem("Process OWC occelmnt.xml", func() {
-			content, err := occelmntButtonExplanation.ReadFile("help_markdown/occelmntOWC.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load occelmntOWC.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Process OWC occelmnt.xml", string(content), &occelmntButtonExplanation, w)
-		}),
-		fyne.NewMenuItem("Edit Occ Params", func() {
-			content, err := editOccParamsExplanation.ReadFile("help_markdown/editOccParams.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load editOccParams.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Edit Occ Params", string(content), &editOccParamsExplanation, w)
-		}),
-		fyne.NewMenuItem("Fresnel scale resolution", func() {
-			content, err := fresnelScaleResolutionMarkdown.ReadFile("help_markdown/fresnelScaleResolution.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load fresnelScaleResolution.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Fresnel scale resolution", string(content), &fresnelScaleResolutionMarkdown, w)
-		}),
-		fyne.NewMenuItem("Monte Carlo sigma estimation", func() {
-			content, err := monteCarloExplanation.ReadFile("help_markdown/edgeTimeSigmaExplanation.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load edgeTimeSigmaExplanation.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Monte Carlo sigma estimation", string(content), &monteCarloExplanation, w)
-		}),
-		fyne.NewMenuItem("Correlated Noise", func() {
-			content, err := correlatedNoiseExplanation.ReadFile("help_markdown/correlatedNoise.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load correlatedNoise.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("Correlated Noise", string(content), &correlatedNoiseExplanation, w)
-		}),
+		fyne.NewMenuItem("Video library", func() { showVideoLibraryDialog(w) }),
+		makeHelpItem("Block Integration", "blockIntegration.md", &blockIntegrationMarkdown),
+		makeHelpItem("Smoothing and Normalization", "smoothingAndNormalization.md", &smoothingMarkdown),
+		makeHelpItem("Dropped frames and OCR issues", "timestampAnalysis.md", &timestampAnalysisMarkdown),
+		makeHelpItem("VizieR export", "vizierMarkdown.md", &vizierExportMarkdown),
+		makeHelpItem("Fit explanation", "fitMarkdown.md", &fitExplanationMarkdown),
+		makeHelpItem("Process OWC occelmnt.xml", "occelmntOWC.md", &occelmntButtonExplanation),
+		makeHelpItem("Edit Occ Params", "editOccParams.md", &editOccParamsExplanation),
+		makeHelpItem("Fresnel scale resolution", "fresnelScaleResolution.md", &fresnelScaleResolutionMarkdown),
+		makeHelpItem("Monte Carlo sigma estimation", "edgeTimeSigmaExplanation.md", &monteCarloExplanation),
+		makeHelpItem("Correlated Noise", "correlatedNoise.md", &correlatedNoiseExplanation),
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("About GoPyOTE", func() {
-			content, err := aboutMarkdown.ReadFile("help_markdown/about.md")
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to load about.md: %w", err), w)
-				return
-			}
-			ShowMarkdownDialogWithImages("About GoPyOTE", string(content), &aboutMarkdown, w)
-		}),
+		makeHelpItem("About GoPyOTE", "about.md", &aboutMarkdown),
 	)
 	mainMenu := fyne.NewMainMenu(helpMenu)
 	w.SetMainMenu(mainMenu)
@@ -366,61 +297,24 @@ func main() {
 	var refreshLightCurveFilter func()
 
 	// Create checkboxes for light curve prefixes
-	signalCheck := widget.NewCheck("signal", func(checked bool) {
-		lightCurvePrefixes["signal"] = checked
-		if refreshLightCurveFilter != nil {
-			refreshLightCurveFilter()
-		}
-	})
+	makePrefixCheck := func(name string) *widget.Check {
+		return widget.NewCheck(name, func(checked bool) {
+			lightCurvePrefixes[name] = checked
+			if refreshLightCurveFilter != nil {
+				refreshLightCurveFilter()
+			}
+		})
+	}
+	signalCheck := makePrefixCheck("signal")
 	signalCheck.SetChecked(true)
-	appsumCheck := widget.NewCheck("appsum", func(checked bool) {
-		lightCurvePrefixes["appsum"] = checked
-		if refreshLightCurveFilter != nil {
-			refreshLightCurveFilter()
-		}
-	})
-	avgbkgCheck := widget.NewCheck("avgbkg", func(checked bool) {
-		lightCurvePrefixes["avgbkg"] = checked
-		if refreshLightCurveFilter != nil {
-			refreshLightCurveFilter()
-		}
-	})
-	stdbkgCheck := widget.NewCheck("stdbkg", func(checked bool) {
-		lightCurvePrefixes["stdbkg"] = checked
-		if refreshLightCurveFilter != nil {
-			refreshLightCurveFilter()
-		}
-	})
-	nmaskpxCheck := widget.NewCheck("nmaskpx", func(checked bool) {
-		lightCurvePrefixes["nmaskpx"] = checked
-		if refreshLightCurveFilter != nil {
-			refreshLightCurveFilter()
-		}
-	})
-	maxpxCheck := widget.NewCheck("maxpx", func(checked bool) {
-		lightCurvePrefixes["maxpx"] = checked
-		if refreshLightCurveFilter != nil {
-			refreshLightCurveFilter()
-		}
-	})
-	xcentroidCheck := widget.NewCheck("xcentroid", func(checked bool) {
-		lightCurvePrefixes["xcentroid"] = checked
-		if refreshLightCurveFilter != nil {
-			refreshLightCurveFilter()
-		}
-	})
-	ycentroidCheck := widget.NewCheck("ycentroid", func(checked bool) {
-		lightCurvePrefixes["ycentroid"] = checked
-		if refreshLightCurveFilter != nil {
-			refreshLightCurveFilter()
-		}
-	})
-	hitDefectCheck := widget.NewCheck("hit-defect", func(checked bool) {
-		lightCurvePrefixes["hit-defect"] = checked
-		if refreshLightCurveFilter != nil {
-			refreshLightCurveFilter()
-		}
-	})
+	appsumCheck := makePrefixCheck("appsum")
+	avgbkgCheck := makePrefixCheck("avgbkg")
+	stdbkgCheck := makePrefixCheck("stdbkg")
+	nmaskpxCheck := makePrefixCheck("nmaskpx")
+	maxpxCheck := makePrefixCheck("maxpx")
+	xcentroidCheck := makePrefixCheck("xcentroid")
+	ycentroidCheck := makePrefixCheck("ycentroid")
+	hitDefectCheck := makePrefixCheck("hit-defect")
 	anyNameCheck := widget.NewCheck("any name (use for Tangra)", func(checked bool) {
 		acceptAnyName = checked
 		if refreshLightCurveFilter != nil {
@@ -1884,8 +1778,7 @@ func main() {
 
 	// Button to export selected light curves to CSV
 	exportCSVBtn := widget.NewButton("Export selected light curves", func() {
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		if noDataLoaded(w) {
 			return
 		}
 		if len(ac.displayedCurves) == 0 {
@@ -1936,8 +1829,7 @@ func main() {
 		}
 
 		// Check for loaded data
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		if noDataLoaded(w) {
 			return
 		}
 
@@ -2002,8 +1894,7 @@ func main() {
 		}
 
 		// Check for loaded data.
-		if loadedLightCurveData == nil {
-			dialog.ShowError(fmt.Errorf("no light curve data loaded"), w)
+		if noDataLoaded(w) {
 			return
 		}
 

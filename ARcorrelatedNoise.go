@@ -8,61 +8,6 @@ import (
 )
 
 //
-// Solve a linear system using Gaussian elimination
-//
-
-//func solveLinearSystem(A [][]float64, b []float64) ([]float64, error) {
-//
-//	n := len(b)
-//
-//	M := make([][]float64, n)
-//	for i := 0; i < n; i++ {
-//		M[i] = make([]float64, n+1)
-//		copy(M[i], A[i])
-//		M[i][n] = b[i]
-//	}
-//
-//	for k := 0; k < n; k++ {
-//
-//		pivot := k
-//		maxVal := math.Abs(M[k][k])
-//
-//		for i := k + 1; i < n; i++ {
-//			if math.Abs(M[i][k]) > maxVal {
-//				maxVal = math.Abs(M[i][k])
-//				pivot = i
-//			}
-//		}
-//
-//		M[k], M[pivot] = M[pivot], M[k]
-//
-//		for i := k + 1; i < n; i++ {
-//
-//			f := M[i][k] / M[k][k]
-//
-//			for j := k; j <= n; j++ {
-//				M[i][j] -= f * M[k][j]
-//			}
-//		}
-//	}
-//
-//	x := make([]float64, n)
-//
-//	for i := n - 1; i >= 0; i-- {
-//
-//		sum := M[i][n]
-//
-//		for j := i + 1; j < n; j++ {
-//			sum -= M[i][j] * x[j]
-//		}
-//
-//		x[i] = sum / M[i][i]
-//	}
-//
-//	return x, nil
-//}
-
-//
 // Fit AR model from autocorrelation (Yule-Walker)
 //
 
@@ -147,48 +92,6 @@ func generateAR(n int, phi []float64, sigma2 float64, rng *rand.Rand) []float64 
 
 	return x[burnIn:]
 }
-
-//
-// Estimate autocorrelation
-//
-
-//func sampleACF(x []float64, maxLag int) []float64 {
-//
-//	n := len(x)
-//
-//	mean := 0.0
-//	for _, v := range x {
-//		mean += v
-//	}
-//
-//	mean /= float64(n)
-//
-//	var0 := 0.0
-//
-//	for _, v := range x {
-//		d := v - mean
-//		var0 += d * d
-//	}
-//
-//	var0 /= float64(n)
-//
-//	rho := make([]float64, maxLag+1)
-//
-//	for lag := 0; lag <= maxLag; lag++ {
-//
-//		cov := 0.0
-//
-//		for i := 0; i < n-lag; i++ {
-//			cov += (x[i] - mean) * (x[i+lag] - mean)
-//		}
-//
-//		cov /= float64(n - lag)
-//
-//		rho[lag] = cov / var0
-//	}
-//
-//	return rho
-//}
 
 //
 // Example usage
