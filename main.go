@@ -71,7 +71,7 @@ var correlatedNoiseExplanation embed.FS
 // Version information
 const Version = "1.2.60"
 
-// Track the last loaded parameters file path for use by IOTAdiffraction
+// Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
 
 // Track the last loaded site file path for use by the Fill SODIS Report dialog
