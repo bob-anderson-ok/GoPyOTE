@@ -38,7 +38,6 @@ const (
 	// perpendicular offset is within this fraction of the body's major axis,
 	// meaning the path passes very close to the asteroid center.
 	pathOffsetCenterWarningRatio = 0.1
-
 )
 
 // safeShowWindow works around a Fyne/GLFW race condition where closing a
@@ -123,7 +122,7 @@ type fitResult struct {
 	minSE float64
 	// The bestScale is the amplitude scale factor (0–1) found by the post-fit drop search.
 	// scaledTLC = bestTLC * bestScale + (1 - bestScale).
-	// The NIE event drop is (1 - bestScale): how far the scaled curve falls from baseline.
+	// The NIE event drop is (1 - bestScale): how far the scaled curve falls from the baseline.
 	// Zero means the search has not yet run; valid values are in [0, 1].
 	bestScale float64
 }
@@ -151,7 +150,7 @@ func logDiffractionImageInfo() {
 }
 
 // buildPrecomputedCurve generates the theoretical light curve for the given params.
-// When skipEdges is true, geometric shadow edge detection is skipped and edgeTimes will be nil.
+// When skipEdges is true, geometric shadow-edge detection is skipped and edgeTimes will be nil.
 func buildPrecomputedCurve(params *OccultationParameters, skipEdges ...bool) (*precomputedCurve, error) {
 	// When an external image is in use, the generated targetImage16bit.png and
 	// geometricShadow.png are at the external image's native pixel dimensions, not
@@ -417,9 +416,10 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 	if showDiagnostics {
 		plotImg, err := createNCCPlotImage(fr.nccCurve, displayTitle, 1000, 500)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create NCC plot: %w", err)
+			fmt.Printf("Warning: could not create NCC plot: %v\n", err)
+		} else {
+			dd.nccPlotImg = plotImg
 		}
-		dd.nccPlotImg = plotImg
 	}
 
 	// --- Scale (drop amplitude) search ---
@@ -463,9 +463,10 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 		}
 	}
 
-	displayImg, err := lightcurve.LoadImageFromFile(filepath.Join(appDir, "diffractionImage8bit.png"))
+	diffImgPath := filepath.Join(appDir, "diffractionImage8bit.png")
+	displayImg, err := lightcurve.LoadImageFromFile(diffImgPath)
 	if err != nil {
-		fmt.Printf("Could not load diffractionImage8bit.png: %v\n", err)
+		logAction(fmt.Sprintf("WARNING: Could not load diffraction image for observation path: %v", err))
 	} else {
 		fundPlaneWidthPts := params.FundamentalPlaneWidthNumPoints
 		if params.PathToExternalImage != "" {
@@ -479,11 +480,11 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 			FundamentalPlaneWidthPts: fundPlaneWidthPts,
 		}
 		if err := path.ComputePathFromVelocity(); err != nil {
-			fmt.Printf("Could not compute observation path: %v\n", err)
+			logAction(fmt.Sprintf("WARNING: Could not compute observation path: %v", err))
 		} else {
 			annotatedImg, err := lightcurve.DrawObservationLineOnImage(displayImg, path)
 			if err != nil {
-				fmt.Printf("Could not draw observation path: %v\n", err)
+				logAction(fmt.Sprintf("WARNING: Could not draw observation path: %v", err))
 			} else {
 				pathTitle := fmt.Sprintf("Observation Path on Diffraction Image (offset=%.3f km)", params.PathPerpendicularOffsetKm)
 				if displayTitle != "" {
@@ -1413,15 +1414,17 @@ func prepareFitSearchDisplay(params *OccultationParameters, fsr *fitSearchResult
 	if showDiagnostics {
 		searchPlotImg, err := createPathOffsetPlotImage(fsr.results, displayTitle, 1000, 500)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create path offset plot: %w", err)
+			fmt.Printf("Warning: could not create path offset plot: %v\n", err)
+		} else {
+			sd.searchPlotImg = searchPlotImg
 		}
-		sd.searchPlotImg = searchPlotImg
 
 		msePlotImg, err := createMSEPlotImage(fsr.results, displayTitle, 1000, 500)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create MSE plot: %w", err)
+			fmt.Printf("Warning: could not create MSE plot: %v\n", err)
+		} else {
+			sd.msePlotImg = msePlotImg
 		}
-		sd.msePlotImg = msePlotImg
 	}
 
 	params.PathPerpendicularOffsetKm = fsr.bestPathOffset

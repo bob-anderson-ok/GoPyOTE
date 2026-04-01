@@ -129,13 +129,28 @@ func (ac *appContext) overlayTheoryCurve(fr *fitResult, edgeStds []float64) {
 		Name:     "Theoretical (fit)",
 		LineOnly: true,
 	}
-	// Build sampled points on the theoretical curve (small red circles)
-	if len(fr.sampledTimes) > 0 && len(fr.sampledVals) == len(fr.sampledTimes) {
+	// Build sampled points on the theoretical curve (small red circles).
+	// Recompute Y by interpolating fr.curve at the current bestShift so the
+	// dots stay on the theory line even after slide adjustments (the stored
+	// fr.sampledVals may have been computed at an earlier bestShift).
+	if len(fr.sampledTimes) > 0 && len(fr.curve) > 0 {
+		curveTimes := make([]float64, len(fr.curve))
+		for i, pt := range fr.curve {
+			curveTimes[i] = pt.time
+		}
+		duration := fr.curve[len(fr.curve)-1].time
 		sampledPts := make([]PlotPoint, len(fr.sampledTimes))
 		for i, t := range fr.sampledTimes {
+			localT := t - fr.bestShift
+			var rawY float64
+			if localT < 0 || localT > duration {
+				rawY = 1.0
+			} else {
+				rawY = interpolateAt(fr.curve, curveTimes, localT)
+			}
 			sampledPts[i] = PlotPoint{
 				X:     t,
-				Y:     fr.sampledVals[i]*scale + (1.0 - scale),
+				Y:     rawY*scale + (1.0 - scale),
 				Index: -1,
 			}
 		}

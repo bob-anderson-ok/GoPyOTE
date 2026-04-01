@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.60"
+const Version = "1.2.61"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -1276,7 +1276,7 @@ func main() {
 		dialog.ShowInformation("Warning", message, w)
 	})
 
-	// Set up scroll wheel zoom on the plot with a debounced re-draw
+	// Set up scroll-wheel zoom on the plot with a debounced re-draw
 	var scrollDebounceTimer *time.Timer
 	ac.lightCurvePlot.SetOnScroll(func(position fyne.Position, scrollDelta float32) {
 		if loadedLightCurveData == nil || ac.maxFrameNum == ac.minFrameNum {
@@ -1435,7 +1435,7 @@ func main() {
 				return
 			}
 			if reader == nil {
-				return // User cancelled
+				return // User canceled
 			}
 			filePath := reader.URI().Path()
 			if cerr := reader.Close(); cerr != nil {
@@ -1940,7 +1940,7 @@ func main() {
 			return
 		}
 
-		// Compute VizieR scale factor (normalise to 0–9524).
+		// Compute VizieR scale factor (normalize to 0–9524).
 		maxValue := 0.0
 		for i := startIdx; i <= endIdx; i++ {
 			if !isInterpolatedIndex(i) && valueColumn[i] > maxValue {

@@ -321,7 +321,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	searchInitialOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
 	searchFinalOffsetEntry.OnSubmitted = func(_ string) { updateSearchNumSteps() }
 	searchInitialOffsetEntry.OnChanged = func(_ string) {
-		if ac.resetFitButtons != nil {
+		if !suppressSearchRangeEnable && ac.resetFitButtons != nil {
 			ac.resetFitButtons()
 		}
 		if !suppressSearchRangeEnable && showSearchRangeBtn != nil {
@@ -329,7 +329,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		}
 	}
 	searchFinalOffsetEntry.OnChanged = func(_ string) {
-		if ac.resetFitButtons != nil {
+		if !suppressSearchRangeEnable && ac.resetFitButtons != nil {
 			ac.resetFitButtons()
 		}
 		if !suppressSearchRangeEnable && showSearchRangeBtn != nil {

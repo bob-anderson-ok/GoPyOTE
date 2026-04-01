@@ -235,7 +235,7 @@ func (p *LightCurvePlot) SetSigmaLines(xValues []float64, show bool) {
 	p.Refresh()
 }
 
-// Scrolled handles scroll wheel events
+// Scrolled handles scroll-wheel events
 func (p *LightCurvePlot) Scrolled(ev *fyne.ScrollEvent) {
 	if p.onScroll != nil {
 		p.onScroll(ev.Position, ev.Scrolled.DY)

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -13,6 +14,20 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 )
+
+// parseVideoPrefix extracts the numeric prefix (e.g. "1.2" from "1.2-someName.mp4")
+// and returns it as a float for sorting. Returns a large value if no prefix is found.
+func parseVideoPrefix(name string) float64 {
+	idx := strings.Index(name, "-")
+	if idx < 0 {
+		return 1e9
+	}
+	v, err := strconv.ParseFloat(name[:idx], 64)
+	if err != nil {
+		return 1e9
+	}
+	return v
+}
 
 const VideoRepo = "GoPyOTE-Videos"
 
@@ -48,17 +63,13 @@ func showVideoLibraryDialog(parent fyne.Window) {
 		func() fyne.CanvasObject {
 			name := widget.NewLabel("video name placeholder")
 			name.Wrapping = fyne.TextWrapBreak
-			size := widget.NewLabel("size")
-			return container.NewVBox(name, size)
+			return name
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id < 0 || id >= len(videos) {
 				return
 			}
-			v := videos[id]
-			box := obj.(*fyne.Container)
-			box.Objects[0].(*widget.Label).SetText(v.Name)
-			box.Objects[1].(*widget.Label).SetText(fmt.Sprintf("%.1f MB", float64(v.Size)/(1024*1024)))
+			obj.(*widget.Label).SetText(videos[id].Name)
 		},
 	)
 
@@ -121,7 +132,7 @@ func showVideoLibraryDialog(parent fyne.Window) {
 		}
 
 		sort.Slice(allVideos, func(i, j int) bool {
-			return allVideos[i].Name < allVideos[j].Name
+			return parseVideoPrefix(allVideos[i].Name) < parseVideoPrefix(allVideos[j].Name)
 		})
 
 		fyne.Do(func() {

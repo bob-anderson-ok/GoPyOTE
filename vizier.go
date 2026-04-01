@@ -249,11 +249,11 @@ func (vt *VizieRTab) FillStarFromOccelmntXml(xmlText string) {
 	}
 	catalog := strings.ToUpper(fields[0])
 	starID := fields[1]
-	if strings.HasPrefix(catalog, "UCAC") {
+	if strings.Contains(catalog, "UCAC") {
 		vt.StarUCAC4Entry.SetText(starID)
-	} else if strings.HasPrefix(catalog, "TYC") {
+	} else if strings.Contains(catalog, "TYC") {
 		vt.StarTycho2Entry.SetText(starID)
-	} else if strings.HasPrefix(catalog, "HIP") {
+	} else if strings.Contains(catalog, "HIP") {
 		vt.StarHipparcosEntry.SetText(starID)
 	}
 }
@@ -1196,11 +1196,11 @@ func (vt *VizieRTab) parseSodisFile(filePath string, w fyne.Window) error {
 			if len(starFields) >= 2 {
 				catalog := strings.ToUpper(starFields[0])
 				starID := starFields[1]
-				if strings.HasPrefix(catalog, "U") {
+				if strings.Contains(catalog, "UCAC") {
 					vt.StarUCAC4Entry.SetText(starID)
-				} else if strings.HasPrefix(catalog, "T") {
+				} else if strings.Contains(catalog, "TYC") {
 					vt.StarTycho2Entry.SetText(starID)
-				} else if strings.HasPrefix(catalog, "H") {
+				} else if strings.Contains(catalog, "HIP") {
 					vt.StarHipparcosEntry.SetText(starID)
 				}
 			}
