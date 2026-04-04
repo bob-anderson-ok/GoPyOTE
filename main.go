@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.62"
+const Version = "1.2.63"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -1448,6 +1448,32 @@ func main() {
 			if err != nil {
 				dialog.ShowError(fmt.Errorf("%s does not appear to be a light curve file. It is lacking a header line that is normally part of a valid light curve file", base), w)
 				return
+			}
+
+			// Detect whether the CSV came from PyMovie or Tangra and set prefix filters accordingly
+			isPyMovie := false
+			for _, col := range data.Columns {
+				if strings.HasPrefix(col.Name, "hit-defect") {
+					isPyMovie = true
+					break
+				}
+			}
+			if !isPyMovie {
+				// Tangra CSV: check "any name" and uncheck all prefix checkboxes
+				anyNameCheck.SetChecked(true)
+				signalCheck.SetChecked(false)
+				appsumCheck.SetChecked(false)
+				avgbkgCheck.SetChecked(false)
+				stdbkgCheck.SetChecked(false)
+				nmaskpxCheck.SetChecked(false)
+				maxpxCheck.SetChecked(false)
+				xcentroidCheck.SetChecked(false)
+				ycentroidCheck.SetChecked(false)
+				hitDefectCheck.SetChecked(false)
+			} else {
+				// PyMovie CSV: uncheck "any name" and restore default prefix (signal checked)
+				anyNameCheck.SetChecked(false)
+				signalCheck.SetChecked(true)
 			}
 
 			// Create a -RESULTS folder in the observation folder
