@@ -837,11 +837,11 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 	telescopeContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(220, 36)), telescopeSelect)
 
 	apertureEntry := widget.NewEntry()
-	apertureEntry.SetPlaceHolder("e.g. 80mm")
+	apertureEntry.SetPlaceHolder("e.g. 12cm")
 	apertureContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(90, 36)), apertureEntry)
 
 	focalLengthEntry := widget.NewEntry()
-	focalLengthEntry.SetPlaceHolder("e.g. 500mm")
+	focalLengthEntry.SetPlaceHolder("e.g. 120cm")
 	focalLengthContainer := container.New(layout.NewGridWrapLayout(fyne.NewSize(90, 36)), focalLengthEntry)
 
 	// Observing method dropdown

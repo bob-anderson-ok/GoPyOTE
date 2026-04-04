@@ -44,9 +44,13 @@ func getRecentFolders(prefs fyne.Preferences) []string {
 	var folders []string
 	for i := 0; i < maxRecentFolders; i++ {
 		folder := prefs.String(fmt.Sprintf("recentFolder%d", i))
-		if folder != "" {
-			folders = append(folders, folder)
+		if folder == "" {
+			continue
 		}
+		if info, err := os.Stat(folder); err != nil || !info.IsDir() {
+			continue
+		}
+		folders = append(folders, folder)
 	}
 	return folders
 }

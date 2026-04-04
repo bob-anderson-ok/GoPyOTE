@@ -1753,6 +1753,34 @@ func buildFitTab(ac *appContext) *container.TabItem {
 	})
 	fillSodisNegBtn.Importance = widget.HighImportance
 
+	var writePlotBtn *widget.Button
+	writePlotBtn = widget.NewButton("Write plot", func() {
+		if ac.lightCurvePlot == nil || ac.lightCurvePlot.renderedImage == nil {
+			dialog.ShowError(fmt.Errorf("no plot image available"), w)
+			return
+		}
+		folder := resultsFolder
+		if folder == "" {
+			dialog.ShowError(fmt.Errorf("no results folder — open a CSV first"), w)
+			return
+		}
+		savePath := filepath.Join(folder, "snapshot.png")
+		f, err := os.Create(savePath)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to create snapshot.png: %w", err), w)
+			return
+		}
+		if err := png.Encode(f, ac.lightCurvePlot.renderedImage); err != nil {
+			f.Close()
+			dialog.ShowError(fmt.Errorf("failed to encode snapshot.png: %w", err), w)
+			return
+		}
+		f.Close()
+		writePlotBtn.Importance = widget.WarningImportance
+		writePlotBtn.Refresh()
+	})
+	writePlotBtn.Importance = widget.HighImportance
+
 	ac.enablePostFitButtons = func() {
 		mcBtn.Enable()
 		runNieBtn.Enable()
@@ -1771,6 +1799,8 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		fillSodisBtn.Disable()
 		vizierBtn.Importance = widget.HighImportance
 		vizierBtn.Disable()
+		writePlotBtn.Importance = widget.HighImportance
+		writePlotBtn.Refresh()
 	}
 
 	// resetFitTab clears all Fit tab state so analysis starts fresh when the
@@ -1894,7 +1924,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		widget.NewLabel("Monte Carlo trials"),
 		mcNumTrialsEntry,
 		container.NewHBox(mcNarrowSearchCheck, nieSinglePointCheck),
-		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, vizierBtn, fillSodisNegBtn),
+		container.NewHBox(mcBtn, mcAbortBtn, runNieBtn, nieAbortBtn, fillSodisBtn, vizierBtn, fillSodisNegBtn, writePlotBtn),
 		mcProgressBar,
 		widget.NewSeparator(),
 		fitStatusLabel,

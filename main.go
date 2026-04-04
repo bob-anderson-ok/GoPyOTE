@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.61"
+const Version = "1.2.62"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -2121,9 +2121,10 @@ func main() {
 
 	// On the first run of a new version, open the Settings tab and suggest setting the Observation home directory.
 	// On later runs, go straight to the OBS select tab as before.
-	versionFirstRun := prefs.String("lastRunVersion") != Version
-	if versionFirstRun {
+	if prefs.String("lastRunVersion") != Version {
 		prefs.SetString("lastRunVersion", Version)
+	}
+	if prefs.String("obsHomeDir") == "" {
 		tabs.Select(tab2)
 		dialog.ShowInformation("Welcome to GoPyOTE "+Version,
 			"Please use the Browse button at the bottom of this Settings tab to set your Observation home directory.\n\n"+

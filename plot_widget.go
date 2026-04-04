@@ -137,6 +137,9 @@ type LightCurvePlot struct {
 	// selectionOnly — when true, the next Refresh redraws selection dots
 	// on the cached base image instead of re-rendering the full plot.
 	selectionOnly bool
+
+	// renderedImage holds the most recent fully rendered plot image (with selection dots).
+	renderedImage *image.RGBA
 }
 
 // NewLightCurvePlot creates a new light curve plot widget
@@ -479,6 +482,10 @@ func (p *LightCurvePlot) handleClick(pos fyne.Position) {
 	tolerance := 0.08 // 8% of plot area
 
 	for s, series := range p.series {
+		// Skip theoretical series — only observation points are selectable
+		if series.LineOnly || series.ScatterOnly {
+			continue
+		}
 		// Build arrays of normalized pixel coordinates for this series
 		xs := make([]float64, len(series.Points))
 		ys := make([]float64, len(series.Points))
@@ -1163,6 +1170,8 @@ func (r *lightCurvePlotRenderer) Refresh() {
 		drawSelectionDot(overlay, toPixelX(pair.Point1Frame), toPixelY(pair.Point1Value), dotRadius, pc)
 		drawSelectionDot(overlay, toPixelX(pair.Point2Frame), toPixelY(pair.Point2Value), dotRadius, pc)
 	}
+
+	p.renderedImage = overlay
 
 	if r.image == nil {
 		r.image = canvas.NewImageFromImage(overlay)
