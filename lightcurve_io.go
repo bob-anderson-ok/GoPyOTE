@@ -130,8 +130,149 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 	return data, nil
 }
 
+// generateNetSignalCSV checks for "Signal (n)" / "Background (n)" column pairs in the
+// CSV file and, if any are found, writes a new CSV with computed "NetSignal (n)" columns
+// appended. All original columns and header lines are retained. The new file is saved in
+// the observation folder (same directory as the source CSV) with "-NetSignalAdded" inserted
+// before the extension. Returns the output path, the number of NetSignal columns added,
+// and any error. If no pairs are found, returns ("", 0, nil).
+func generateNetSignalCSV(filePath string) (string, int, error) {
+	// Skip if the file is already a NetSignalAdded file
+	if strings.Contains(filepath.Base(filePath), "-NetSignalAdded") {
+		return "", 0, nil
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to open source CSV: %w", err)
+	}
+	defer func() {
+		if cerr := file.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close source CSV: %v\n", cerr)
+		}
+	}()
+
+	scanner := bufio.NewScanner(file)
+	var lines []string
+	headerLineIdx := -1
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if headerLineIdx < 0 && (strings.HasPrefix(line, "FrameNum,") || strings.HasPrefix(line, "FrameNo")) {
+			headerLineIdx = len(lines)
+		}
+		lines = append(lines, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return "", 0, fmt.Errorf("error reading source CSV: %w", err)
+	}
+
+	if headerLineIdx < 0 {
+		return "", 0, nil
+	}
+
+	// Parse the header
+	headerReader := csv.NewReader(strings.NewReader(lines[headerLineIdx]))
+	headers, err := headerReader.Read()
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to parse header: %w", err)
+	}
+
+	// Build column name -> index map (trimmed for matching)
+	colByName := make(map[string]int)
+	for i, h := range headers {
+		colByName[strings.TrimSpace(h)] = i
+	}
+
+	// Find Signal (n) / Background (n) pairs
+	type pair struct {
+		label  string
+		sigCol int
+		bgCol  int
+	}
+	var pairs []pair
+	for i, h := range headers {
+		name := strings.TrimSpace(h)
+		if strings.HasPrefix(name, "Signal (") && strings.HasSuffix(name, ")") {
+			n := name[len("Signal (") : len(name)-1]
+			bgName := "Background (" + n + ")"
+			if bgCol, ok := colByName[bgName]; ok {
+				pairs = append(pairs, pair{label: n, sigCol: i, bgCol: bgCol})
+			}
+		}
+	}
+
+	if len(pairs) == 0 {
+		return "", 0, nil
+	}
+
+	// Build output path in the observation folder
+	dir := filepath.Dir(filePath)
+	base := filepath.Base(filePath)
+	ext := filepath.Ext(base)
+	nameWithoutExt := strings.TrimSuffix(base, ext)
+	outputPath := filepath.Join(dir, nameWithoutExt+"-NetSignalAdded"+ext)
+
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer func() {
+		if cerr := outFile.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close output CSV: %v\n", cerr)
+		}
+	}()
+
+	writer := bufio.NewWriter(outFile)
+
+	for i, line := range lines {
+		if i < headerLineIdx {
+			// Comment/skipped lines before header — keep as-is
+			if _, err := fmt.Fprintln(writer, line); err != nil {
+				return "", 0, fmt.Errorf("failed to write comment line: %w", err)
+			}
+		} else if i == headerLineIdx {
+			// Header line — append NetSignal column names
+			for _, p := range pairs {
+				line += ",NetSignal (" + p.label + ")"
+			}
+			if _, err := fmt.Fprintln(writer, line); err != nil {
+				return "", 0, fmt.Errorf("failed to write header line: %w", err)
+			}
+		} else {
+			// Data line — parse and append computed NetSignal values
+			lineReader := csv.NewReader(strings.NewReader(line))
+			record, parseErr := lineReader.Read()
+			if parseErr != nil || len(record) < len(headers) {
+				if _, err := fmt.Fprintln(writer, line); err != nil {
+					return "", 0, fmt.Errorf("failed to write data line: %w", err)
+				}
+				continue
+			}
+			for _, p := range pairs {
+				sig, err1 := strconv.ParseFloat(record[p.sigCol], 64)
+				bg, err2 := strconv.ParseFloat(record[p.bgCol], 64)
+				if err1 != nil || err2 != nil {
+					line += ",0"
+				} else {
+					line += fmt.Sprintf(",%g", sig-bg)
+				}
+			}
+			if _, err := fmt.Fprintln(writer, line); err != nil {
+				return "", 0, fmt.Errorf("failed to write data line: %w", err)
+			}
+		}
+	}
+
+	if err := writer.Flush(); err != nil {
+		return "", 0, fmt.Errorf("failed to flush output: %w", err)
+	}
+
+	return outputPath, len(pairs), nil
+}
+
 // writeSelectedLightCurves writes the selected light curves to a CSV file
-// The output file is named originalname + "_GoPyOTE.csv" in the same directory
+// The output file is named original-name + "_GoPyOTE.csv" in the same directory
 // If normalization has been applied, "_NORMALIZED" is inserted in the filename.
 // Only rows within the frame range [startFrame, endFrame] are written
 func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool, startFrame, endFrame float64) (string, error) {

@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.63"
+const Version = "1.2.64"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -1450,6 +1450,22 @@ func main() {
 				return
 			}
 
+			// Check for Signal (n) / Background (n) column pairs and generate NetSignal CSV if found.
+			// If produced, reparse the new file so it becomes the active light curve.
+			if netPath, nPairs, netErr := generateNetSignalCSV(filePath); netErr != nil {
+				fmt.Printf("Warning: could not generate NetSignal CSV: %v\n", netErr)
+			} else if nPairs > 0 {
+				fmt.Printf("Generated %s with %d NetSignal column(s)\n", filepath.Base(netPath), nPairs)
+				netData, netParseErr := parseLightCurveCSV(netPath)
+				if netParseErr != nil {
+					fmt.Printf("Warning: could not parse NetSignal CSV: %v\n", netParseErr)
+				} else {
+					filePath = netPath
+					base = filepath.Base(filePath)
+					data = netData
+				}
+			}
+
 			// Detect whether the CSV came from PyMovie or Tangra and set prefix filters accordingly
 			isPyMovie := false
 			for _, col := range data.Columns {
@@ -1780,8 +1796,17 @@ func main() {
 				ac.frameRangeEnd = 0
 			}
 
-			// Automatically display the first light curve if available
-			if len(listIndexToColumnIndex) > 0 {
+			// Automatically display a light curve: prefer NetSignal (1) if present,
+			// otherwise fall back to the first column in the filtered list.
+			autoSelected := false
+			for i, col := range data.Columns {
+				if strings.TrimSpace(col.Name) == "NetSignal (1)" {
+					ac.toggleLightCurve(i)
+					autoSelected = true
+					break
+				}
+			}
+			if !autoSelected && len(listIndexToColumnIndex) > 0 {
 				ac.toggleLightCurve(listIndexToColumnIndex[0])
 			}
 
