@@ -1,6 +1,6 @@
 # Getting started – initial installation
 
-1. Go to the **Releases** section of this repository (look for Releases in the righthand column of this page and left-click on it).
+1. Go to the **Releases** section of this repository https://github.com/bob-anderson-ok/GoPyOTE/releases.
 
 2. Download the asset there titled ```Download-for-initial-installation-only.zip```
 
