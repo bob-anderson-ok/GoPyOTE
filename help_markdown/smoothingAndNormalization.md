@@ -1,4 +1,4 @@
-# Smoothing and Normalization
+# Normalization
 
 ## The problem that is addressed by this feature
 

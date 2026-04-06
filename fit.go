@@ -650,26 +650,37 @@ type cameraDelayInfo struct {
 
 // computeCameraDelay reads Image Acquisition Timing preferences and computes
 // edge time corrections. acqCorr = acquisition delay, rsCorr = starRow * rowDelta.
-// The corrected edge time = edge - acqCorr + rsCorr.
+// When the loaded CSV is from Tangra, an additional tangraCorr = frameTime/2 is subtracted.
+// The corrected edge time = edge - acqCorr + rsCorr - tangraCorr.
 // edgeLabels and edgeTimes are parallel slices (e.g. ["D","R"] or ["Edge 1","Edge 2"]).
 func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayInfo {
 	acqDelayStr := sessionAcqDelay
 	starRowStr := sessionStarRow
 	rowDeltaStr := sessionRowDelta
 
-	if acqDelayStr == "" {
+	// Tangra half-frame correction: subtract frameTime/2 from edge times
+	var tangraCorrSecs float64
+	hasTangra := isTangraCSV && lastCsvExposureSecs > 0
+	if hasTangra {
+		tangraCorrSecs = lastCsvExposureSecs / 2.0
+	}
+
+	hasAcq := acqDelayStr != ""
+	if !hasAcq && !hasTangra {
 		return nil
 	}
 
 	var acqDelayMs, starRow, rowDeltaMs float64
-	if v, err := strconv.ParseFloat(strings.TrimSpace(acqDelayStr), 64); err == nil {
-		acqDelayMs = v
+	var acqCorrSecs float64
+	if hasAcq {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(acqDelayStr), 64); err == nil {
+			acqDelayMs = v
+		}
+		acqCorrSecs = acqDelayMs / 1000.0
 	}
 
-	acqCorrSecs := acqDelayMs / 1000.0
-
 	// rsCorr is only computed when both star row and row delta are provided
-	hasRS := starRowStr != "" && rowDeltaStr != ""
+	hasRS := hasAcq && starRowStr != "" && rowDeltaStr != ""
 	var rsCorrSecs float64
 	if hasRS {
 		if v, err := strconv.ParseFloat(strings.TrimSpace(starRowStr), 64); err == nil {
@@ -681,18 +692,24 @@ func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayIn
 		rsCorrSecs = starRow * rowDeltaMs / 1000.0
 	}
 
-	// Net correction: subtract acqCorr, add rsCorr
-	delaySecs := acqCorrSecs - rsCorrSecs
+	// Net correction: subtract acqCorr, add rsCorr, subtract tangraCorr
+	delaySecs := acqCorrSecs - rsCorrSecs + tangraCorrSecs
 	delayMs := delaySecs * 1000.0
 
 	var report string
 	cameraName := sessionCameraName
-	if hasRS {
+	if hasAcq && hasRS {
 		report = fmt.Sprintf(
 			"acqCorr = %.4f sec (Acquisition Delay)\nrsCorr = %.4f sec (starRow=%.1f * rowDelta=%.6f ms)",
 			acqCorrSecs, rsCorrSecs, starRow, rowDeltaMs)
-	} else {
+	} else if hasAcq {
 		report = fmt.Sprintf("acqCorr = %.4f sec (Acquisition Delay)", acqCorrSecs)
+	}
+	if hasTangra {
+		if report != "" {
+			report += "\n"
+		}
+		report += fmt.Sprintf("tangraCorr = %.4f sec (frameTime/2 = %.4f/2)", tangraCorrSecs, lastCsvExposureSecs)
 	}
 	if cameraName != "" {
 		report += fmt.Sprintf(" [camera: %s]", cameraName)
@@ -702,12 +719,22 @@ func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayIn
 		orig := formatSecondsAsTimestamp(t)
 		corr := formatSecondsAsTimestamp(t - delaySecs)
 		label := edgeLabels[i]
-		if hasRS {
+		switch {
+		case hasAcq && hasRS && hasTangra:
+			report += fmt.Sprintf("\n%s: %s - %.4f(acqCorr) + %.4f(rsCorr) - %.4f(tangraCorr) = %s",
+				label, orig, acqCorrSecs, rsCorrSecs, tangraCorrSecs, corr)
+		case hasAcq && hasRS:
 			report += fmt.Sprintf("\n%s: %s - %.4f(acqCorr) + %.4f(rsCorr) = %s",
 				label, orig, acqCorrSecs, rsCorrSecs, corr)
-		} else {
+		case hasAcq && hasTangra:
+			report += fmt.Sprintf("\n%s: %s - %.4f(acqCorr) - %.4f(tangraCorr) = %s",
+				label, orig, acqCorrSecs, tangraCorrSecs, corr)
+		case hasAcq:
 			report += fmt.Sprintf("\n%s: %s - %.4f(acqCorr) = %s",
 				label, orig, acqCorrSecs, corr)
+		case hasTangra:
+			report += fmt.Sprintf("\n%s: %s - %.4f(tangraCorr) = %s",
+				label, orig, tangraCorrSecs, corr)
 		}
 	}
 	return &cameraDelayInfo{delaySecs: delaySecs, delayMs: delayMs, report: report}

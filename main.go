@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.64"
+const Version = "1.2.65"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -126,6 +126,11 @@ var sessionStarRow string
 var sessionAcqDelay string
 var sessionRowDelta string
 var sessionCameraName string
+
+// isTangraCSV is true when the loaded CSV was detected as a Tangra file
+// (i.e. it did not contain PyMovie-specific columns). When true, a half-frame
+// timing correction (frameTime/2) is subtracted from edge times.
+var isTangraCSV bool
 
 // onVizierDatWritten is called after a VizieR .dat file is successfully written.
 // Set by buildFitTab to turn the VizieR button orange.
@@ -263,7 +268,7 @@ func main() {
 	helpMenu := fyne.NewMenu("Help Topics",
 		fyne.NewMenuItem("Video library", func() { showVideoLibraryDialog(w) }),
 		makeHelpItem("Block Integration", "blockIntegration.md", &blockIntegrationMarkdown),
-		makeHelpItem("Smoothing and Normalization", "smoothingAndNormalization.md", &smoothingMarkdown),
+		makeHelpItem("Normalization", "smoothingAndNormalization.md", &smoothingMarkdown),
 		makeHelpItem("Dropped frames and OCR issues", "timestampAnalysis.md", &timestampAnalysisMarkdown),
 		makeHelpItem("VizieR export", "vizierMarkdown.md", &vizierExportMarkdown),
 		makeHelpItem("Fit explanation", "fitMarkdown.md", &fitExplanationMarkdown),
@@ -1474,6 +1479,7 @@ func main() {
 					break
 				}
 			}
+			isTangraCSV = !isPyMovie
 			if !isPyMovie {
 				// Tangra CSV: check "any name" and uncheck all prefix checkboxes
 				anyNameCheck.SetChecked(true)
@@ -2783,6 +2789,13 @@ func main() {
 					acqCorrSecs, rsCorrSecs, starRow, rowDeltaMs)
 			} else if err1 == nil {
 				comment = fmt.Sprintf("acqCorr = %.4f sec (Acquisition Delay)", acqCorrSecs)
+			}
+			if isTangraCSV && lastCsvExposureSecs > 0 {
+				tangraCorrSecs := lastCsvExposureSecs / 2.0
+				if comment != "" {
+					comment += "\n"
+				}
+				comment += fmt.Sprintf("tangraCorr = %.4f sec (frameTime/2 = %.4f/2)", tangraCorrSecs, lastCsvExposureSecs)
 			}
 			cameraName := strings.TrimSpace(cameraNameEntry.Text)
 			if cameraName != "" {
