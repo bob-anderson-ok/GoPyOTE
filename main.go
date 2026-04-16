@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.65"
+const Version = "1.2.66"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -267,6 +267,7 @@ func main() {
 	}
 	helpMenu := fyne.NewMenu("Help Topics",
 		fyne.NewMenuItem("Video library", func() { showVideoLibraryDialog(w) }),
+		makeHelpItem("NIE analysis", "NIE-help.md", &correlatedNoiseExplanation),
 		makeHelpItem("Block Integration", "blockIntegration.md", &blockIntegrationMarkdown),
 		makeHelpItem("Normalization", "smoothingAndNormalization.md", &smoothingMarkdown),
 		makeHelpItem("Dropped frames and OCR issues", "timestampAnalysis.md", &timestampAnalysisMarkdown),
