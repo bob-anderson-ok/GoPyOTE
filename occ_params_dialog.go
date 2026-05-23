@@ -631,6 +631,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", xmlStr)
 			vt.FillStarFromOccelmntXml(xmlStr)
 			logAction(fmt.Sprintf("Loaded occelmnt file: %s", reader.URI().Path()))
+			computeAndStoreEventUTC(xmlStr)
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".xml", ".txt"}))
 		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
@@ -1213,6 +1214,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 		lastLoadedOccelmntXml = xmlContent
 		fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
 		vt.FillStarFromOccelmntXml(xmlContent)
+		computeAndStoreEventUTC(xmlContent)
 		lat, err := strconv.ParseFloat(strings.TrimSpace(latDecimalEntry.Text), 64)
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("invalid latitude (degrees): %v", err), w)

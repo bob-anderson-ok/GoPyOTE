@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.66"
+const Version = "1.2.67"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -230,6 +230,7 @@ func main() {
 		lastObserverLonDeg = prefs.FloatWithFallback("lastObserverLonDeg", 0.0)
 		lastObserverAltMeters = prefs.FloatWithFallback("lastObserverAltMeters", 0.0)
 	}
+	computeAndStoreEventUTC(lastLoadedOccelmntXml)
 	lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
 	if lastDiffractionParamsPath != "" {
 		logOccparamsRead("startup restore", lastDiffractionParamsPath)
@@ -2412,6 +2413,7 @@ func main() {
 					lastLoadedOccelmntXml = occXml
 					prefs.SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
 					vizierTab.FillStarFromOccelmntXml(lastLoadedOccelmntXml)
+					computeAndStoreEventUTC(lastLoadedOccelmntXml)
 				}
 				// Fill VizieR Number and Name entries from title (e.g. "(2731) Cucula" -> "2731", "Cucula")
 				if strings.HasPrefix(lastDiffractionTitle, "(") {
@@ -2468,6 +2470,7 @@ func main() {
 								prefs.SetString("lastLoadedOccelmntXml", autoXml)
 								vizierTab.FillStarFromOccelmntXml(autoXml)
 								logAction(fmt.Sprintf("Auto-loaded occelmnt file: %s", fullPath))
+								computeAndStoreEventUTC(autoXml)
 							}
 							break
 						}
