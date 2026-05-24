@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.68"
+const Version = "1.3.0"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -1517,8 +1517,8 @@ func main() {
 			}
 
 			// Open the action log now so prior-results-restore and the occelmnt
-			// auto-load (both below) get captured. On repeat processing of an
-			// observation, the XML auto-load runs before any user interaction --
+			// autoload (both below) get captured. On repeat processing of an
+			// observation, the XML autoload runs before any user interaction --
 			// previously its log entries were silently lost.
 			if err := createActionLog(filePath); err != nil {
 				fmt.Printf("Warning: could not create log file: %v\n", err)
@@ -1623,7 +1623,7 @@ func main() {
 				}
 			}
 
-			// Auto-load any occelmnt.xml from the obs folder so predicted magDrop
+			// Autoload any occelmnt.xml from the obs folder so predicted magDrop
 			// (and observer-corrected Event UTC, when GPS location is available)
 			// are computed on every CSV open -- including when prior -RESULTS are
 			// being restored from a previous session.
