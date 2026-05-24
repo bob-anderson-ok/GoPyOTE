@@ -90,3 +90,37 @@ func clampUnit(x float64) float64 {
 	}
 	return x
 }
+
+// TestComputeMagDrop checks the star+asteroid flux-combining math against
+// three reference cases: equal magnitudes (50% drop, Δm = 2.5·log10(2)),
+// the sample-event values (V_star = 8.46, V_asteroid = 18.85 → Δm ≈ 10.39),
+// and the degenerate guard (one input <= 0 returns 0).
+func TestComputeMagDrop(t *testing.T) {
+	cases := []struct {
+		name      string
+		starMag   float64
+		astMag    float64
+		wantDelta float64
+		tol       float64
+	}{
+		{"equal magnitudes", 10.0, 10.0, 2.5 * math.Log10(2), 1e-9},
+		{"sample event", 8.46, 18.85, 10.391, 0.005},
+		{"asteroid much brighter (~0 drop)", 18.0, 8.0, 0.0001, 0.001},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ComputeMagDrop(tc.starMag, tc.astMag)
+			if math.Abs(got-tc.wantDelta) > tc.tol {
+				t.Errorf("ComputeMagDrop(%v, %v) = %v, want %v (±%v)",
+					tc.starMag, tc.astMag, got, tc.wantDelta, tc.tol)
+			}
+		})
+	}
+
+	if got := ComputeMagDrop(0, 10); got != 0 {
+		t.Errorf("ComputeMagDrop with starMag=0 should return 0, got %v", got)
+	}
+	if got := ComputeMagDrop(10, -1); got != 0 {
+		t.Errorf("ComputeMagDrop with negative asteroidMag should return 0, got %v", got)
+	}
+}

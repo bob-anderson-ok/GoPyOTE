@@ -628,10 +628,9 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			xmlStr := strings.TrimPrefix(string(data), "\xef\xbb\xbf")
 			pasteEntry.SetText(xmlStr)
 			lastLoadedOccelmntXml = xmlStr
-			fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", xmlStr)
 			vt.FillStarFromOccelmntXml(xmlStr)
 			logAction(fmt.Sprintf("Loaded occelmnt file: %s", reader.URI().Path()))
-			computeAndStoreEventUTC(xmlStr)
+			processOccelmntXML(xmlStr)
 		}, w)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".xml", ".txt"}))
 		if loadedLightCurveData != nil && loadedLightCurveData.SourceFilePath != "" {
@@ -1212,9 +1211,8 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			return
 		}
 		lastLoadedOccelmntXml = xmlContent
-		fyne.CurrentApp().Preferences().SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
 		vt.FillStarFromOccelmntXml(xmlContent)
-		computeAndStoreEventUTC(xmlContent)
+		processOccelmntXML(xmlContent)
 		lat, err := strconv.ParseFloat(strings.TrimSpace(latDecimalEntry.Text), 64)
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("invalid latitude (degrees): %v", err), w)
@@ -1242,17 +1240,13 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 
 		_, _, _, t0Err := ObserverT0CorrectionFromOWC(xmlContent, lat, lon, alt, 0.0, 0.0, 0.0)
 
-		// Persist the observer location so the SODIS fill can use it even after app restart.
+		// Stash the observer location in session globals so SODIS fill and
+		// processOccelmntXML can use it for the rest of this session.
 		if t0Err == nil {
 			lastObserverLatDeg = lat
 			lastObserverLonDeg = lon
 			lastObserverAltMeters = alt
 			lastObserverLocationSet = true
-			p := fyne.CurrentApp().Preferences()
-			p.SetFloat("lastObserverLatDeg", lat)
-			p.SetFloat("lastObserverLonDeg", lon)
-			p.SetFloat("lastObserverAltMeters", alt)
-			p.SetBool("lastObserverLocationSet", true)
 		}
 
 		// Parse <Object> or <object> for distance_au (index 4) and body diameter (index 3)

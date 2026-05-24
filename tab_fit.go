@@ -1175,13 +1175,16 @@ func buildFitTab(ac *appContext) *container.TabItem {
 
 					// Final report: fit edge times (as timestamps) with MC uncertainty
 					logAction("--- Final Report ---")
-					logAction(fmt.Sprintf("  NCC=%.4f, path offset=%.3f km", mcFitResult.bestNCC, mcFitParams.PathPerpendicularOffsetKm))
+					logAction(fmt.Sprintf("  Observation path is %.3f km from centerline", mcFitParams.PathPerpendicularOffsetKm))
 					if mcFitResult.bestScale > 0 {
 						effectiveDrop := mcFitResult.bestScale * 100.0
 						if mcFitParams.PercentMagDrop > 0 {
 							effectiveDrop = effectiveDrop * float64(mcFitParams.PercentMagDrop) / 100
 						}
-						logAction(fmt.Sprintf("  Percent drop: %.2f%%", effectiveDrop))
+						logAction(fmt.Sprintf("  Measured percent drop: %.2f%%", effectiveDrop))
+					}
+					if lastMagDropDetail != "" {
+						logAction("  " + lastMagDropDetail)
 					}
 					if lastCsvExposureSecs > 0 {
 						logAction(fmt.Sprintf("  Camera exposure time: %.6f seconds", lastCsvExposureSecs))
@@ -1512,7 +1515,13 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					if lastFitParams != nil && lastFitParams.PercentMagDrop > 0 {
 						niePercentDrop = niePercentDrop * float64(lastFitParams.PercentMagDrop) / 100
 					}
-					histImg, nieMean, nieSigma, err := createNIEHistogramImage(minMeans, windowWidth, eventDrop, niePercentDrop, detailsMagDrop, lastDiffractionTitle, nieNoiseLabel, 800, 500)
+					// Prefer the XML-computed magnitude drop (from <Star> V + <Object> V)
+					// over the details.csv value.
+					nieMagDrop := lastComputedMagDrop
+					if nieMagDrop <= 0 {
+						nieMagDrop = detailsMagDrop
+					}
+					histImg, nieMean, nieSigma, err := createNIEHistogramImage(minMeans, windowWidth, eventDrop, niePercentDrop, nieMagDrop, lastDiffractionTitle, nieNoiseLabel, 800, 500)
 					if err != nil {
 						dialog.ShowError(fmt.Errorf("failed to create NIE histogram: %v", err), w)
 						return

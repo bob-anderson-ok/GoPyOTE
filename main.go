@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.2.67"
+const Version = "1.2.68"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -218,19 +218,16 @@ func main() {
 
 	// Purge star row from preferences — it is session-only now.
 	prefs.RemoveValue("imageAcqStarRow")
+	// occelmnt XML and observer GPS location are session-only; purge any
+	// values left behind by older versions.
+	prefs.RemoveValue("lastLoadedOccelmntXml")
+	prefs.RemoveValue("lastObserverLatDeg")
+	prefs.RemoveValue("lastObserverLonDeg")
+	prefs.RemoveValue("lastObserverAltMeters")
+	prefs.RemoveValue("lastObserverLocationSet")
 
 	// Load the last used parameters path from preferences for startup display
 	lastLoadedParamsPath = prefs.StringWithFallback("lastLoadedParamsPath", "")
-	// Restore last loaded occelmnt XML text
-	lastLoadedOccelmntXml = prefs.StringWithFallback("lastLoadedOccelmntXml", "")
-	// Restore observer GPS location for SODIS fill
-	lastObserverLocationSet = prefs.BoolWithFallback("lastObserverLocationSet", false)
-	if lastObserverLocationSet {
-		lastObserverLatDeg = prefs.FloatWithFallback("lastObserverLatDeg", 0.0)
-		lastObserverLonDeg = prefs.FloatWithFallback("lastObserverLonDeg", 0.0)
-		lastObserverAltMeters = prefs.FloatWithFallback("lastObserverAltMeters", 0.0)
-	}
-	computeAndStoreEventUTC(lastLoadedOccelmntXml)
 	lastDiffractionParamsPath = prefs.StringWithFallback("lastDiffractionParamsPath", "")
 	if lastDiffractionParamsPath != "" {
 		logOccparamsRead("startup restore", lastDiffractionParamsPath)
@@ -1519,6 +1516,15 @@ func main() {
 				}
 			}
 
+			// Open the action log now so prior-results-restore and the occelmnt
+			// auto-load (both below) get captured. On repeat processing of an
+			// observation, the XML auto-load runs before any user interaction --
+			// previously its log entries were silently lost.
+			if err := createActionLog(filePath); err != nil {
+				fmt.Printf("Warning: could not create log file: %v\n", err)
+			}
+			logAction(fmt.Sprintf("Loaded CSV with %d columns and %d data points", len(data.Columns), len(data.TimeValues)))
+
 			// Check the -RESULTS folder for prior run artifacts (.occparams, .site, targetImage16bit.png).
 			// If all three are present, restore the state so the Fit tab can be used immediately.
 			var foundOccparams, foundSite, foundImage, foundGeoShadow string
@@ -1584,8 +1590,6 @@ func main() {
 								if lat, perr := strconv.ParseFloat(val, 64); perr == nil {
 									lastObserverLatDeg = lat
 									lastObserverLocationSet = true
-									prefs.SetFloat("lastObserverLatDeg", lat)
-									prefs.SetBool("lastObserverLocationSet", true)
 									deg, minutes, sec := decimalToDMS(lat)
 									vizierTab.SiteLatDegEntry.SetText(deg)
 									vizierTab.SiteLatMinEntry.SetText(minutes)
@@ -1595,7 +1599,6 @@ func main() {
 								val := strings.TrimSpace(strings.TrimPrefix(line, "longitude_decimal:"))
 								if lon, perr := strconv.ParseFloat(val, 64); perr == nil {
 									lastObserverLonDeg = lon
-									prefs.SetFloat("lastObserverLonDeg", lon)
 									deg, minutes, sec := decimalToDMS(lon)
 									vizierTab.SiteLongDegEntry.SetText(deg)
 									vizierTab.SiteLongMinEntry.SetText(minutes)
@@ -1605,7 +1608,6 @@ func main() {
 								val := strings.TrimSpace(strings.TrimPrefix(line, "altitude:"))
 								if alt, perr := strconv.ParseFloat(val, 64); perr == nil {
 									lastObserverAltMeters = alt
-									prefs.SetFloat("lastObserverAltMeters", alt)
 								}
 								vizierTab.SiteAltitudeEntry.SetText(val)
 							} else if strings.HasPrefix(line, "observer1:") {
@@ -1618,6 +1620,29 @@ func main() {
 						}
 					}
 					logAction(fmt.Sprintf("Restored prior results: occparams=%s, site=%s, image copied", foundOccparams, foundSite))
+				}
+			}
+
+			// Auto-load any occelmnt.xml from the obs folder so predicted magDrop
+			// (and observer-corrected Event UTC, when GPS location is available)
+			// are computed on every CSV open -- including when prior -RESULTS are
+			// being restored from a previous session.
+			{
+				obsDir := filepath.Dir(filePath)
+				if entries, err := os.ReadDir(obsDir); err == nil {
+					for _, entry := range entries {
+						if !entry.IsDir() && strings.Contains(strings.ToLower(entry.Name()), "occel") {
+							fullPath := filepath.Join(obsDir, entry.Name())
+							if xmlBytes, rerr := os.ReadFile(fullPath); rerr == nil {
+								autoXml := strings.TrimPrefix(string(xmlBytes), "\xef\xbb\xbf")
+								lastLoadedOccelmntXml = autoXml
+								vizierTab.FillStarFromOccelmntXml(autoXml)
+								logAction(fmt.Sprintf("Auto-loaded occelmnt file: %s", fullPath))
+								processOccelmntXML(autoXml)
+							}
+							break
+						}
+					}
 				}
 			}
 
@@ -1687,11 +1712,6 @@ func main() {
 				}
 			}
 
-			// Create an action log file for this CSV
-			if err := createActionLog(filePath); err != nil {
-				fmt.Printf("Warning: could not create log file: %v\n", err)
-			}
-			logAction(fmt.Sprintf("Loaded CSV with %d columns and %d data points", len(data.Columns), len(data.TimeValues)))
 			w.SetTitle("GoPyOTE Version: " + Version + " — " + filePath)
 
 			// Check if the timestamp column was empty (all zeros)
@@ -2411,9 +2431,8 @@ func main() {
 				ac.lightCurvePlot.occultationTitle = lastDiffractionTitle
 				if occXml != "" {
 					lastLoadedOccelmntXml = occXml
-					prefs.SetString("lastLoadedOccelmntXml", lastLoadedOccelmntXml)
 					vizierTab.FillStarFromOccelmntXml(lastLoadedOccelmntXml)
-					computeAndStoreEventUTC(lastLoadedOccelmntXml)
+					processOccelmntXML(lastLoadedOccelmntXml)
 				}
 				// Fill VizieR Number and Name entries from title (e.g. "(2731) Cucula" -> "2731", "Cucula")
 				if strings.HasPrefix(lastDiffractionTitle, "(") {
@@ -2467,10 +2486,9 @@ func main() {
 							if data, rerr := os.ReadFile(fullPath); rerr == nil {
 								autoXml = strings.TrimPrefix(string(data), "\xef\xbb\xbf")
 								lastLoadedOccelmntXml = autoXml
-								prefs.SetString("lastLoadedOccelmntXml", autoXml)
 								vizierTab.FillStarFromOccelmntXml(autoXml)
 								logAction(fmt.Sprintf("Auto-loaded occelmnt file: %s", fullPath))
-								computeAndStoreEventUTC(autoXml)
+								processOccelmntXML(autoXml)
 							}
 							break
 						}

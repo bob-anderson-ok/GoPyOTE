@@ -445,10 +445,8 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 		// reported percent drop: effectiveDrop = calculatedDrop * PercentMagDrop / 100
 		calculatedDrop := bestScale * 100
 		effectiveDrop := calculatedDrop
-		logAction(fmt.Sprintf("PercentMagDrop from occparams: %d", params.PercentMagDrop))
 		if params.PercentMagDrop > 0 {
 			effectiveDrop = calculatedDrop * float64(params.PercentMagDrop) / 100
-			logAction(fmt.Sprintf("Adjusted percent drop: %.2f (calculatedDrop %.2f × PercentMagDrop %d / 100)", effectiveDrop, calculatedDrop, params.PercentMagDrop))
 		}
 
 		// Show scaled overlay plot; nil edgeStds saves it as fitPlot.png

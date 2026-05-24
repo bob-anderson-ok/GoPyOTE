@@ -70,6 +70,12 @@ type Occelmnt struct {
 	StarRAHours float64
 	StarDEDeg   float64
 
+	// Visual magnitudes used to predict the occultation drop magnitude.
+	// StarVMag comes from <Star> 1-indexed entry 5; ObjectVMag from <Object>
+	// 1-indexed entry 13. Zero means "not available in this XML".
+	StarVMag   float64
+	ObjectVMag float64
+
 	// Earth geometry (from <Earth>)
 	SubStellarLongRaw float64 // degrees; will be corrected to apparent place
 	SubSolarLong      float64 // degrees; only needed for ZSun
@@ -757,10 +763,11 @@ func eventToOccelmnt(ev xmlEvent) (Occelmnt, error) {
 		return Occelmnt{}, err
 	}
 
-	// <Star> layout (only first two numeric fields needed):
+	// <Star> layout (numeric fields used):
 	//   [0] designation:   "J061552.44+032622.3"
 	//   [1] StarRAHours
 	//   [2] StarDEDeg
+	//   [4] StarVMag (1-indexed entry 5)
 	star := splitCSV(ev.Star)
 	if len(star) < 3 {
 		return Occelmnt{}, fmt.Errorf("Star has %d fields, need at least 3", len(star))
@@ -774,13 +781,30 @@ func eventToOccelmnt(ev xmlEvent) (Occelmnt, error) {
 		return Occelmnt{}, err
 	}
 
-	return NewOccelmnt(
+	occ := NewOccelmnt(
 		year, month, day,
 		midTimeUT,
 		bessX, bessY, bessXp, bessYp, bessXs, bessYs,
 		starRAHours, starDEDeg,
 		subStellarLong, subSolarLong, subSolarLat,
-	), nil
+	)
+
+	// Optional visual magnitudes (permissive: leave at 0 if absent or unparseable).
+	// <Star> 1-indexed entry 5 -> 0-indexed [4]
+	// <Object> 1-indexed entry 13 -> 0-indexed [12]
+	if len(star) >= 5 {
+		if v, perr := strconv.ParseFloat(star[4], 64); perr == nil {
+			occ.StarVMag = v
+		}
+	}
+	obj := splitCSV(ev.Object)
+	if len(obj) >= 13 {
+		if v, perr := strconv.ParseFloat(obj[12], 64); perr == nil {
+			occ.ObjectVMag = v
+		}
+	}
+
+	return occ, nil
 }
 
 // splitCSV splits "a, b ,c " into ["a", "b", "c"], trimming whitespace.
@@ -808,21 +832,52 @@ func parseFloats1(s, field string) (float64, error) {
 	return v, nil
 }
 
-// -- Observer-local Event UTC helper -----------------------------------------
+// -- Derived values cached when an occelmnt XML is loaded --------------------
 
 // lastComputedEventUTC holds the most recently computed observer-corrected
 // event UTC string, formatted "02 Jan 2006 15:04:05" (matching the details.csv
-// "Event Time (UT)" convention). Empty until computeAndStoreEventUTC succeeds.
+// "Event Time (UT)" convention). Empty until processOccelmntXML succeeds.
 var lastComputedEventUTC string
 
-// computeAndStoreEventUTC parses the given occelmnt XML, runs
-// GetTforMinimumDistance against the persisted observer location, prints the
-// resulting Event UTC to stdout, and stores it in lastComputedEventUTC for
-// later use. Silently returns "" if XML is empty, the observer location has
-// never been set, the XML fails to parse, or the Newton solver does not
-// converge.
-func computeAndStoreEventUTC(xmlStr string) string {
-	if xmlStr == "" || !lastObserverLocationSet {
+// lastComputedMagDrop holds the most recently computed magnitude drop (mag)
+// derived from the star's V magnitude and the asteroid's V magnitude in the
+// loaded occelmnt XML. Zero means "not yet computed for this session".
+var lastComputedMagDrop float64
+
+// lastMagDropDetail holds the human-readable summary line produced when
+// processOccelmntXML computes a magnitude drop, e.g.
+//   "Mag drop from occelmnt.xml: star V=8.460, asteroid V=8.850, combined V=7.885, dMag=0.965 mag, percent drop ~58.88%"
+// Used by the Final Report so the same detail is reproduced there.
+var lastMagDropDetail string
+
+// ComputeMagDrop returns the (positive) magnitude drop observed when a star
+// of visual magnitude starMag is occulted by an asteroid of visual magnitude
+// asteroidMag. Combines the two fluxes, then returns asteroidMag minus the
+// combined magnitude. Both inputs must be > 0; otherwise the result is 0.
+func ComputeMagDrop(starMag, asteroidMag float64) float64 {
+	if starMag <= 0 || asteroidMag <= 0 {
+		return 0
+	}
+	fs := math.Pow(10, -starMag/2.5)
+	fa := math.Pow(10, -asteroidMag/2.5)
+	mCombined := -2.5 * math.Log10(fs+fa)
+	return asteroidMag - mCombined
+}
+
+// processOccelmntXML parses the given occelmnt XML and caches two derived
+// values for the rest of the session:
+//   - lastComputedMagDrop: predicted magnitude drop from <Star> V and
+//     <Object> V (does not need observer location).
+//   - lastComputedEventUTC: observer-corrected event UTC from
+//     GetTforMinimumDistance (requires the observer location to be set).
+//
+// Both values are printed to stdout when they are produced. Returns the
+// formatted Event UTC string for callers that want it directly; returns ""
+// when the Event UTC could not be computed (XML empty/unparseable, observer
+// location not set, or Newton solver did not converge). The mag-drop side
+// effect happens whenever the XML parses, independent of the return value.
+func processOccelmntXML(xmlStr string) string {
+	if xmlStr == "" {
 		return ""
 	}
 
@@ -842,6 +897,24 @@ func computeAndStoreEventUTC(xmlStr string) string {
 		return ""
 	}
 	occ := events[0]
+
+	// Magnitude drop -- no observer-location dependency.
+	if md := ComputeMagDrop(occ.StarVMag, occ.ObjectVMag); md > 0 {
+		lastComputedMagDrop = md
+		percent := (1 - math.Pow(10, -md/2.5)) * 100
+		mCombined := occ.ObjectVMag - md
+		fmt.Printf("Computed mag drop: %.3f mag (~%.2f%% flux drop)\n", md, percent)
+		lastMagDropDetail = fmt.Sprintf(
+			"Mag drop from occelmnt.xml: star V=%.3f, asteroid V=%.3f, combined V=%.3f, dMag=%.3f mag, percent drop ~%.2f%%",
+			occ.StarVMag, occ.ObjectVMag, mCombined, md, percent,
+		)
+		logAction(lastMagDropDetail)
+	}
+
+	// Event UTC requires the observer location.
+	if !lastObserverLocationSet {
+		return ""
+	}
 
 	N := GeoidHeight(lastObserverLonDeg, lastObserverLatDeg)
 	ellipsoidalAltM := lastObserverAltMeters + N

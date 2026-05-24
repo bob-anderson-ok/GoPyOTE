@@ -1837,15 +1837,21 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 			}
 		}
 
-		// Details file Event Time (UT) is the sole source for PREDICTTIME (calculated values are unreliable).
-		if fill.detailsEventTimeUT != "" {
+		// PREDICTTIME: prefer the observer-corrected event UTC computed by
+		// processOccelmntXML when an occelmnt XML has been loaded in this
+		// session; otherwise fall back to the details.csv "Event Time (UT)".
+		predictTime := lastComputedEventUTC
+		if predictTime == "" {
+			predictTime = fill.detailsEventTimeUT
+		}
+		if predictTime != "" {
 			monthAbbrevs := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
-			if t, perr := time.Parse("02 Jan 2006 15:04:05", fill.detailsEventTimeUT); perr == nil {
+			if t, perr := time.Parse("02 Jan 2006 15:04:05", predictTime); perr == nil {
 				val := fmt.Sprintf("%02d %s; %02d:%02d:%02d UT",
 					t.Day(), monthAbbrevs[t.Month()], t.Hour(), t.Minute(), t.Second())
 				setEntry("PREDICTTIME", val)
 			} else {
-				setEntry("PREDICTTIME", fill.detailsEventTimeUT)
+				setEntry("PREDICTTIME", predictTime)
 			}
 		}
 
