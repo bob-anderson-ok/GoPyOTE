@@ -1208,7 +1208,7 @@ func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop floa
 		return nil, 0, 0, fmt.Errorf("failed to create NIE histogram: %w", err)
 	}
 	hist.Normalize(1)
-	hist.FillColor = color.RGBA{R: 100, G: 200, B: 120, A: 180}
+	hist.FillColor = color.NRGBA{R: 100, G: 200, B: 120, A: 180}
 	hist.Color = color.RGBA{R: 0, G: 130, B: 30, A: 255}
 	plt.Add(hist)
 	plt.Legend.Add(fmt.Sprintf("Noise induced drops at event size %d", windowWidth), hist)

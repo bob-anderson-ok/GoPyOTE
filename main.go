@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.3.0"
+const Version = "1.3.1"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -196,7 +196,7 @@ func main() {
 	sessionRowDelta = prefs.StringWithFallback("cameraTiming.rowDelta", "")
 
 	// Apply persisted dark mode preference
-	if prefs.BoolWithFallback("darkMode", false) {
+	if prefs.BoolWithFallback("darkMode", true) {
 		a.Settings().SetTheme(&ForcedVariantTheme{Base: theme.DefaultTheme(), Variant: theme.VariantDark})
 	} else {
 		a.Settings().SetTheme(&ForcedVariantTheme{Base: theme.DefaultTheme(), Variant: theme.VariantLight})
@@ -206,14 +206,28 @@ func main() {
 	grayPlotBackground = prefs.BoolWithFallback("grayPlotBackground", false)
 	lightcurve.GrayPlotBackground = grayPlotBackground
 
+	// Default window size: 70% of the primary monitor's work area (taskbar excluded),
+	// converted from physical pixels to Fyne logical units by dividing by the system
+	// DPI scale (e.g., 1.5 for a 150% Windows display scale setting).
+	// Falls back to 1000x600 if the Windows API call fails.
+	defaultW, defaultH := 1000, 600
+	if _, _, workW, workH, ok := getWorkArea(); ok {
+		scale := float64(getSystemDpi()) / 96.0
+		if scale <= 0 {
+			scale = 1.0
+		}
+		defaultW = int(float64(workW) * 0.7 / scale)
+		defaultH = int(float64(workH) * 0.7 / scale)
+	}
+
 	// Initialize preferences on the first run to avoid EOF errors
 	if prefs.Int("initialized") == 0 {
 		prefs.SetInt("initialized", 1)
 		prefs.SetInt("windowX", -1)
 		prefs.SetInt("windowY", -1)
-		prefs.SetInt("windowW", 1000)
-		prefs.SetInt("windowH", 600)
-		prefs.SetFloat("splitOffset", 0.6)
+		prefs.SetInt("windowW", defaultW)
+		prefs.SetInt("windowH", defaultH)
+		prefs.SetFloat("splitOffset", 0.4584450402144772)
 	}
 
 	// Purge star row from preferences — it is session-only now.
@@ -248,8 +262,8 @@ func main() {
 
 	savedX := int32(prefs.IntWithFallback("windowX", -1))
 	savedY := int32(prefs.IntWithFallback("windowY", -1))
-	savedW := int32(prefs.IntWithFallback("windowW", 1000))
-	savedH := int32(prefs.IntWithFallback("windowH", 600))
+	savedW := int32(prefs.IntWithFallback("windowW", defaultW))
+	savedH := int32(prefs.IntWithFallback("windowH", defaultH))
 	firstRun := savedX == -1 && savedY == -1
 
 	// Create a menu
@@ -351,7 +365,7 @@ func main() {
 		ac.applyTabBgTheme(checked)
 		prefs.SetBool("darkMode", checked)
 	})
-	darkModeCheck.Checked = prefs.BoolWithFallback("darkMode", false)
+	darkModeCheck.Checked = prefs.BoolWithFallback("darkMode", true)
 
 	grayBgCheck := widget.NewCheck("Gray plot backgrounds", func(checked bool) {
 		grayPlotBackground = checked
@@ -2105,7 +2119,7 @@ func main() {
 	}
 
 	// Apply dark tab backgrounds if dark mode was persisted
-	if prefs.BoolWithFallback("darkMode", false) {
+	if prefs.BoolWithFallback("darkMode", true) {
 		ac.applyTabBgTheme(true)
 	}
 
@@ -2883,7 +2897,7 @@ func main() {
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
-	splitOffset := prefs.FloatWithFallback("splitOffset", 0.35)
+	splitOffset := prefs.FloatWithFallback("splitOffset", 0.4584450402144772)
 	split.SetOffset(splitOffset)
 
 	content := container.NewBorder(nil, buttons, nil, nil, split)
