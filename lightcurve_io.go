@@ -130,6 +130,27 @@ func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
 	return data, nil
 }
 
+// csvIsFromTangra reports whether the first line of the CSV file contains "tangra"
+// (case-insensitive). Tangra names itself in the first line of the light curve files
+// it writes; a file lacking that marker is assumed to have come from PyMovie.
+func csvIsFromTangra(filePath string) bool {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		if cerr := file.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close file: %v\n", cerr)
+		}
+	}()
+
+	scanner := bufio.NewScanner(file)
+	if !scanner.Scan() {
+		return false
+	}
+	return strings.Contains(strings.ToLower(scanner.Text()), "tangra")
+}
+
 // generateNetSignalCSV checks for "Signal (n)" / "Background (n)" column pairs in the
 // CSV file and, if any are found, writes a new CSV with computed "NetSignal (n)" columns
 // appended. All original columns and header lines are retained. The new file is saved in

@@ -45,9 +45,9 @@ import (
 
 const (
 	radian                  = 180.0 / math.Pi
-	earthRadiusKm           = 6378.137                  // WGS-84 equatorial radius
-	earthFlatteningFactor   = 0.993305620009859         // (1 - f)^2, f = 1/298.257
-	earthRotationRadPerHour = 0.2625161                 // ~15.04108 deg/hr, sidereal
+	earthRadiusKm           = 6378.137          // WGS-84 equatorial radius
+	earthFlatteningFactor   = 0.993305620009859 // (1 - f)^2, f = 1/298.257
+	earthRotationRadPerHour = 0.2625161         // ~15.04108 deg/hr, sidereal
 	newtonTolHours          = 1e-5
 	newtonMaxIter           = 30
 )
@@ -75,6 +75,11 @@ type Occelmnt struct {
 	// 1-indexed entry 13. Zero means "not available in this XML".
 	StarVMag   float64
 	ObjectVMag float64
+
+	// StarDiamMas is the predicted stellar angular diameter in
+	// milli-arcseconds, from <Star> 1-indexed entry 7. Zero is a legitimate
+	// value (a point source) and is used as-is.
+	StarDiamMas float64
 
 	// Earth geometry (from <Earth>)
 	SubStellarLongRaw float64 // degrees; will be corrected to apparent place
@@ -188,11 +193,11 @@ var (
 
 	// Cached nutation/aberration values, valid for ~0.3 days around accOldJD.
 	// Mirrors the static caching in AstroUtilities (s_AccOldJD etc.).
-	accOldJD          float64
-	accNutLonArcsec   float64
-	accNutOblArcsec   float64
-	accEcliptic       float64
-	accC, accD        float64
+	accOldJD        float64
+	accNutLonArcsec float64
+	accNutOblArcsec float64
+	accEcliptic     float64
+	accC, accD      float64
 )
 
 func init() {
@@ -215,8 +220,16 @@ func decompressOWZ(data []byte) ([]byte, error) {
 		return data, nil
 	}
 	r := flate.NewReader(bytes.NewReader(data[4:]))
-	defer r.Close()
-	return io.ReadAll(r)
+	body, err := io.ReadAll(r)
+	// Close explicitly rather than deferring so a truncated/corrupt stream is
+	// reported. A read error takes precedence over the close error.
+	if cerr := r.Close(); cerr != nil && err == nil {
+		err = fmt.Errorf("close deflate reader: %w", cerr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 func loadAberrationRecords(raw []byte) ([]EarthAberrationData, error) {
@@ -695,7 +708,7 @@ func eventToOccelmnt(ev xmlEvent) (Occelmnt, error) {
 	//   [11] BessYs
 	elems := splitCSV(ev.Elements)
 	if len(elems) < 12 {
-		return Occelmnt{}, fmt.Errorf("Elements has %d fields, need at least 12", len(elems))
+		return Occelmnt{}, fmt.Errorf("elements has %d fields, need at least 12", len(elems))
 	}
 
 	year, err := parseInt(elems[2], "Elements.year")
@@ -748,7 +761,7 @@ func eventToOccelmnt(ev xmlEvent) (Occelmnt, error) {
 	//   [4] flag (bool, unused here)
 	earth := splitCSV(ev.Earth)
 	if len(earth) < 4 {
-		return Occelmnt{}, fmt.Errorf("Earth has %d fields, need at least 4", len(earth))
+		return Occelmnt{}, fmt.Errorf("earth has %d fields, need at least 4", len(earth))
 	}
 	subStellarLong, err := parseFloats1(earth[0], "Earth.SubStellarLong")
 	if err != nil {
@@ -768,9 +781,10 @@ func eventToOccelmnt(ev xmlEvent) (Occelmnt, error) {
 	//   [1] StarRAHours
 	//   [2] StarDEDeg
 	//   [4] StarVMag (1-indexed entry 5)
+	//   [6] StarDiamMas (1-indexed entry 7)
 	star := splitCSV(ev.Star)
 	if len(star) < 3 {
-		return Occelmnt{}, fmt.Errorf("Star has %d fields, need at least 3", len(star))
+		return Occelmnt{}, fmt.Errorf("star has %d fields, need at least 3", len(star))
 	}
 	starRAHours, err := parseFloats1(star[1], "Star.StarRAHours")
 	if err != nil {
@@ -795,6 +809,13 @@ func eventToOccelmnt(ev xmlEvent) (Occelmnt, error) {
 	if len(star) >= 5 {
 		if v, perr := strconv.ParseFloat(star[4], 64); perr == nil {
 			occ.StarVMag = v
+		}
+	}
+	// Predicted stellar diameter: <Star> 1-indexed entry 7 -> 0-indexed [6].
+	// Zero is a valid value and is kept.
+	if len(star) >= 7 {
+		if v, perr := strconv.ParseFloat(star[6], 64); perr == nil {
+			occ.StarDiamMas = v
 		}
 	}
 	obj := splitCSV(ev.Object)
@@ -844,9 +865,18 @@ var lastComputedEventUTC string
 // loaded occelmnt XML. Zero means "not yet computed for this session".
 var lastComputedMagDrop float64
 
+// lastComputedStarDiamMas holds the predicted stellar angular diameter (mas)
+// read from the <Star> entry of the most recently processed occelmnt XML.
+// Zero is a legitimate value (point source), so lastStarDiamMasKnown reports
+// whether a value was actually read rather than relying on a zero test.
+var lastComputedStarDiamMas float64
+var lastStarDiamMasKnown bool
+
 // lastMagDropDetail holds the human-readable summary line produced when
 // processOccelmntXML computes a magnitude drop, e.g.
-//   "Mag drop from occelmnt.xml: star V=8.460, asteroid V=8.850, combined V=7.885, dMag=0.965 mag, percent drop ~58.88%"
+//
+//	"Mag drop from occelmnt.xml: star V=8.460, asteroid V=8.850, combined V=7.885, dMag=0.965 mag, percent drop ~58.88%"
+//
 // Used by the Final Report so the same detail is reproduced there.
 var lastMagDropDetail string
 
@@ -864,8 +894,10 @@ func ComputeMagDrop(starMag, asteroidMag float64) float64 {
 	return asteroidMag - mCombined
 }
 
-// processOccelmntXML parses the given occelmnt XML and caches two derived
+// processOccelmntXML parses the given occelmnt XML and caches three derived
 // values for the rest of the session:
+//   - lastComputedStarDiamMas: predicted stellar diameter from <Star> entry 7
+//     (does not need observer location; zero is a usable value).
 //   - lastComputedMagDrop: predicted magnitude drop from <Star> V and
 //     <Object> V (does not need observer location).
 //   - lastComputedEventUTC: observer-corrected event UTC from
@@ -883,20 +915,43 @@ func processOccelmntXML(xmlStr string) string {
 
 	tmp, err := os.CreateTemp("", "occelmnt-*.xml")
 	if err != nil {
+		fmt.Printf("Warning: could not create temp file for occelmnt XML: %v\n", err)
 		return ""
 	}
-	defer os.Remove(tmp.Name())
-	if _, werr := tmp.Write([]byte(xmlStr)); werr != nil {
-		tmp.Close()
-		return ""
-	}
-	tmp.Close()
+	tmpPath := tmp.Name()
+	defer func() {
+		if rerr := os.Remove(tmpPath); rerr != nil && !os.IsNotExist(rerr) {
+			fmt.Printf("Warning: failed to remove temp file %s: %v\n", tmpPath, rerr)
+		}
+	}()
 
-	events, err := ParseOccelmntXML(tmp.Name())
+	// Close is handled explicitly on both paths: a close error after a
+	// successful write means the contents may not have reached disk, so the
+	// file must not be parsed.
+	if _, werr := tmp.Write([]byte(xmlStr)); werr != nil {
+		fmt.Printf("Warning: failed to write temp file %s: %v\n", tmpPath, werr)
+		if cerr := tmp.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close temp file %s: %v\n", tmpPath, cerr)
+		}
+		return ""
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		fmt.Printf("Warning: failed to close temp file %s: %v\n", tmpPath, cerr)
+		return ""
+	}
+
+	events, err := ParseOccelmntXML(tmpPath)
 	if err != nil || len(events) == 0 {
 		return ""
 	}
 	occ := events[0]
+
+	// Predicted stellar diameter -- no observer-location dependency. Zero is a
+	// legitimate value, so it is cached and logged like any other.
+	lastComputedStarDiamMas = occ.StarDiamMas
+	lastStarDiamMasKnown = true
+	fmt.Printf("Star diameter from occelmnt.xml: %.4f mas\n", occ.StarDiamMas)
+	logAction(fmt.Sprintf("Star diameter from occelmnt.xml: %.4f mas", occ.StarDiamMas))
 
 	// Magnitude drop -- no observer-location dependency.
 	if md := ComputeMagDrop(occ.StarVMag, occ.ObjectVMag); md > 0 {

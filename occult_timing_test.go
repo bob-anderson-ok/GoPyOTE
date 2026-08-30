@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,17 +13,7 @@ import (
 // sites. Output is emitted with t.Logf; run with `go test -v -run
 // TestGetTforMinimumDistance` to view the per-site timing table.
 func TestGetTforMinimumDistance(t *testing.T) {
-	tmp, err := os.CreateTemp("", "occelmnt-*.xml")
-	if err != nil {
-		t.Fatalf("tempfile: %v", err)
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write([]byte(sampleOccelmntXML)); err != nil {
-		t.Fatalf("write tempfile: %v", err)
-	}
-	tmp.Close()
-
-	events, err := ParseOccelmntXML(tmp.Name())
+	events, err := ParseOccelmntXML(writeTempXML(t, sampleOccelmntXML))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -81,6 +72,36 @@ const sampleOccelmntXML = `<Occultations>
   </Event>
 </Occultations>`
 
+// writeTempXML writes contents to a temporary .xml file and returns its path.
+// The file is removed when the test (or subtest) finishes. Close is handled
+// explicitly rather than deferred: a close failure means the contents may not
+// have reached disk, so parsing the file would exercise the wrong bytes.
+func writeTempXML(t *testing.T, contents string) string {
+	t.Helper()
+
+	tmp, err := os.CreateTemp("", "occelmnt-*.xml")
+	if err != nil {
+		t.Fatalf("tempfile: %v", err)
+	}
+	path := tmp.Name()
+	t.Cleanup(func() {
+		if rerr := os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
+			t.Errorf("remove tempfile %s: %v", path, rerr)
+		}
+	})
+
+	if _, werr := tmp.Write([]byte(contents)); werr != nil {
+		if cerr := tmp.Close(); cerr != nil {
+			t.Errorf("close tempfile %s: %v", path, cerr)
+		}
+		t.Fatalf("write tempfile %s: %v", path, werr)
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		t.Fatalf("close tempfile %s: %v", path, cerr)
+	}
+	return path
+}
+
 func clampUnit(x float64) float64 {
 	if x < -1 {
 		return -1
@@ -122,5 +143,40 @@ func TestComputeMagDrop(t *testing.T) {
 	}
 	if got := ComputeMagDrop(10, -1); got != 0 {
 		t.Errorf("ComputeMagDrop with negative asteroidMag should return 0, got %v", got)
+	}
+}
+
+// TestParseStarDiamMas checks that the stellar diameter is taken from <Star>
+// 1-indexed entry 7. Zero is a legitimate value there, so both the sample
+// event (0.0) and a non-zero variant must come through unchanged.
+func TestParseStarDiamMas(t *testing.T) {
+	nonZeroXML := strings.Replace(sampleOccelmntXML,
+		"8.47,8.46,8.41,0.0,0,,",
+		"8.47,8.46,8.41,0.34,0,,", 1)
+	if nonZeroXML == sampleOccelmntXML {
+		t.Fatalf("test setup: <Star> substitution did not match the sample XML")
+	}
+
+	cases := []struct {
+		name string
+		xml  string
+		want float64
+	}{
+		{"sample event (zero is usable)", sampleOccelmntXML, 0.0},
+		{"non-zero diameter", nonZeroXML, 0.34},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			events, err := ParseOccelmntXML(writeTempXML(t, tc.xml))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if len(events) == 0 {
+				t.Fatalf("no events parsed")
+			}
+			if got := events[0].StarDiamMas; got != tc.want {
+				t.Errorf("StarDiamMas = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

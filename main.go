@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.3.2"
+const Version = "1.3.4"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -1484,15 +1484,10 @@ func main() {
 				}
 			}
 
-			// Detect whether the CSV came from PyMovie or Tangra and set prefix filters accordingly
-			isPyMovie := false
-			for _, col := range data.Columns {
-				if strings.HasPrefix(col.Name, "hit-defect") {
-					isPyMovie = true
-					break
-				}
-			}
-			isTangraCSV = !isPyMovie
+			// Detect whether the CSV came from PyMovie or Tangra and set prefix filters accordingly.
+			// Tangra names itself in the first line of the file; anything else is assumed to be PyMovie.
+			isTangraCSV = csvIsFromTangra(filePath)
+			isPyMovie := !isTangraCSV
 			if !isPyMovie {
 				// Tangra CSV: check "any name" and uncheck all prefix checkboxes
 				anyNameCheck.SetChecked(true)

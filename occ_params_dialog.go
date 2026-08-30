@@ -1281,6 +1281,13 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			}
 		}
 
+		// Predicted stellar diameter, read from <Star> entry 7 by
+		// processOccelmntXML above. Zero is a legitimate value and is used.
+		starDiamMas := 0.0
+		if lastStarDiamMasKnown {
+			starDiamMas = lastComputedStarDiamMas
+		}
+
 		// Build a parameters struct with the computed values
 		params := OccultationParameters{
 			Title:                          titleStr,
@@ -1291,6 +1298,7 @@ func showProcessOccelemntDialog(w fyne.Window, vt *VizieRTab, initialXml string)
 			DYKmPerSec:                     vy,
 			DistanceAu:                     distanceAu,
 			ObservationWavelengthNm:        550,
+			StarDiamOnPlaneMas:             starDiamMas,
 			MainBody: EllipseParams{
 				MajorAxisKm: bodyDiamKm,
 				MinorAxisKm: bodyDiamKm,
