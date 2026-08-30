@@ -556,7 +556,21 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			}
 			dialog.ShowError(fmt.Errorf("%s", msg), w)
 		} else {
-			runFitBody := func() {
+			// runFitWork does everything the click leads to. It takes the "please
+			// wait" notice already on screen: clearing the previous fit refreshes
+			// the plot, and parsing the parameters file and collecting the target
+			// data are UI-thread work too, so a notice opened in here would not be
+			// painted until all of it had finished.
+			runFitWork := func(prepAdv *advisory) {
+				// Every path out of here closes the notice except the search branch,
+				// which hands it off to the goroutine that watches for progress.
+				advHandedOff := false
+				defer func() {
+					if !advHandedOff {
+						prepAdv.close()
+					}
+				}()
+
 				// Clear previous fit results so edges don't accumulate across runs
 				lastFitResult = nil
 				lastFitParams = nil
@@ -657,10 +671,30 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					fitAbortFlag.Store(false)
 					fitAbortBtn.Show()
 					fitAbortBtn.Enable()
+					// The notice stays up past the click: the first search step cannot
+					// report progress until it has built a theoretical light curve,
+					// which leaves the progress bar sitting at zero long enough to look
+					// stalled. The goroutine below closes it when the first step lands.
+					advHandedOff = true
+					// Set when the search reports that it has left the tracked loop: edge
+					// detection, plot rendering and file I/O all run with the bar sitting
+					// full. Touched only from UI-thread closures, which run in the order
+					// they were posted, so the show always precedes the close below.
+					var finishAdv *advisory
 					go func() {
 						fsr, err := runFitSearch(params, targetTimes, targetValues, initVal, finalVal, stepsVal, &fitAbortFlag, func(progress float64) {
 							fyne.Do(func() {
+								prepAdv.close()
 								fitProgressBar.SetValue(progress)
+							})
+						}, func(phase string) {
+							if phase != fitPhaseEdges {
+								return
+							}
+							fyne.Do(func() {
+								prepAdv.close()
+								finishAdv = showAdvisory(a, "Computing Edge Times",
+									"Computing edge times and preparing plots — please wait...")
 							})
 						})
 						// Prepare to display data off the UI thread (image rendering, file I/O).
@@ -669,6 +703,24 @@ func buildFitTab(ac *appContext) *container.TabItem {
 							sd, err = prepareFitSearchDisplay(params, fsr, targetTimes, targetValues, ac.showDiagnostics)
 						}
 						fyne.Do(func() {
+							// Everything below runs on the UI thread with the app frozen:
+							// opening the result windows, then two rebuilds of the main
+							// plot. Hold the notice until all of it is done rather than
+							// closing it here. (prepAdv.close covers an abort or an error
+							// that arrives before any step reports.)
+							prepAdv.close()
+							// The plot image is rendered synchronously below, but Fyne
+							// cannot upload and composite it until this closure releases
+							// the UI thread, so the plot is still gray for a frame or two
+							// after we return. Hold the notice a moment past that rather
+							// than uncovering a gray plot. A timer, not a callback: the
+							// render-complete hook fires before the paint, not after.
+							defer func() {
+								go func() {
+									time.Sleep(250 * time.Millisecond)
+									fyne.Do(finishAdv.close)
+								}()
+							}()
 							fitProgressBar.Hide()
 							fitAbortBtn.Hide()
 							fitBtn.Enable()
@@ -695,7 +747,14 @@ func buildFitTab(ac *appContext) *container.TabItem {
 								if ac.enablePostFitButtons != nil {
 									ac.enablePostFitButtons()
 								}
+								// Redraw the main plot inline instead of letting rebuildPlot
+								// defer it behind its own "Redrawing plot" dialog: that
+								// dialog is drawn inside the main window, where the result
+								// windows just opened would hide it, and deferring would
+								// put the redraw after the notice had already closed.
+								ac.suppressBusyDialog = true
 								ac.overlayTheoryCurve(sd.bestFr, nil)
+								ac.suppressBusyDialog = true // consumed by the rebuild above
 								runAutoSlide()
 								showEdgeTimesDialog(a, params, sd.bestFr)
 								if initVal == finalVal {
@@ -742,7 +801,17 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					}
 				}
 			}
-			runFitBody()
+			// Put the notice up immediately, then let the UI thread paint it before
+			// the work starts — the same deferred-apply trick the plot-redraw notice
+			// in main.go uses.
+			prepAdv := showAdvisory(a, "Calculating Theoretical Light Curves",
+				"Calculating the set of theoretical light curves — please wait...")
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				fyne.Do(func() {
+					runFitWork(prepAdv)
+				})
+			}()
 		}
 	})
 	fitBtn.Importance = widget.HighImportance
@@ -1069,14 +1138,15 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				}
 			}
 			mcFitResult := &fitResult{
-				curve:        lastFitResult.curve,
-				edgeTimes:    lastFitResult.edgeTimes,
-				nccCurve:     lastFitResult.nccCurve,
-				bestNCC:      lastFitResult.bestNCC,
-				bestShift:    lastFitResult.bestShift,
-				sampledTimes: mcTargetTimes,
-				sampledVals:  trimmedSampledVals,
-				bestScale:    lastFitResult.bestScale,
+				curve:          lastFitResult.curve,
+				edgeTimes:      lastFitResult.edgeTimes,
+				nccCurve:       lastFitResult.nccCurve,
+				bestNCC:        lastFitResult.bestNCC,
+				bestOverlapNCC: lastFitResult.bestOverlapNCC,
+				bestShift:      lastFitResult.bestShift,
+				sampledTimes:   mcTargetTimes,
+				sampledVals:    trimmedSampledVals,
+				bestScale:      lastFitResult.bestScale,
 			}
 			mcNoiseSigma := noiseSigma
 			mcTitle := lastDiffractionTitle

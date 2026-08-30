@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"GoPyOTE/lightcurve"
 
@@ -58,6 +59,70 @@ func safeShowWindow(win fyne.Window) {
 	win.Show()
 }
 
+// advisoryMarginPx is the gap in screen pixels between an advisory window and
+// the upper-left corner of the work area.
+const advisoryMarginPx = 20
+
+// advisory is a "please wait" notice shown while a long computation runs.
+//
+// It is a top-level window rather than a dialog because a dialog is painted
+// inside its parent window, where the plot windows left over from an earlier
+// fit hide it completely. The window is parked in the upper-left corner of the
+// work area and made topmost for the same reason.
+type advisory struct {
+	win    fyne.Window
+	closed atomic.Bool
+}
+
+// showAdvisory opens a notice and returns it. Must be called from the UI thread.
+// Call close when the work it covers is finished; doing so more than once is safe.
+func showAdvisory(app fyne.App, title, message string) *advisory {
+	adv := &advisory{win: app.NewWindow(title)}
+	label := widget.NewLabel(message)
+	label.Alignment = fyne.TextAlignCenter
+	adv.win.SetContent(container.NewPadded(label))
+	adv.win.Resize(fyne.NewSize(480, 110))
+	// The notice normally closes itself when the work ends; route a user close
+	// through the same path so it cannot be closed twice.
+	adv.win.SetCloseIntercept(adv.close)
+	adv.win.Show()
+
+	// The window is not on screen the instant Show returns, so poll for it by
+	// title instead of assuming it is already the foreground window.
+	go func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if adv.closed.Load() {
+				return
+			}
+			if hwnd := findWindowByTitle(title); hwnd != 0 {
+				_, _, winW, winH, gotRect := getWindowRect(hwnd)
+				workX, workY, _, _, gotArea := getWorkArea()
+				if gotRect && gotArea {
+					setWindowPosTopmost(hwnd, workX+advisoryMarginPx, workY+advisoryMarginPx, winW, winH)
+					return
+				}
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+	return adv
+}
+
+// close dismisses the notice. Must be called from the UI thread.
+func (a *advisory) close() {
+	if a == nil || !a.closed.CompareAndSwap(false, true) {
+		return
+	}
+	a.win.Hide()
+	// Close on the next event-loop iteration, for the reason safeShowWindow gives.
+	go func() {
+		fyne.Do(func() {
+			a.win.Close()
+		})
+	}()
+}
+
 // reverseNorm is a plot.Normalizer that maps [min,max] to [1,0] instead of [0,1],
 // producing a reversed (right-to-left) axis when used as plt.X.Scale.
 type reverseNorm struct{}
@@ -68,12 +133,22 @@ func (reverseNorm) Normalize(min, max, x float64) float64 {
 
 // nccResult holds a single time-offset and its NCC scores.
 type nccResult struct {
-	offset       float64
-	ncc          float64
-	weightedNCC  float64
+	offset      float64
+	ncc         float64
+	weightedNCC float64
+	// overlapNCC is the NCC computed over only those points the theoretical curve
+	// actually covers at this shift. The padded points outside the curve add noise
+	// variance that the flat 1.0 model cannot explain, so ncc falls as the trim
+	// range widens; overlapNCC does not, which makes it comparable across runs
+	// with different trim ranges. Zero when the overlap is too small to be useful.
+	overlapNCC   float64
 	overlapCount int
 	mse          float64
 }
+
+// minOverlapForNCC is the smallest overlap point count for which overlapNCC is
+// computed; below this the correlation is meaningless.
+const minOverlapForNCC = 3
 
 // computeNCC computes the normalized cross-correlation between two equal-length slices.
 // Returns 0 if either signal is constant (zero variance).
@@ -111,13 +186,17 @@ func computeNCC(target, sampled []float64) float64 {
 
 // fitResult holds the output of a single-offset NCC fit for reuse.
 type fitResult struct {
-	curve        []timeIntensityPoint
-	edgeTimes    []float64
-	nccCurve     []nccResult
-	bestNCC      float64
-	bestShift    float64
-	sampledTimes []float64
-	sampledVals  []float64
+	curve     []timeIntensityPoint
+	edgeTimes []float64
+	nccCurve  []nccResult
+	bestNCC   float64
+	// bestOverlapNCC is the overlap-only NCC at the best shift (see nccResult.overlapNCC).
+	// It is the score to quote when comparing fits: bestNCC is diluted by however many
+	// baseline-only points the trim range happens to include.
+	bestOverlapNCC float64
+	bestShift      float64
+	sampledTimes   []float64
+	sampledVals    []float64
 	// minSE is the minimum mean squared error found across all time shifts.
 	minSE float64
 	// The bestScale is the amplitude scale factor (0–1) found by the post-fit drop search.
@@ -306,10 +385,15 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 	numSteps := int((shiftEnd-shiftStart)/framePeriod) + 1
 	results := make([]nccResult, 0, numSteps)
 	sampled := make([]float64, len(targetTimes))
+	// Buffers holding just the overlap points, reused on every step.
+	ovTarget := make([]float64, 0, len(targetTimes))
+	ovSampled := make([]float64, 0, len(targetTimes))
 
 	for step := 0; step < numSteps; step++ {
 		shift := shiftStart + float64(step)*framePeriod
 		overlapCount := 0
+		ovTarget = ovTarget[:0]
+		ovSampled = ovSampled[:0]
 		for i, t := range targetTimes {
 			localT := t - shift
 			if localT < 0 || localT > pc.duration {
@@ -317,10 +401,17 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 			} else {
 				sampled[i] = interpolateAt(pc.curve, pc.curveTimes, localT)
 				overlapCount++
+				ovTarget = append(ovTarget, targetValues[i])
+				ovSampled = append(ovSampled, sampled[i])
 			}
 		}
 
 		ncc := computeNCC(targetValues, sampled)
+
+		overlapNCC := 0.0
+		if overlapCount >= minOverlapForNCC {
+			overlapNCC = computeNCC(ovTarget, ovSampled)
+		}
 
 		// Compute mean squared error at this shift
 		se := 0.0
@@ -330,7 +421,7 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 		}
 		se /= float64(len(targetValues))
 
-		results = append(results, nccResult{offset: shift, ncc: ncc, overlapCount: overlapCount, mse: se})
+		results = append(results, nccResult{offset: shift, ncc: ncc, overlapNCC: overlapNCC, overlapCount: overlapCount, mse: se})
 	}
 
 	if len(results) == 0 {
@@ -382,14 +473,15 @@ func nccSlidingFit(pc *precomputedCurve, targetTimes, targetValues []float64) (*
 	}
 
 	return &fitResult{
-		curve:        pc.curve,
-		edgeTimes:    pc.edgeTimes,
-		nccCurve:     results,
-		bestNCC:      results[bestIdx].weightedNCC,
-		bestShift:    bestShift,
-		minSE:        results[minSEIdx].mse,
-		sampledTimes: append([]float64{}, targetTimes...),
-		sampledVals:  sampledVals,
+		curve:          pc.curve,
+		edgeTimes:      pc.edgeTimes,
+		nccCurve:       results,
+		bestNCC:        results[bestIdx].weightedNCC,
+		bestOverlapNCC: results[bestIdx].overlapNCC,
+		bestShift:      bestShift,
+		minSE:          results[minSEIdx].mse,
+		sampledTimes:   append([]float64{}, targetTimes...),
+		sampledVals:    sampledVals,
 	}, nil
 }
 
@@ -506,7 +598,7 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 
 	// Build edge times message and log
 	if len(fr.edgeTimes) > 0 {
-		msg := fmt.Sprintf("Best fit: NCC=%.4f, time offset=%.4f sec\n", fr.bestNCC, fr.bestShift)
+		msg := fmt.Sprintf("Best fit: NCC=%.4f, overlap NCC=%.4f, time offset=%.4f sec\n", fr.bestNCC, fr.bestOverlapNCC, fr.bestShift)
 		msg += fmt.Sprintf("Path offset=%.3f km\n\n", params.PathPerpendicularOffsetKm)
 		msg += "Edge times:\n"
 		for i, et := range fr.edgeTimes {
@@ -521,7 +613,7 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 		fmt.Print(msg)
 
 		// Log fit results
-		logAction(fmt.Sprintf("Fit result: NCC=%.4f, time offset=%.4f sec, path offset=%.3f km", fr.bestNCC, fr.bestShift, params.PathPerpendicularOffsetKm))
+		logAction(fmt.Sprintf("Fit result: NCC=%.4f, overlap NCC=%.4f, time offset=%.4f sec, path offset=%.3f km", fr.bestNCC, fr.bestOverlapNCC, fr.bestShift, params.PathPerpendicularOffsetKm))
 		for i, et := range fr.edgeTimes {
 			logAction(fmt.Sprintf("  Edge %d: %s", i+1, formatSecondsAsTimestamp(et+fr.bestShift)))
 		}
@@ -744,7 +836,7 @@ func showEdgeTimesDialog(app fyne.App, params *OccultationParameters, fr *fitRes
 	if len(fr.edgeTimes) == 0 {
 		return
 	}
-	msg := fmt.Sprintf("Best fit: NCC=%.4f, time offset=%.4f sec\n", fr.bestNCC, fr.bestShift)
+	msg := fmt.Sprintf("Best fit: NCC=%.4f, overlap NCC=%.4f, time offset=%.4f sec\n", fr.bestNCC, fr.bestOverlapNCC, fr.bestShift)
 	msg += fmt.Sprintf("Path offset=%.3f km\n\n", params.PathPerpendicularOffsetKm)
 	msg += "Edge times:\n"
 
@@ -774,8 +866,8 @@ func showEdgeTimesDialog(app fyne.App, params *OccultationParameters, fr *fitRes
 		msg += fmt.Sprintf("\nEvent duration: %.4f sec\n", duration)
 	}
 
-	logAction(fmt.Sprintf("Edge times (post auto-slide): NCC=%.4f, time offset=%.4f sec, path offset=%.3f km",
-		fr.bestNCC, fr.bestShift, params.PathPerpendicularOffsetKm))
+	logAction(fmt.Sprintf("Edge times (post auto-slide): NCC=%.4f, overlap NCC=%.4f, time offset=%.4f sec, path offset=%.3f km",
+		fr.bestNCC, fr.bestOverlapNCC, fr.bestShift, params.PathPerpendicularOffsetKm))
 	for i, et := range fr.edgeTimes {
 		logAction(fmt.Sprintf("  Edge %d: %s", i+1, formatSecondsAsTimestamp(et+fr.bestShift)))
 	}
@@ -855,18 +947,19 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 		}
 	}
 
-	// Search across precomputed path offset candidates
+	// Search across precomputed path offset candidates, selecting on the same
+	// score runFitSearch uses so the MC spread reflects the real selection rule.
 	var bestFr *fitResult
 	var bestPC *precomputedCurve
-	bestNCC := -1.0
+	bestOverlapNCC := -1.0
 	bestPathOffset := candidates[0].pathOffset
 	for _, pc := range candidates {
 		mcFr, err := nccSlidingFit(pc, fr.sampledTimes, noisyValues)
 		if err != nil {
 			continue
 		}
-		if mcFr.bestNCC > bestNCC {
-			bestNCC = mcFr.bestNCC
+		if mcFr.bestOverlapNCC > bestOverlapNCC {
+			bestOverlapNCC = mcFr.bestOverlapNCC
 			bestFr = mcFr
 			bestPC = pc
 			bestPathOffset = pc.pathOffset
@@ -1320,9 +1413,16 @@ type fitSearchResult struct {
 	bestPathOffset float64
 }
 
+// fitPhaseEdges is reported through runFitSearch's onPhase callback when the
+// per-offset loop is done and the untracked finishing work begins: edge
+// detection across every candidate. It is the only phase reported so far.
+const fitPhaseEdges = "edges"
+
 // runFitSearch computes the NCC fit for a range of path perpendicular offsets.
 // It is safe to call from a goroutine. UI display is handled separately.
-func runFitSearch(params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int, abort *atomic.Bool, onProgress func(float64)) (*fitSearchResult, error) {
+// onProgress reports the fraction of offset steps completed; onPhase reports
+// the start of work that the progress fraction does not cover. Either may be nil.
+func runFitSearch(params *OccultationParameters, targetTimes, targetValues []float64, initialOffset, finalOffset float64, numSteps int, abort *atomic.Bool, onProgress func(float64), onPhase func(string)) (*fitSearchResult, error) {
 	logDiffractionImageInfo()
 	results := make([]searchResult, 0, numSteps)
 	var firstErr error
@@ -1358,7 +1458,14 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 			continue
 		}
 
-		results = append(results, searchResult{pathOffset: offset, peakNCC: fr.bestNCC, mse: fr.minSE, fr: fr, pc: pc})
+		results = append(results, searchResult{
+			pathOffset:     offset,
+			peakOverlapNCC: fr.bestOverlapNCC,
+			peakNCC:        fr.bestNCC,
+			mse:            fr.minSE,
+			fr:             fr,
+			pc:             pc,
+		})
 
 		if onProgress != nil {
 			onProgress(float64(step+1) / float64(numSteps))
@@ -1370,6 +1477,12 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 			return nil, fmt.Errorf("all path offset fits failed: %w", firstErr)
 		}
 		return nil, fmt.Errorf("all path offset fits failed")
+	}
+
+	// Everything below runs after the last progress report, so a caller showing a
+	// progress bar needs to be told the bar is full but the work is not done.
+	if onPhase != nil {
+		onPhase(fitPhaseEdges)
 	}
 
 	// Compute edge times for all candidates (deferred from the search loop).
@@ -1386,14 +1499,18 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 		r.fr.edgeTimes = r.pc.edgeTimes
 	}
 
-	// Find the best path offset by peak NCC
+	// Find the best path offset by peak overlap NCC. The padded NCC would work
+	// here too when the trim range is tight, but it shrinks the spread between
+	// candidates as the range widens, which makes the winner a coin toss.
 	bestIdx := 0
 	for i, r := range results {
-		if r.peakNCC > results[bestIdx].peakNCC {
+		if r.peakOverlapNCC > results[bestIdx].peakOverlapNCC {
 			bestIdx = i
 		}
 	}
 	bestPathOffset := results[bestIdx].pathOffset
+	logAction(fmt.Sprintf("Fit search: best path offset=%.3f km by overlap NCC=%.4f (padded NCC=%.4f) from %d candidates",
+		bestPathOffset, results[bestIdx].peakOverlapNCC, results[bestIdx].peakNCC, len(results)))
 
 	// When the search range is a single offset, re-run edge detection for the
 	// best candidate with plot data stored so showEdgePlots() can display them.
@@ -1490,10 +1607,16 @@ func showFitSearchDisplayPlots(app fyne.App, sd *fitSearchDisplayData) {
 // searchResult holds results for one path offset in a search.
 type searchResult struct {
 	pathOffset float64
-	peakNCC    float64
-	mse        float64
-	fr         *fitResult
-	pc         *precomputedCurve
+	// peakOverlapNCC is the score the best path offset is chosen by. Unlike
+	// peakNCC it is not diluted by baseline-only points outside the theoretical
+	// curve, so candidates are compared on the region where they differ rather
+	// than being compressed toward a common small number by a wide trim range.
+	peakOverlapNCC float64
+	// peakNCC is the padded score at the winning shift, kept for the diagnostic plot.
+	peakNCC float64
+	mse     float64
+	fr      *fitResult
+	pc      *precomputedCurve
 }
 
 // createPathOffsetPlotImage renders peak NCC versus path offset.
@@ -1526,12 +1649,12 @@ func createPathOffsetPlotImage(results []searchResult, occultationTitle string, 
 	plt.Y.Tick.Label.Font.Variant = "Sans"
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
-	plt.Title.Text = "Peak NCC vs Path Perpendicular Offset"
+	plt.Title.Text = "Peak Overlap NCC vs Path Perpendicular Offset"
 	if occultationTitle != "" {
 		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
 	}
 	plt.X.Label.Text = "Path offset (km)"
-	plt.Y.Label.Text = "Peak NCC"
+	plt.Y.Label.Text = "Peak overlap NCC"
 
 	xRange := math.Abs(results[len(results)-1].pathOffset - results[0].pathOffset)
 	if xRange > 0 {
@@ -1556,13 +1679,27 @@ func createPathOffsetPlotImage(results []searchResult, occultationTitle string, 
 	}
 
 	pts := make(plotter.XYs, len(results))
+	paddedPts := make(plotter.XYs, len(results))
 	bestIdx := 0
 	for i, r := range results {
 		pts[i].X = r.pathOffset
-		pts[i].Y = r.peakNCC
-		if r.peakNCC > results[bestIdx].peakNCC {
+		pts[i].Y = r.peakOverlapNCC
+		paddedPts[i].X = r.pathOffset
+		paddedPts[i].Y = r.peakNCC
+		if r.peakOverlapNCC > results[bestIdx].peakOverlapNCC {
 			bestIdx = i
 		}
+	}
+
+	// The padded score, shown for reference only — it is the curve that flattens
+	// out as the trim range widens.
+	paddedLine, err := plotter.NewLine(paddedPts)
+	if err == nil {
+		paddedLine.Color = color.RGBA{R: 150, G: 150, B: 150, A: 255}
+		paddedLine.Width = vg.Points(1)
+		paddedLine.Dashes = []vg.Length{vg.Points(4), vg.Points(3)}
+		plt.Add(paddedLine)
+		plt.Legend.Add("Padded NCC (reference)", paddedLine)
 	}
 
 	line, err := plotter.NewLine(pts)
@@ -1584,7 +1721,7 @@ func createPathOffsetPlotImage(results []searchResult, occultationTitle string, 
 	// Highlight the best with a red point
 	peakPt := make(plotter.XYs, 1)
 	peakPt[0].X = results[bestIdx].pathOffset
-	peakPt[0].Y = results[bestIdx].peakNCC
+	peakPt[0].Y = results[bestIdx].peakOverlapNCC
 	peakScatter, err := plotter.NewScatter(peakPt)
 	if err == nil {
 		peakScatter.Color = color.RGBA{R: 255, G: 0, B: 0, A: 255}
@@ -1593,7 +1730,7 @@ func createPathOffsetPlotImage(results []searchResult, occultationTitle string, 
 		plt.Add(peakScatter)
 	}
 
-	plt.Legend.Add(fmt.Sprintf("Best: %.3f km, NCC=%.4f", results[bestIdx].pathOffset, results[bestIdx].peakNCC), line)
+	plt.Legend.Add(fmt.Sprintf("Best: %.3f km, overlap NCC=%.4f", results[bestIdx].pathOffset, results[bestIdx].peakOverlapNCC), line)
 	plt.Legend.Top = true
 	plt.Legend.Left = false
 
