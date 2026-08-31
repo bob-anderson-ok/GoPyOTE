@@ -1,6 +1,7 @@
 # IDE settings
 .idea/
 .claude/
+.codegraph/
 
 # VSCode (optional - commit if you want shared debug configs)
 .vscode/
