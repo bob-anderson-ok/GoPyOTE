@@ -1231,6 +1231,47 @@ func runNIETrials(numTrials, nPoints, windowWidth int, noiseSigma float64, arPhi
 	return minMeans, nil
 }
 
+// minScaledSampledTheory returns the lowest value of the scaled theoretical curve
+// sampled at the fit's target times, evaluated at the current bestShift (the stored
+// sampledVals may be stale after a slide). This mirrors the red sample dots drawn by
+// overlayTheoryCurve. It returns 1.0 (baseline) when there are no samples.
+func minScaledSampledTheory(fr *fitResult) float64 {
+	scale := fr.bestScale
+	if scale == 0 {
+		scale = 1.0
+	}
+	minVal := 1.0
+	if len(fr.sampledTimes) == 0 || len(fr.curve) == 0 {
+		return minVal
+	}
+	curveTimes := make([]float64, len(fr.curve))
+	for i, pt := range fr.curve {
+		curveTimes[i] = pt.time
+	}
+	duration := fr.curve[len(fr.curve)-1].time
+	for _, t := range fr.sampledTimes {
+		localT := t - fr.bestShift
+		if localT < 0 || localT > duration {
+			continue
+		}
+		v := interpolateAt(fr.curve, curveTimes, localT)*scale + (1.0 - scale)
+		if v < minVal {
+			minVal = v
+		}
+	}
+	return minVal
+}
+
+// percentDropToMag converts a percent drop to a magnitude drop. It returns +Inf
+// for a drop of 100% or more.
+func percentDropToMag(percentDrop float64) float64 {
+	level := 1.0 - percentDrop/100
+	if level <= 0 {
+		return math.Inf(1)
+	}
+	return -2.5 * math.Log10(level)
+}
+
 // createNIEHistogramImage renders a histogram of NIE minimum window means with a
 // Gaussian fit overlay and a blue vertical line at eventDrop. Returns the image, mean, and sigma.
 // magDrop is the predicted magnitude drop from details.csv; when > 0, a vertical line is drawn
@@ -1335,7 +1376,11 @@ func createNIEHistogramImage(minMeans []float64, windowWidth int, eventDrop floa
 		vLine.Width = vg.Points(2)
 		vLine.Dashes = []vg.Length{vg.Points(6), vg.Points(3)}
 		plt.Add(vLine)
-		plt.Legend.Add(fmt.Sprintf("Percent drop %.1f", adjustedPercentDrop), vLine)
+		magLabel := "∞ mag"
+		if m := percentDropToMag(adjustedPercentDrop); !math.IsInf(m, 1) {
+			magLabel = fmt.Sprintf("%.2f mag", m)
+		}
+		plt.Legend.Add(fmt.Sprintf("Percent drop %.1f (%s)", adjustedPercentDrop, magLabel), vLine)
 	}
 
 	// Gray vertical line at x=0.0 (zero level) — half the height of the event line

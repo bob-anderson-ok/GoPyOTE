@@ -1320,7 +1320,7 @@ type sodisPreFill struct {
 	noiseSigma          float64     // baseline noise sigma — used for Signal/Noise (1/sigma)
 	csvExposureSecs     float64     // CSV-measured median exposure time — used for Exp_Time
 	observerT0          time.Time   // observer-corrected event time (zero = not available; use geocentric)
-	detailsEventTimeUT  string      // "Event Time (UT)" from the details file, e.g. "26 Feb 2026 20:27:55"; overrides calculated time when non-empty
+	detailsEventTimeUT  string      // "Event Time (UT)" from the details file, e.g. "26 Feb 2026 20:27:55"; sole source of PREDICTTIME
 	vt                  *VizieRTab  // VizieR tab — used to propagate the observer name when a site file loads
 	occultationOverride string      // if non-empty, pre-select this value for the Occultation dropdown instead of "POSITIVE"
 	ac                  *appContext // app context — used to register the SODIS comment update callback
@@ -1830,20 +1830,18 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 							monthNames := [13]string{"", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"}
 							// DATE: "D MonthName YYYY"
 							setEntry("DATE", fmt.Sprintf("%d %s %d", day, monthNames[month], year))
-							// PREDICTTIME: only filled from details.csv (below); calculated values are unreliable.
+							// PREDICTTIME: filled from the details file (below).
 						}
 					}
 				}
 			}
 		}
 
-		// PREDICTTIME: prefer the observer-corrected event UTC computed by
-		// processOccelmntXML when an occelmnt XML has been loaded in this
-		// session; otherwise fall back to the details.csv "Event Time (UT)".
-		predictTime := lastComputedEventUTC
-		if predictTime == "" {
-			predictTime = fill.detailsEventTimeUT
-		}
+		// PREDICTTIME: taken only from the details file "Event Time (UT)".
+		// The observer-corrected event UTC computed by processOccelmntXML
+		// (lastComputedEventUTC) is not used for now because the calculation has a
+		// known problem; it is still computed so it can be reinstated once fixed.
+		predictTime := fill.detailsEventTimeUT
 		if predictTime != "" {
 			monthAbbrevs := [13]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 			if t, perr := time.Parse("02 Jan 2006 15:04:05", predictTime); perr == nil {
@@ -2180,6 +2178,14 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 	dlg = dialog.NewCustomWithoutButtons("Fill SODIS Report", content, w)
 	dlg.Resize(fyne.NewSize(800, 650))
 	dlg.Show()
+
+	// PREDICTTIME comes only from the details file; without it the user must type it in.
+	if fill != nil && fill.detailsEventTimeUT == "" {
+		dialog.ShowInformation("Event Time Required",
+			"No details file with an \"Event Time (UT)\" entry was found in the observation folder.\n\n"+
+				"In the absence of a details file, manual entry of Event Time (PREDICTTIME)\n"+
+				"is required for the SODIS Report.", w)
+	}
 }
 
 // createVizieRPreviewPlotImage creates a plot image showing the light curve

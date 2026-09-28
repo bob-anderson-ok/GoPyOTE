@@ -1687,6 +1687,15 @@ func buildFitTab(ac *appContext) *container.TabItem {
 						windowWidth++
 					}
 				}
+				// An event shorter than one frame period can fall entirely between
+				// two sample timestamps; it still affects at least one sample.
+				// The exposure-smoothed dip never reaches the full-scale depth, so
+				// use the lowest sampled value of the fitted solution as the drop level.
+				if windowWidth < 1 {
+					windowWidth = 1
+					eventDrop = minScaledSampledTheory(lastFitResult)
+					logAction(fmt.Sprintf("NIE: no samples between edges (%.6f to %.6f, duration %.6f s) — sub-frame event, using windowWidth=1, eventDrop=min sampled theory=%.4f", edge1Abs, edge2Abs, edge2Abs-edge1Abs, eventDrop))
+				}
 			} else {
 				// Fewer than 2 edges: count sampled theoretical points at or below
 				// the half-drop value (midpoint between baseline and full drop),
