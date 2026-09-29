@@ -276,6 +276,49 @@ func ShowUpdateDialogTwoPane(parent fyne.Window) {
 	loadReleases()
 }
 
+// checkForUpdateAtStartup looks up the latest GitHub release in the background and, if
+// it is newer than the running version and has an installable asset, offers to open the
+// update window. Any failure (typically no internet connection) is silent.
+func checkForUpdateAtStartup(parent fyne.Window) {
+	go func() {
+		// Let the main window finish opening before a dialog can appear over it.
+		time.Sleep(2 * time.Second)
+
+		rel, err := getLatestRelease(Owner, Repo)
+		if err != nil {
+			fmt.Printf("Startup update check skipped: %v\n", err)
+			return
+		}
+		if newer, err := isNewerInstallableRelease(rel, CurrentVersion); err != nil || !newer {
+			return
+		}
+
+		fyne.Do(func() {
+			dialog.ShowConfirm("Update Available",
+				fmt.Sprintf("GoPyOTE %s is available.\nYou are running version %s.\n\n"+
+					"Open the update window to see what's new and install it?", rel.TagName, CurrentVersion),
+				func(ok bool) {
+					if ok {
+						ShowUpdateDialogTwoPane(parent)
+					}
+				}, parent)
+		})
+	}()
+}
+
+// isNewerInstallableRelease reports whether rel is a published, non-pre-release version
+// newer than current that includes the executable for this platform.
+func isNewerInstallableRelease(rel *Release, current string) (bool, error) {
+	if rel == nil || rel.Draft || rel.Prerelease || !hasAsset(*rel, expectedAssetName()) {
+		return false, nil
+	}
+	cmp, err := compareSemver(normalizeVersion(rel.TagName), normalizeVersion(current))
+	if err != nil {
+		return false, err
+	}
+	return cmp > 0, nil
+}
+
 // ---------------- GitHub API ----------------
 
 func getAllReleases(owner, repo, token string) ([]Release, error) {
@@ -327,7 +370,17 @@ func getAllReleases(owner, repo, token string) ([]Release, error) {
 
 func getReleaseByTag(owner, repo, tag, token string) (*Release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/tags/%s", owner, repo, tag)
+	return fetchRelease(url, token, 60*time.Second)
+}
 
+// getLatestRelease returns the release GitHub marks as Latest (never a draft or
+// pre-release). The short timeout keeps a slow or absent connection from lingering.
+func getLatestRelease(owner, repo string) (*Release, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
+	return fetchRelease(url, "", 10*time.Second)
+}
+
+func fetchRelease(url, token string, timeout time.Duration) (*Release, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -338,7 +391,7 @@ func getReleaseByTag(owner, repo, tag, token string) (*Release, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

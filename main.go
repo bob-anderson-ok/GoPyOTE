@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.3.7"
+const Version = "1.3.8"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -2938,6 +2938,8 @@ func main() {
 	})
 
 	w.Show()
+
+	checkForUpdateAtStartup(w)
 
 	if !firstRun {
 		go func() {
