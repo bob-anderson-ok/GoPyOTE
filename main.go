@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.3.8"
+const Version = "1.3.9"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -122,7 +122,12 @@ var sodisNegativeReportSaved bool
 // These are populated from preferences on startup, overridden by
 // camera-timing.txt when an observation folder is loaded,
 // or set when the user clicks OK in the dialog.
+// The star row is the exception: it starts from the "Default star row at
+// occultation" setting (defaultStarRow) rather than the last value used, and
+// sessionStarRowFromObservation records when it has been set for the current
+// observation (from its camera-timing.txt or by OK in the dialog).
 var sessionStarRow string
+var sessionStarRowFromObservation bool
 var sessionAcqDelay string
 var sessionRowDelta string
 var sessionCameraName string
@@ -192,7 +197,7 @@ func main() {
 	// Load camera timing preferences into session variables
 	sessionCameraName = prefs.StringWithFallback("cameraTiming.cameraName", "")
 	sessionAcqDelay = prefs.StringWithFallback("cameraTiming.acqDelay", "")
-	sessionStarRow = prefs.StringWithFallback("cameraTiming.starRow", "")
+	sessionStarRow = prefs.StringWithFallback("defaultStarRow", "")
 	sessionRowDelta = prefs.StringWithFallback("cameraTiming.rowDelta", "")
 
 	// Apply persisted dark mode preference
@@ -230,8 +235,9 @@ func main() {
 		prefs.SetFloat("splitOffset", 0.4584450402144772)
 	}
 
-	// Purge star row from preferences — it is session-only now.
+	// Purge star row from preferences — it comes from the defaultStarRow setting now.
 	prefs.RemoveValue("imageAcqStarRow")
+	prefs.RemoveValue("cameraTiming.starRow")
 	// occelmnt XML and observer GPS location are session-only; purge any
 	// values left behind by older versions.
 	prefs.RemoveValue("lastLoadedOccelmntXml")
@@ -418,8 +424,31 @@ func main() {
 		container.NewBorder(nil, nil, nil, obsHomeDirBrowseBtn, obsHomeDirEntry),
 	)
 
+	// Default star row: pre-fills the star row in the Camera Timing Adjustments dialog
+	// unless the current observation already has its own (camera-timing.txt or OK).
+	defaultStarRowEntry := widget.NewEntry()
+	defaultStarRowEntry.SetPlaceHolder("row number")
+	defaultStarRowEntry.SetText(prefs.StringWithFallback("defaultStarRow", ""))
+	defaultStarRowEntry.Validator = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return nil
+		}
+		_, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		return err
+	}
+	defaultStarRowEntry.OnChanged = func(s string) {
+		prefs.SetString("defaultStarRow", strings.TrimSpace(s))
+		if !sessionStarRowFromObservation {
+			sessionStarRow = strings.TrimSpace(s)
+		}
+	}
+	defaultStarRowBox := container.NewVBox(
+		widget.NewLabel("Default star row at occultation:"),
+		container.New(layout.NewGridWrapLayout(fyne.NewSize(150, defaultStarRowEntry.MinSize().Height)), defaultStarRowEntry),
+	)
+
 	tab2Bg := ac.makeTabBg(color.RGBA{R: 200, G: 200, B: 230, A: 255}, color.RGBA{R: 50, G: 50, B: 80, A: 255})
-	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, showIOTAPlotsCheck, showDiagnosticsCheck, useCorrelatedNoiseCheck, widget.NewSeparator(), obsHomeDirBox)))
+	tab2Content := container.NewStack(tab2Bg, container.NewPadded(container.NewVBox(prefixCheckboxes, widget.NewSeparator(), darkModeCheck, grayBgCheck, timestampTicksCheck, showIOTAPlotsCheck, showDiagnosticsCheck, useCorrelatedNoiseCheck, widget.NewSeparator(), obsHomeDirBox, widget.NewSeparator(), defaultStarRowBox)))
 	tab2 := container.NewTabItem("Settings", tab2Content)
 
 	// Create the plot area with an interactive light curve (before Tab 3 so it can be referenced)
@@ -1698,6 +1727,10 @@ func main() {
 					ac.resetProcessOccelmntBtn()
 				}
 			}
+			// A new observation starts from the default star row, not the last one used;
+			// its own camera-timing.txt (below) may override it.
+			sessionStarRow = prefs.StringWithFallback("defaultStarRow", "")
+			sessionStarRowFromObservation = false
 			// Check for camera-timing.txt in the observation directory
 			cameraTimingPath := filepath.Join(filepath.Dir(filePath), "camera-timing.txt")
 			if ctData, err := os.ReadFile(cameraTimingPath); err == nil {
@@ -1711,6 +1744,7 @@ func main() {
 							sessionAcqDelay = v
 						case "starRow":
 							sessionStarRow = v
+							sessionStarRowFromObservation = true
 						case "rowDelta":
 							sessionRowDelta = v
 						}
@@ -2753,8 +2787,9 @@ func main() {
 			}
 		}()
 	}
-	// If camera timing preferences exist, treat as already confirmed (no blink needed)
-	acqTimingConfirmed := sessionAcqDelay != "" || sessionStarRow != "" || sessionRowDelta != ""
+	// If camera timing preferences exist, treat as already confirmed (no blink needed).
+	// The star row is not considered: it now always starts from the Settings default.
+	acqTimingConfirmed := sessionAcqDelay != "" || sessionRowDelta != ""
 	ac.startAcqTimingBlink = func() {
 		if !acqTimingConfirmed {
 			startAcqTimingBlink()
@@ -2851,8 +2886,16 @@ func main() {
 			{Text: "star row position at occultation", Widget: starRowEntry},
 			{Text: "row-to-row time delta (msecs)", Widget: rowDeltaEntry},
 		}
+		// Values on opening, restored on Cancel (the entries apply as the user types)
+		origCameraName, origAcqDelay, origStarRow, origRowDelta := sessionCameraName, sessionAcqDelay, sessionStarRow, sessionRowDelta
 		dlg := dialog.NewForm("Camera Timing Adjustments", "OK", "Cancel", formItems, func(ok bool) {
 			if !ok {
+				// Resetting the entries fires updateCameraDelay, which restores the
+				// session values and the SODIS comment.
+				cameraNameEntry.SetText(origCameraName)
+				acqDelayEntry.SetText(origAcqDelay)
+				starRowEntry.SetText(origStarRow)
+				rowDeltaEntry.SetText(origRowDelta)
 				// Canceled: start blinking as a reminder if on the Fit tab
 				if onFitTab {
 					startAcqTimingBlink()
@@ -2863,10 +2906,11 @@ func main() {
 			sessionAcqDelay = acqDelayEntry.Text
 			sessionRowDelta = rowDeltaEntry.Text
 			sessionStarRow = starRowEntry.Text
-			// Persist camera timing values as preferences
+			sessionStarRowFromObservation = true
+			// Persist camera timing values as preferences. The star row is not persisted:
+			// each new observation starts from the Settings default instead.
 			ac.prefs.SetString("cameraTiming.cameraName", sessionCameraName)
 			ac.prefs.SetString("cameraTiming.acqDelay", sessionAcqDelay)
-			ac.prefs.SetString("cameraTiming.starRow", sessionStarRow)
 			ac.prefs.SetString("cameraTiming.rowDelta", sessionRowDelta)
 			// Write camera-timing.txt to the observation directory
 			if resultsFolder != "" {
@@ -2892,7 +2936,7 @@ func main() {
 		ShowUpdateDialogTwoPane(w)
 	})
 
-	buttons := container.NewHBox(btnCheckForUpdates, btnProcessOccelemnt, btnImageAcqTiming, btnOccultParams, btnShowDetails, btnShowIOTAPlots)
+	buttons := container.NewHBox(btnCheckForUpdates, btnImageAcqTiming, btnProcessOccelemnt, btnOccultParams, btnShowDetails, btnShowIOTAPlots)
 
 	// Split tabs and plot area
 	split := container.NewHSplit(tabs, plotArea)
