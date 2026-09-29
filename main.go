@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.3.9"
+const Version = "1.4.0"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -2833,47 +2833,12 @@ func main() {
 		rowDeltaEntry.SetPlaceHolder("msecs")
 		rowDeltaEntry.SetText(sessionRowDelta)
 
-		// updateCameraDelay updates session variables and recomputes the camera
-		// delay comment, pushing it to the open SODIS dialog (if any).
+		// updateCameraDelay applies the entries to the session variables as the user types.
 		updateCameraDelay := func() {
 			sessionCameraName = cameraNameEntry.Text
 			sessionAcqDelay = acqDelayEntry.Text
 			sessionRowDelta = rowDeltaEntry.Text
 			sessionStarRow = starRowEntry.Text
-
-			acqDelayMs, err1 := strconv.ParseFloat(strings.TrimSpace(acqDelayEntry.Text), 64)
-			starRow, err2 := strconv.ParseFloat(strings.TrimSpace(starRowEntry.Text), 64)
-			rowDeltaMs, err3 := strconv.ParseFloat(strings.TrimSpace(rowDeltaEntry.Text), 64)
-
-			acqCorrSecs := acqDelayMs / 1000.0
-			hasRS := err2 == nil && err3 == nil && strings.TrimSpace(starRowEntry.Text) != "" && strings.TrimSpace(rowDeltaEntry.Text) != ""
-			var rsCorrSecs float64
-			if hasRS {
-				rsCorrSecs = starRow * rowDeltaMs / 1000.0
-			}
-
-			var comment string
-			if err1 == nil && hasRS {
-				comment = fmt.Sprintf(
-					"acqCorr = %.4f sec (Acquisition Delay)\nrsCorr = %.4f sec (starRow=%.1f * rowDelta=%.6f ms)",
-					acqCorrSecs, rsCorrSecs, starRow, rowDeltaMs)
-			} else if err1 == nil {
-				comment = fmt.Sprintf("acqCorr = %.4f sec (Acquisition Delay)", acqCorrSecs)
-			}
-			if frameTime := csvFrameTimeSecs(); isTangraCSV && frameTime > 0 {
-				tangraCorrSecs := frameTime / 2.0
-				if comment != "" {
-					comment += "\n"
-				}
-				comment += fmt.Sprintf("tangraCorr = %.4f sec (frameTime/2 = %.4f/2)", tangraCorrSecs, frameTime)
-			}
-			cameraName := strings.TrimSpace(cameraNameEntry.Text)
-			if cameraName != "" {
-				comment += fmt.Sprintf(" [camera: %s]", cameraName)
-			}
-			if ac.updateSodisComment != nil {
-				ac.updateSodisComment(comment)
-			}
 		}
 		acqDelayEntry.OnChanged = func(_ string) { updateCameraDelay() }
 		starRowEntry.OnChanged = func(_ string) { updateCameraDelay() }
@@ -2891,7 +2856,7 @@ func main() {
 		dlg := dialog.NewForm("Camera Timing Adjustments", "OK", "Cancel", formItems, func(ok bool) {
 			if !ok {
 				// Resetting the entries fires updateCameraDelay, which restores the
-				// session values and the SODIS comment.
+				// session values.
 				cameraNameEntry.SetText(origCameraName)
 				acqDelayEntry.SetText(origAcqDelay)
 				starRowEntry.SetText(origStarRow)

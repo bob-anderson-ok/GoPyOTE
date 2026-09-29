@@ -1698,12 +1698,6 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 			if item.name == "Comments" {
 				e = widget.NewMultiLineEntry()
 				e.SetMinRowsVisible(3)
-				if fill != nil && fill.ac != nil {
-					commentsEntry := e
-					fill.ac.updateSodisComment = func(text string) {
-						commentsEntry.SetText(text)
-					}
-				}
 			} else {
 				e = widget.NewEntry()
 			}
@@ -1753,10 +1747,7 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 				setEntry("Acc_D", fmt.Sprintf("%.3f", 3*fill.mcResult.edgeStds[dIdx]))
 				setEntry("Acc_R", fmt.Sprintf("%.3f", 3*fill.mcResult.edgeStds[rIdx]))
 			}
-
-			if sodisCD != nil {
-				setEntry("Comments", sodisCD.report)
-			}
+			// The camera timing report goes in the log's Final Report, not Comments.
 		}
 
 		// StartObs and EndObs from the loaded light curve (only if timestamps are present).
@@ -2167,9 +2158,6 @@ func showSodisReportDialog(w fyne.Window, fill *sodisPreFill, onSave func()) {
 	})
 
 	cancelBtn := widget.NewButton("Cancel", func() {
-		if fill != nil && fill.ac != nil {
-			fill.ac.updateSodisComment = nil
-		}
 		dlg.Hide()
 	})
 

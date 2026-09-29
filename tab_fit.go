@@ -1254,6 +1254,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 							effectiveDrop = effectiveDrop * float64(mcFitParams.PercentMagDrop) / 100
 						}
 						logAction(fmt.Sprintf("  Measured percent drop: %.2f%%", effectiveDrop))
+						if m := percentDropToMag(effectiveDrop); math.IsInf(m, 1) {
+							logAction("  Measured magDrop: infinite (100% drop)")
+						} else {
+							logAction(fmt.Sprintf("  Measured magDrop: %.3f mag", m))
+						}
 					}
 					if lastMagDropDetail != "" {
 						logAction("  " + lastMagDropDetail)
@@ -1282,6 +1287,15 @@ func buildFitTab(ac *appContext) *container.TabItem {
 							chordStdKm := 3 * durationStd * shadowSpeed
 							logAction(fmt.Sprintf("  Chord length: %.3f +/- %.3f km (3 sigma)  [shadow speed: %.3f km/s]", chordKm, chordStdKm, shadowSpeed))
 						}
+					}
+					// Camera timing report (formerly put in the SODIS Comments field)
+					if mcCD != nil && mcCD.report != "" {
+						logAction("  Camera timing corrections:")
+						for _, line := range strings.Split(mcCD.report, "\n") {
+							logAction("    " + line)
+						}
+					} else {
+						logAction("  Camera timing corrections: none")
 					}
 					logAction("--- End Report ---")
 

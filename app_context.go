@@ -85,10 +85,6 @@ type appContext struct {
 	// suppressBusyDialog, when true, skips the "Redrawing plot" dialog for
 	// the next rebuildPlot call. Automatically cleared after use.
 	suppressBusyDialog bool
-
-	// updateSodisComment is set by the SODIS dialog to allow external callers
-	// (e.g., Image Acquisition Timing) to update the Comments field.
-	updateSodisComment func(string)
 }
 
 // noDataLoaded checks whether light curve data is loaded. If not, it shows
