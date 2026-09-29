@@ -265,6 +265,7 @@ func buildSmoothTab(ac *appContext) *container.TabItem {
 		// Reset interpolated/negative delta indices
 		resetInterpolatedIndices()
 		resetNegativeDeltaIndices()
+		blockIntegrationFactor = parseBlockIntegrationFactor(data.SkippedLines)
 
 		// Run timing analysis (same as initial load)
 		timestampsEmpty := true

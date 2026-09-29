@@ -123,6 +123,29 @@ func buildBlockIntTab(ac *appContext) *container.TabItem {
 		loadedLightCurveData.TimeValues = newTimeValues
 		loadedLightCurveData.Columns = newColumns
 
+		// Each point now spans blockSize frames: update the effective exposure the same
+		// way a CSV load does (median time step), so fitting in memory matches fitting
+		// the saved block-integrated file.
+		blockIntegrationFactor *= blockSize
+		hasTimestamps := false
+		for _, t := range newTimeValues {
+			if t != 0 {
+				hasTimestamps = true
+				break
+			}
+		}
+		if hasTimestamps && numBlocks > 1 {
+			lastCsvExposureSecs = analyzeTimingErrors(newTimeValues).MedianTimeStep
+		} else {
+			lastCsvExposureSecs *= float64(blockSize)
+		}
+		logAction(fmt.Sprintf("Block Integration: %d frames per point, effective exposure = %.6f seconds",
+			blockIntegrationFactor, lastCsvExposureSecs))
+
+		// Interpolated/negative-delta markers refer to pre-integration indices
+		resetInterpolatedIndices()
+		resetNegativeDeltaIndices()
+
 		// Clear smooth curve since indices are now invalid
 		ac.smoothedSeries = nil
 
@@ -158,8 +181,24 @@ func buildBlockIntTab(ac *appContext) *container.TabItem {
 		blockIntStatusLabel.SetText(statusMsg)
 		logAction(statusMsg)
 
+		// Write the block-integrated light curve to a CSV alongside the source
+		savedMsg := ""
+		outputPath, err := writeBlockIntegratedCSV(loadedLightCurveData, blockIntegrationFactor, firstBlockStart)
+		if err != nil {
+			logAction(fmt.Sprintf("Block Integration: failed to write CSV: %v", err))
+			savedMsg = fmt.Sprintf("\n\nWARNING: failed to write block-integrated CSV:\n%v", err)
+		} else {
+			logAction(fmt.Sprintf("Block Integration: wrote %s", outputPath))
+			savedMsg = fmt.Sprintf("\n\nSaved to:\n%s", outputPath)
+		}
+
 		dialog.ShowInformation("Block Integration Complete",
-			fmt.Sprintf("Original: %d points\nBlock size: %d\nResult: %d averaged blocks\n\nClick 'Undo' to restore original data.", numPoints, blockSize, numBlocks), w)
+			fmt.Sprintf("Original: %d points\nBlock size: %d\nResult: %d averaged blocks%s\n\nClick 'Undo' to restore original data.", numPoints, blockSize, numBlocks, savedMsg), w)
+
+		// Once the block-integrated file is saved, the next step is fitting
+		if err == nil && ac.selectFitTab != nil {
+			ac.selectFitTab()
+		}
 	})
 
 	// Undo button - reloads the original CSV file to restore original data
@@ -200,6 +239,7 @@ func buildBlockIntTab(ac *appContext) *container.TabItem {
 		// Reset interpolated/negative delta indices
 		resetInterpolatedIndices()
 		resetNegativeDeltaIndices()
+		blockIntegrationFactor = parseBlockIntegrationFactor(data.SkippedLines)
 
 		// Run timing analysis (same as initial load)
 		timestampsEmpty := true

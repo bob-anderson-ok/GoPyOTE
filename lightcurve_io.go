@@ -23,6 +23,40 @@ var baselineScaledToUnity bool
 // Flag to track if trim has been performed (for the fit tab warning).
 var trimPerformed bool
 
+// blockIntegrationFactor is the cumulative number of camera frames averaged into each
+// point of the loaded light curve (1 = not block integrated). lastCsvExposureSecs is the
+// effective (block) exposure; the single-frame time is lastCsvExposureSecs / factor.
+var blockIntegrationFactor = 1
+
+// blockIntegratedMarker starts the comment line writeBlockIntegratedCSV adds to the preamble.
+const blockIntegratedMarker = "# Block integrated by GoPyOTE"
+
+// parseBlockIntegrationFactor returns the block size recorded by the last
+// block-integration comment in the preamble lines, or 1 if there is none. The last
+// comment is used because each one records the cumulative block size.
+func parseBlockIntegrationFactor(lines []string) int {
+	factor := 1
+	for _, line := range lines {
+		if !strings.HasPrefix(line, blockIntegratedMarker) {
+			continue
+		}
+		_, after, ok := strings.Cut(line, "block size = ")
+		if !ok {
+			continue
+		}
+		numStr, _, _ := strings.Cut(after, ",")
+		if n, err := strconv.Atoi(strings.TrimSpace(numStr)); err == nil && n >= 1 {
+			factor = n
+		}
+	}
+	return factor
+}
+
+// csvFrameTimeSecs returns the single camera frame time, undoing any block integration.
+func csvFrameTimeSecs() float64 {
+	return lastCsvExposureSecs / float64(max(1, blockIntegrationFactor))
+}
+
 // parseLightCurveCSV reads a CSV file, skipping comments and blank lines,
 // and extracts light curve data
 func parseLightCurveCSV(filePath string) (*LightCurveData, error) {
@@ -391,6 +425,102 @@ func writeSelectedLightCurves(data *LightCurveData, selectedColumns map[int]bool
 
 	if err := writer.Flush(); err != nil {
 		return "", fmt.Errorf("failed to write output file: %w", err)
+	}
+
+	return outputPath, nil
+}
+
+// writeBlockIntegratedCSV writes the (already block-integrated) light curve data to a CSV
+// file in the observation folder, named after the source file with "-block-integrated"
+// inserted before the extension. All lines preceding the column header line are copied
+// verbatim from the source file, followed by a comment recording the block integration,
+// the original column header line, and one row per block. blockSize is the cumulative
+// block size (frames per point); parseBlockIntegrationFactor reads it back on load.
+func writeBlockIntegratedCSV(data *LightCurveData, blockSize, firstBlockStart int) (string, error) {
+	if data == nil {
+		return "", fmt.Errorf("no light curve data loaded")
+	}
+
+	// Re-read the source preamble verbatim (SkippedLines has trailing commas trimmed)
+	srcFile, err := os.Open(data.SourceFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open source CSV: %w", err)
+	}
+	var preamble []string
+	scanner := bufio.NewScanner(srcFile)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "FrameNum,") || strings.HasPrefix(line, "FrameNo") {
+			break
+		}
+		preamble = append(preamble, line)
+	}
+	scanErr := scanner.Err()
+	if cerr := srcFile.Close(); cerr != nil {
+		fmt.Printf("Warning: failed to close source CSV: %v\n", cerr)
+	}
+	if scanErr != nil {
+		return "", fmt.Errorf("error reading source CSV: %w", scanErr)
+	}
+
+	dir := filepath.Dir(data.SourceFilePath)
+	base := filepath.Base(data.SourceFilePath)
+	ext := filepath.Ext(base)
+	nameWithoutExt := strings.TrimSuffix(base, ext)
+	outputPath := filepath.Join(dir, nameWithoutExt+"-block-integrated"+ext)
+
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer func() {
+		if cerr := outFile.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close output CSV: %v\n", cerr)
+		}
+	}()
+
+	writer := bufio.NewWriter(outFile)
+
+	for _, line := range preamble {
+		if _, err := fmt.Fprintln(writer, line); err != nil {
+			return "", fmt.Errorf("failed to write comment line: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintf(writer, "%s %s: block size = %d, first block starts at source row %d\n",
+		blockIntegratedMarker, Version, blockSize, firstBlockStart); err != nil {
+		return "", fmt.Errorf("failed to write comment line: %w", err)
+	}
+	if _, err := fmt.Fprintln(writer, data.HeaderLine); err != nil {
+		return "", fmt.Errorf("failed to write header line: %w", err)
+	}
+
+	// Leave the timestamp column empty if the source had no timestamps
+	hasTimestamps := false
+	for _, t := range data.TimeValues {
+		if t != 0 {
+			hasTimestamps = true
+			break
+		}
+	}
+
+	for rowIdx := range data.FrameNumbers {
+		row := make([]string, 0, len(data.Columns)+2)
+		row = append(row, strconv.FormatFloat(data.FrameNumbers[rowIdx], 'f', -1, 64))
+		if hasTimestamps {
+			row = append(row, "["+formatSecondsAsTimestamp(data.TimeValues[rowIdx])+"]")
+		} else {
+			row = append(row, "")
+		}
+		for _, col := range data.Columns {
+			row = append(row, fmt.Sprintf("%g", col.Values[rowIdx]))
+		}
+		if _, err := fmt.Fprintln(writer, strings.Join(row, ",")); err != nil {
+			return "", fmt.Errorf("failed to write data row: %w", err)
+		}
+	}
+
+	if err := writer.Flush(); err != nil {
+		return "", fmt.Errorf("failed to flush output: %w", err)
 	}
 
 	return outputPath, nil

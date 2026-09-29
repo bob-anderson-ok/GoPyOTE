@@ -69,7 +69,7 @@ var monteCarloExplanation embed.FS
 var correlatedNoiseExplanation embed.FS
 
 // Version information
-const Version = "1.3.6"
+const Version = "1.3.7"
 
 // Track the last loaded parameters file path for use by IOTAdiffraction ()
 var lastLoadedParamsPath string
@@ -1738,6 +1738,10 @@ func main() {
 			// Analyze timing errors if timestamps are available
 			resetInterpolatedIndices()  // Clear any previous interpolated indices
 			resetNegativeDeltaIndices() // Clear any previous negative delta indices
+			blockIntegrationFactor = parseBlockIntegrationFactor(data.SkippedLines)
+			if blockIntegrationFactor > 1 {
+				logAction(fmt.Sprintf("CSV is block integrated: %d frames per point", blockIntegrationFactor))
+			}
 			if !timestampsEmpty && len(data.TimeValues) > 1 {
 				timingResult := analyzeTimingErrors(data.TimeValues)
 				if timingResult != nil && (len(timingResult.CadenceErrors) > 0 || len(timingResult.DroppedFrameErrors) > 0 || len(timingResult.NegativeDeltaErrors) > 0) {
@@ -2821,12 +2825,12 @@ func main() {
 			} else if err1 == nil {
 				comment = fmt.Sprintf("acqCorr = %.4f sec (Acquisition Delay)", acqCorrSecs)
 			}
-			if isTangraCSV && lastCsvExposureSecs > 0 {
-				tangraCorrSecs := lastCsvExposureSecs / 2.0
+			if frameTime := csvFrameTimeSecs(); isTangraCSV && frameTime > 0 {
+				tangraCorrSecs := frameTime / 2.0
 				if comment != "" {
 					comment += "\n"
 				}
-				comment += fmt.Sprintf("tangraCorr = %.4f sec (frameTime/2 = %.4f/2)", tangraCorrSecs, lastCsvExposureSecs)
+				comment += fmt.Sprintf("tangraCorr = %.4f sec (frameTime/2 = %.4f/2)", tangraCorrSecs, frameTime)
 			}
 			cameraName := strings.TrimSpace(cameraNameEntry.Text)
 			if cameraName != "" {

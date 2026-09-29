@@ -773,6 +773,8 @@ func buildFitTab(ac *appContext) *container.TabItem {
 						if fitErr != nil {
 							dialog.ShowError(fitErr, w)
 						} else {
+							mse := refineShiftAndScale(fr, pc, targetTimes, targetValues)
+							logAction(fmt.Sprintf("Fit: shift+scale refinement: shift=%.4f sec, scale=%.4f, MSE=%.6f", fr.bestShift, fr.bestScale, mse))
 							lastFitResult = fr
 							paramsCopy := *params
 							lastFitParams = &paramsCopy
@@ -933,27 +935,25 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		applySlide()
 	})
 
-	// computeMSEatShift computes MSE at a given absolute bestShift without modifying state.
-	computeMSEatShift := func(shift float64) float64 {
+	// computeMSEatShift returns the MSE at a given absolute bestShift, with the drop
+	// scale re-fitted (findBestScale) at that shift, and that scale. It does not modify
+	// state. The depth that fits best depends on where the samples fall in the event,
+	// so a fixed scale would bias the slide (badly so for block-integrated data).
+	computeMSEatShift := func(shift float64) (float64, float64) {
 		if lastFitResult == nil || len(lastFitCandidates) == 0 || lastFitBestIdx >= len(lastFitCandidates) {
-			return -1
+			return -1, 0
 		}
 		if loadedLightCurveData == nil {
-			return -1
+			return -1, 0
 		}
 		pc := lastFitCandidates[lastFitBestIdx]
-		scale := lastFitResult.bestScale
-		if scale == 0 {
-			scale = 1.0
-		}
 		var displayedColIdx int
 		for k := range ac.displayedCurves {
 			displayedColIdx = k
 			break
 		}
 		col := loadedLightCurveData.Columns[displayedColIdx]
-		var sumSq float64
-		var n int
+		var times, values []float64
 		for i, val := range col.Values {
 			frameNum := loadedLightCurveData.FrameNumbers[i]
 			if ac.frameRangeStart > 0 && frameNum < ac.frameRangeStart {
@@ -962,18 +962,14 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			if ac.frameRangeEnd > 0 && frameNum > ac.frameRangeEnd {
 				continue
 			}
-			t := loadedLightCurveData.TimeValues[i]
-			localT := t - shift
-			theory := interpolateAt(pc.curve, pc.curveTimes, localT)
-			scaled := theory*scale + (1.0 - scale)
-			diff := val - scaled
-			sumSq += diff * diff
-			n++
+			times = append(times, loadedLightCurveData.TimeValues[i])
+			values = append(values, val)
 		}
-		if n == 0 {
-			return -1
+		if len(times) == 0 {
+			return -1, 0
 		}
-		return sumSq / float64(n)
+		scale, mse, _ := findBestScale(sampleTheoryAtShift(pc, times, shift), values)
+		return mse, scale
 	}
 
 	runAutoSlide = func() {
@@ -982,14 +978,14 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		}
 		step := slideStep()
 		origShift := lastFitResult.bestShift
-		currentMSE := computeMSEatShift(origShift)
+		currentMSE, _ := computeMSEatShift(origShift)
 		if currentMSE < 0 {
 			return
 		}
 
 		// Try both directions, pick the one that reduces MSE
-		msePlus := computeMSEatShift(origShift + step)
-		mseMinus := computeMSEatShift(origShift - step)
+		msePlus, _ := computeMSEatShift(origShift + step)
+		mseMinus, _ := computeMSEatShift(origShift - step)
 
 		var dir float64
 		var bestMSE float64
@@ -1011,7 +1007,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 		// Walk in the chosen direction until MSE increases
 		for {
 			nextShift := bestShift + dir
-			nextMSE := computeMSEatShift(nextShift)
+			nextMSE, _ := computeMSEatShift(nextShift)
 			if nextMSE < 0 || nextMSE >= bestMSE {
 				break
 			}
@@ -1019,9 +1015,15 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			bestShift = nextShift
 		}
 
-		// Apply the best shift found
+		// Apply the best shift found, with the scale re-fitted at that shift
 		totalSlide := bestShift - origShift + slideOffset
+		_, bestScale := computeMSEatShift(bestShift)
+		logAction(fmt.Sprintf("Slide auto: scale %.4f -> %.4f", lastFitResult.bestScale, bestScale))
 		lastFitResult.bestShift = bestShift
+		lastFitResult.bestScale = bestScale
+		if len(lastFitCandidates) > lastFitBestIdx {
+			lastFitResult.sampledVals = sampleTheoryAtShift(lastFitCandidates[lastFitBestIdx], lastFitResult.sampledTimes, bestShift)
+		}
 		slideOffset = totalSlide
 		slideEntry.SetText(fmt.Sprintf("%.4f", slideOffset))
 		ac.overlayTheoryCurve(lastFitResult, nil)
@@ -1247,7 +1249,7 @@ func buildFitTab(ac *appContext) *container.TabItem {
 					logAction("--- Final Report ---")
 					logAction(fmt.Sprintf("  Observation path is %.3f km from centerline", mcFitParams.PathPerpendicularOffsetKm))
 					if mcFitResult.bestScale > 0 {
-						effectiveDrop := mcFitResult.bestScale * 100.0
+						effectiveDrop := scaledCurveDrop(mcFitResult.curve, mcFitResult.bestScale) * 100.0
 						if mcFitParams.PercentMagDrop > 0 {
 							effectiveDrop = effectiveDrop * float64(mcFitParams.PercentMagDrop) / 100
 						}
@@ -1669,10 +1671,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 			}
 		} else {
 			// Normal mode: compute window width from event edges and event drop from the fit.
-			// Event drop = 1 - bestScale, where bestScale is the amplitude scale factor
-			// found by the post-fit scale search (scaledTLC = bestTLC*scale + (1-scale)).
-			// bestScale==0 (zero value, search not run) maps naturally to eventDrop=1.0 (full drop).
-			eventDrop := 1.0 - lastFitResult.bestScale
+			// eventDrop is the intensity level at the bottom of the event: the minimum of the
+			// continuous theoretical curve after the post-fit scale search
+			// (scaledTLC = bestTLC*scale + (1-scale)), i.e. 1 - scaledCurveDrop.
+			// bestScale==0 (search not run) gives eventDrop=1.0.
+			eventDrop := 1.0 - scaledCurveDrop(lastFitResult.curve, lastFitResult.bestScale)
 			windowWidth := 0
 
 			if len(lastFitResult.edgeTimes) >= 2 {
@@ -1698,9 +1701,11 @@ func buildFitTab(ac *appContext) *container.TabItem {
 				}
 			} else {
 				// Fewer than 2 edges: count sampled theoretical points at or below
-				// the half-drop value (midpoint between baseline and full drop),
-				// then divide by 2 (truncated) to get the window width.
-				halfDropLevel := 1.0 - eventDrop/2.0
+				// the half-drop value (midpoint between baseline and the curve bottom),
+				// then divide by 2 (truncated) to get the window width. sampledVals are
+				// unscaled, so the midpoint uses the unscaled curve minimum (scaling is
+				// affine and does not change which points fall below the midpoint).
+				halfDropLevel := (1.0 + curveMinIntensity(lastFitResult.curve)) / 2.0
 				belowCount := 0
 				for _, v := range lastFitResult.sampledVals {
 					if v <= halfDropLevel {

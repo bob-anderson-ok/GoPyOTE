@@ -201,8 +201,8 @@ type fitResult struct {
 	minSE float64
 	// The bestScale is the amplitude scale factor (0–1) found by the post-fit drop search.
 	// scaledTLC = bestTLC * bestScale + (1 - bestScale).
-	// The NIE event drop is (1 - bestScale): how far the scaled curve falls from the baseline.
-	// Zero means the search has not yet run; valid values are in [0, 1].
+	// It is NOT the event drop: see scaledCurveDrop, which accounts for a theoretical
+	// curve that does not fall to zero. Zero means the search has not yet run.
 	bestScale float64
 }
 
@@ -531,11 +531,12 @@ func prepareFitDisplay(params *OccultationParameters, fr *fitResult, targetTimes
 			}
 		}
 
-		logAction(fmt.Sprintf("Scale search: best scale=%.4f, percent drop=%.2f, MSE=%.6f", bestScale, bestScale*100, scaleMSE))
+		calculatedDrop := scaledCurveDrop(fr.curve, bestScale) * 100
+		logAction(fmt.Sprintf("Scale search: best scale=%.4f, theory curve min=%.4f, percent drop=%.2f, MSE=%.6f",
+			bestScale, curveMinIntensity(fr.curve), calculatedDrop, scaleMSE))
 
 		// If the occparams file specifies a non-zero percent_mag_drop, adjust the
 		// reported percent drop: effectiveDrop = calculatedDrop * PercentMagDrop / 100
-		calculatedDrop := bestScale * 100
 		effectiveDrop := calculatedDrop
 		if params.PercentMagDrop > 0 {
 			effectiveDrop = calculatedDrop * float64(params.PercentMagDrop) / 100
@@ -748,11 +749,13 @@ func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayIn
 	starRowStr := sessionStarRow
 	rowDeltaStr := sessionRowDelta
 
-	// Tangra half-frame correction: subtract frameTime/2 from edge times
+	// Tangra half-frame correction: subtract frameTime/2 from edge times. Tangra stamps
+	// mid-frame, so a block's first-frame timestamp is still one frame time / 2 late.
 	var tangraCorrSecs float64
-	hasTangra := isTangraCSV && lastCsvExposureSecs > 0
+	frameTime := csvFrameTimeSecs()
+	hasTangra := isTangraCSV && frameTime > 0
 	if hasTangra {
-		tangraCorrSecs = lastCsvExposureSecs / 2.0
+		tangraCorrSecs = frameTime / 2.0
 	}
 
 	hasAcq := acqDelayStr != ""
@@ -799,7 +802,7 @@ func computeCameraDelay(edgeLabels []string, edgeTimes []float64) *cameraDelayIn
 		if report != "" {
 			report += "\n"
 		}
-		report += fmt.Sprintf("tangraCorr = %.4f sec (frameTime/2 = %.4f/2)", tangraCorrSecs, lastCsvExposureSecs)
+		report += fmt.Sprintf("tangraCorr = %.4f sec (frameTime/2 = %.4f/2)", tangraCorrSecs, frameTime)
 	}
 	if cameraName != "" {
 		report += fmt.Sprintf(" [camera: %s]", cameraName)
@@ -930,38 +933,43 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 		return nil, fmt.Errorf("no precomputed candidate curves available")
 	}
 
-	// Create a noisy version of the sampled theoretical curve.
+	// Create a noisy version of the best-fit theoretical curve at its fitted depth.
+	scale := fr.bestScale
+	if scale == 0 {
+		scale = 1.0
+	}
 	n := len(fr.sampledVals)
 	noisyValues := make([]float64, n)
 	if len(arPhi) > 0 {
 		// Correlated AR noise scaled by noiseSigma and signal level.
 		rng := randv1.New(randv1.NewSource(randv1.Int63()))
 		arNoise := generateAR(n, arPhi, arSigma2, rng)
-		for i, v := range fr.sampledVals {
+		for i, raw := range fr.sampledVals {
+			v := raw*scale + (1.0 - scale)
 			noisyValues[i] = v + arNoise[i]*noiseSigma*v
 		}
 	} else {
 		// White Gaussian noise.
-		for i, v := range fr.sampledVals {
+		for i, raw := range fr.sampledVals {
+			v := raw*scale + (1.0 - scale)
 			noisyValues[i] = v + rand.NormFloat64()*noiseSigma*v
 		}
 	}
 
 	// Search across precomputed path offset candidates, selecting on the same
-	// score runFitSearch uses so the MC spread reflects the real selection rule.
+	// score runFitSearch uses (MSE after refining shift and depth scale) so the
+	// MC spread reflects the real selection rule.
 	var bestFr *fitResult
-	var bestPC *precomputedCurve
-	bestOverlapNCC := -1.0
+	bestMSE := math.MaxFloat64
 	bestPathOffset := candidates[0].pathOffset
 	for _, pc := range candidates {
 		mcFr, err := nccSlidingFit(pc, fr.sampledTimes, noisyValues)
 		if err != nil {
 			continue
 		}
-		if mcFr.bestOverlapNCC > bestOverlapNCC {
-			bestOverlapNCC = mcFr.bestOverlapNCC
+		if mse := refineShiftAndScale(mcFr, pc, fr.sampledTimes, noisyValues); mse < bestMSE {
+			bestMSE = mse
 			bestFr = mcFr
-			bestPC = pc
 			bestPathOffset = pc.pathOffset
 		}
 	}
@@ -969,76 +977,75 @@ func runMonteCarloRefit(candidates []*precomputedCurve, fr *fitResult, noiseSigm
 		return nil, fmt.Errorf("all path offset candidates failed in Monte Carlo refit")
 	}
 
-	// MSE refinement: walk bestShift in sub-frame steps to find the local MSE minimum.
-	refineMSEShift(bestFr, bestPC, fr.sampledTimes, noisyValues)
-
 	return &mcRefitResult{fr: bestFr, noisyValues: noisyValues, pathOffset: bestPathOffset}, nil
 }
 
-// refineMSEShift adjusts fr.bestShift by walking in sub-frame steps to minimize the
-// MSE between the theoretical curve (from pc) and targetValues. It also recomputes
-// fr.sampledVals at the refined shift. This mirrors the UI "auto-slide" logic.
-func refineMSEShift(fr *fitResult, pc *precomputedCurve, targetTimes, targetValues []float64) {
+// sampleTheoryAtShift samples the (unscaled) theoretical curve at each target time for
+// the given shift, using the baseline value 1.0 outside the curve.
+func sampleTheoryAtShift(pc *precomputedCurve, times []float64, shift float64) []float64 {
+	vals := make([]float64, len(times))
+	for i, t := range times {
+		localT := t - shift
+		if localT < 0 || localT > pc.duration {
+			vals[i] = 1.0
+		} else {
+			vals[i] = interpolateAt(pc.curve, pc.curveTimes, localT)
+		}
+	}
+	return vals
+}
+
+// refineShiftAndScale walks fr.bestShift in sub-frame steps to the local minimum of the
+// MSE, re-fitting the drop scale (findBestScale) at every trial shift. The NCC search
+// only tries whole-sample shifts, and the best depth depends on where the samples fall
+// within the event, so shift and scale must be refined together — especially when the
+// sample period is long (block-integrated data). Updates fr.bestShift, fr.bestScale and
+// fr.sampledVals (unscaled, at the refined shift) and returns the MSE after the depth fit.
+func refineShiftAndScale(fr *fitResult, pc *precomputedCurve, targetTimes, targetValues []float64) float64 {
 	framePeriod := medianTimeDelta(targetTimes)
-	if framePeriod <= 0 {
-		return
+	if framePeriod <= 0 || len(targetTimes) == 0 {
+		return math.MaxFloat64
 	}
 	step := framePeriod / 20.0
 
-	// mseAt computes MSE at the given shift without modifying fr.
 	mseAt := func(shift float64) float64 {
-		var sumSq float64
-		for i, t := range targetTimes {
-			localT := t - shift
-			theory := interpolateAt(pc.curve, pc.curveTimes, localT)
-			diff := targetValues[i] - theory
-			sumSq += diff * diff
-		}
-		return sumSq / float64(len(targetTimes))
+		_, mse, _ := findBestScale(sampleTheoryAtShift(pc, targetTimes, shift), targetValues)
+		return mse
 	}
 
 	origShift := fr.bestShift
-	currentMSE := mseAt(origShift)
-
+	bestShift := origShift
+	bestMSE := mseAt(origShift)
 	msePlus := mseAt(origShift + step)
 	mseMinus := mseAt(origShift - step)
 
 	var dir float64
-	bestMSE := currentMSE
-	bestShift := origShift
-	if mseMinus < currentMSE && mseMinus <= msePlus {
+	if mseMinus < bestMSE && mseMinus <= msePlus {
 		dir = -step
 		bestMSE = mseMinus
 		bestShift = origShift - step
-	} else if msePlus < currentMSE {
+	} else if msePlus < bestMSE {
 		dir = step
 		bestMSE = msePlus
 		bestShift = origShift + step
-	} else {
-		return // already at minimum
 	}
 
 	// Walk in the chosen direction until MSE increases.
-	for {
-		nextShift := bestShift + dir
-		nextMSE := mseAt(nextShift)
-		if nextMSE >= bestMSE {
-			break
+	if dir != 0 {
+		for {
+			nextMSE := mseAt(bestShift + dir)
+			if nextMSE >= bestMSE {
+				break
+			}
+			bestMSE = nextMSE
+			bestShift += dir
 		}
-		bestMSE = nextMSE
-		bestShift = nextShift
 	}
 
-	// Apply the refined shift and recompute sampled values.
 	fr.bestShift = bestShift
-	for i, t := range targetTimes {
-		localT := t - bestShift
-		if localT < 0 || localT > pc.duration {
-			fr.sampledVals[i] = 1.0
-		} else {
-			fr.sampledVals[i] = interpolateAt(pc.curve, pc.curveTimes, localT)
-		}
-	}
+	fr.sampledVals = sampleTheoryAtShift(pc, targetTimes, bestShift)
+	fr.bestScale, _, _ = findBestScale(fr.sampledVals, targetValues)
+	return bestMSE
 }
 
 // mcTrialsResult holds the accumulated edge time statistics from Monte Carlo trials.
@@ -1544,18 +1551,24 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 		r.fr.edgeTimes = r.pc.edgeTimes
 	}
 
-	// Find the best path offset by peak overlap NCC. The padded NCC would work
-	// here too when the trim range is tight, but it shrinks the spread between
-	// candidates as the range widens, which makes the winner a coin toss.
-	bestIdx := 0
+	// Find the best path offset by the MSE after refining shift and depth scale
+	// together (selectByScaledMSE). NCC is amplitude-blind: when the event spans
+	// only one or two samples every chord length gives the same dip shape, and the
+	// depth — which NCC ignores — is what distinguishes the candidates.
+	bestIdx := selectByScaledMSE(results, targetTimes, targetValues)
+	nccIdx := 0
 	for i, r := range results {
-		if r.peakOverlapNCC > results[bestIdx].peakOverlapNCC {
-			bestIdx = i
+		if r.peakOverlapNCC > results[nccIdx].peakOverlapNCC {
+			nccIdx = i
 		}
 	}
 	bestPathOffset := results[bestIdx].pathOffset
-	logAction(fmt.Sprintf("Fit search: best path offset=%.3f km by overlap NCC=%.4f (padded NCC=%.4f) from %d candidates",
-		bestPathOffset, results[bestIdx].peakOverlapNCC, results[bestIdx].peakNCC, len(results)))
+	logAction(fmt.Sprintf("Fit search: best path offset=%.3f km by MSE after depth fit=%.6f (scale=%.4f, shift=%.4f sec, overlap NCC=%.4f) from %d candidates",
+		bestPathOffset, results[bestIdx].mse, results[bestIdx].fr.bestScale, results[bestIdx].fr.bestShift, results[bestIdx].peakOverlapNCC, len(results)))
+	if nccIdx != bestIdx {
+		logAction(fmt.Sprintf("Fit search: overlap NCC alone would have chosen %.3f km (NCC=%.4f, MSE after depth fit=%.6f)",
+			results[nccIdx].pathOffset, results[nccIdx].peakOverlapNCC, results[nccIdx].mse))
+	}
 
 	// When the search range is a single offset, re-run edge detection for the
 	// best candidate with plot data stored so showEdgePlots() can display them.
@@ -1581,6 +1594,20 @@ func runFitSearch(params *OccultationParameters, targetTimes, targetValues []flo
 	}
 
 	return &fitSearchResult{results: results, bestIdx: bestIdx, bestPathOffset: bestPathOffset}, nil
+}
+
+// selectByScaledMSE refines shift and depth scale for every candidate (refineShiftAndScale
+// updates each r.fr in place), stores the resulting MSE in r.mse, and returns the index
+// of the lowest.
+func selectByScaledMSE(results []searchResult, targetTimes, targetValues []float64) int {
+	bestIdx := 0
+	for i := range results {
+		results[i].mse = refineShiftAndScale(results[i].fr, results[i].pc, targetTimes, targetValues)
+		if results[i].mse < results[bestIdx].mse {
+			bestIdx = i
+		}
+	}
+	return bestIdx
 }
 
 // fitSearchDisplayData holds pre-computed data for showing fit search results.
@@ -1615,7 +1642,7 @@ func prepareFitSearchDisplay(params *OccultationParameters, fsr *fitSearchResult
 	}
 
 	params.PathPerpendicularOffsetKm = fsr.bestPathOffset
-	sd.bestFr = fsr.results[fsr.bestIdx].fr
+	sd.bestFr = fsr.results[fsr.bestIdx].fr // shift and scale already refined by runFitSearch
 
 	fitDD, err := prepareFitDisplay(params, sd.bestFr, targetTimes, targetValues, showDiagnostics)
 	if err != nil {
@@ -1639,7 +1666,7 @@ func showFitSearchDisplayPlots(app fyne.App, sd *fitSearchDisplayData) {
 		safeShowWindow(searchWindow)
 	}
 	if sd.showDiagnostics && sd.msePlotImg != nil {
-		mseWindow := app.NewWindow("Minimum Squared Error vs Path Offset")
+		mseWindow := app.NewWindow("MSE (after depth fit) vs Path Offset")
 		mseCanvas := canvas.NewImageFromImage(sd.msePlotImg)
 		mseCanvas.FillMode = canvas.ImageFillOriginal
 		mseWindow.SetContent(container.NewScroll(mseCanvas))
@@ -1659,7 +1686,9 @@ type searchResult struct {
 	peakOverlapNCC float64
 	// peakNCC is the padded score at the winning shift, kept for the diagnostic plot.
 	peakNCC float64
-	mse     float64
+	// mse is the selection score: the MSE after refining shift and depth scale
+	// (selectByScaledMSE). Before that it holds the unscaled NCC-shift minimum.
+	mse float64
 	fr      *fitResult
 	pc      *precomputedCurve
 }
@@ -1840,12 +1869,12 @@ func createMSEPlotImage(results []searchResult, occultationTitle string, plotWid
 	plt.Y.Tick.Label.Font.Variant = "Sans"
 	plt.Y.Tick.Label.Font.Size = vg.Points(10)
 
-	plt.Title.Text = "Minimum Squared Error vs Path Perpendicular Offset"
+	plt.Title.Text = "MSE (after depth fit) vs Path Perpendicular Offset"
 	if occultationTitle != "" {
 		plt.Title.Text = occultationTitle + " — " + plt.Title.Text
 	}
 	plt.X.Label.Text = "Path offset (km)"
-	plt.Y.Label.Text = "Minimum Squared Error"
+	plt.Y.Label.Text = "MSE after depth fit"
 
 	xRange := math.Abs(results[len(results)-1].pathOffset - results[0].pathOffset)
 	if xRange > 0 {
@@ -1892,7 +1921,7 @@ func createMSEPlotImage(results []searchResult, occultationTitle string, plotWid
 		plt.Add(peakScatter)
 	}
 
-	plt.Legend.Add(fmt.Sprintf("Best: %.3f km, MinSE=%.6f", results[bestIdx].pathOffset, results[bestIdx].mse), line)
+	plt.Legend.Add(fmt.Sprintf("Best: %.3f km, MSE=%.6f", results[bestIdx].pathOffset, results[bestIdx].mse), line)
 	plt.Legend.Top = true
 	plt.Legend.Left = false
 
@@ -2546,39 +2575,58 @@ func createNoiseHistogramImage(noise []float64, occultationTitle string, plotWid
 	return histImg, mean, sigma, nil
 }
 
-// findBestScale sweeps scale from 1.0 to 0.0 in 100 steps, choosing the scale that
-// minimizes the Mean Squared Error between
+// curveMinIntensity returns the lowest intensity of the continuous (exposure-smoothed)
+// theoretical curve, or 1.0 (baseline) for an empty curve.
+func curveMinIntensity(curve []timeIntensityPoint) float64 {
+	minVal := 1.0
+	for _, pt := range curve {
+		if pt.intensity < minVal {
+			minVal = pt.intensity
+		}
+	}
+	return minVal
+}
+
+// scaledCurveDrop returns the fractional event drop (0–1) of the theoretical curve after
+// scaling: scale * (1 - min(curve)). The scale factor alone equals the drop only when the
+// unscaled curve reaches zero; short (exposure-smoothed), diffraction-dominated, partial
+// (large star) and grazing events bottom out above zero.
+func scaledCurveDrop(curve []timeIntensityPoint, scale float64) float64 {
+	drop := scale * (1.0 - curveMinIntensity(curve))
+	return math.Max(0, math.Min(1, drop))
+}
+
+// findBestScale finds the scale in [0, 1] that minimizes the Mean Squared Error between
 //
 //	scaledTLC[i] = sampledVals[i]*scale + (1.0 - scale)
 //
-// and targetValues. Returns the best scale value (lowest MSE), its MSE, and the
-// scaled sampled values.
+// and targetValues. With d = 1 - sampled and o = 1 - target the model is o ≈ scale*d, so
+// the least-squares scale is Σ(d·o)/Σ(d²), clamped to [0, 1] (the MSE is quadratic in
+// scale, so clamping gives the constrained minimum). A flat theory curve (Σd² = 0) gets
+// scale 1. Returns the best scale, its MSE, and the scaled sampled values.
 func findBestScale(sampledVals, targetValues []float64) (bestScale, bestMSE float64, scaledVals []float64) {
-	const numSteps = 100
-	bestMSE = math.MaxFloat64
-	bestScale = 1.0
 	n := len(sampledVals)
-
-	for step := 0; step <= numSteps; step++ {
-		scale := 1.0 - float64(step)/float64(numSteps)
-		var mse float64
-		scaled := make([]float64, n)
-		for i, v := range sampledVals {
-			scaled[i] = v*scale + (1.0 - scale)
-			d := targetValues[i] - scaled[i]
-			mse += d * d
-		}
-		mse /= float64(n)
-		if mse < bestMSE {
-			bestMSE = mse
-			bestScale = scale
-			scaledVals = scaled
-		}
+	if n == 0 {
+		return 1.0, math.MaxFloat64, []float64{}
 	}
 
-	if scaledVals == nil {
-		scaledVals = make([]float64, n)
-		copy(scaledVals, sampledVals)
+	var num, den float64
+	for i, v := range sampledVals {
+		d := 1.0 - v
+		num += d * (1.0 - targetValues[i])
+		den += d * d
 	}
+	bestScale = 1.0
+	if den > 0 {
+		bestScale = math.Max(0, math.Min(1, num/den))
+	}
+
+	scaledVals = make([]float64, n)
+	for i, v := range sampledVals {
+		scaledVals[i] = v*bestScale + (1.0 - bestScale)
+		d := targetValues[i] - scaledVals[i]
+		bestMSE += d * d
+	}
+	bestMSE /= float64(n)
 	return
 }
